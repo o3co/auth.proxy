@@ -15,8 +15,8 @@
     "axios": "1.8.x",
     "cors": "2.8.x",
     "cross-env": "7.0.x",
-    "express": "4.21.x",
-    "express-http-proxy": "1.6.x",
+    "express": "^5.2.1",
+    "express-http-proxy": "^2.1.2",
     "jsonwebtoken": "9.0.x",
     "zod": "^4.3.6"
   },
