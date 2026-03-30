@@ -1,6 +1,12 @@
 # auth.proxy
 
-Auth proxy — token validation and caching reverse proxy.
+Token validation reverse proxy with introspection result caching. Sits between client and downstream service.
+
+This component is optional. auth.policy-verifier and grpc.authz validate JWT directly, so the system works without auth.proxy. Benefits of adding it:
+
+- **Introspection-based validation** — detects revoked tokens immediately, unlike JWT-only local validation which relies on token expiry
+- **Caching** — introspection results are cached (default 30s TTL), reducing load on auth.provider
+- **Centralized validation** — downstream services receive pre-validated requests without implementing auth logic
 
 ## Behavior
 
