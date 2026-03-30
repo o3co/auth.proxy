@@ -41,6 +41,6 @@
     "format": "prettier --write \"**/*.{js,ts,json,mjs,yml}\"",
     "audit": "pnpm audit --audit-level=high",
     "debug": "tsx src/app.mts",
-    "start": "node dist/app.mjs"
+    "start": "node dist/src/app.mjs"
   }
 }

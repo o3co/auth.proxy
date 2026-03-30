@@ -99,6 +99,9 @@ export const createRouter = ({ config }: { config: AppConfig }): express.Router 
         }
       } catch (e) {
         logger.error({ 'x-request-id': requestId, error: e }, 'introspect failed');
+        if (axios.isAxiosError(e) && e.response?.status === 401) {
+          return res.status(401).json({ code: 401, message: 'Invalid Token' });
+        }
         return res.status(500).json({ code: 500, message: 'Internal Server Error' });
       }
 
