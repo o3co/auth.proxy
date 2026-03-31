@@ -66,4 +66,23 @@ describe("proxy config", () => {
 		);
 		expect(() => validate(raw, AppConfigSchema)).toThrow();
 	});
+
+	it("treats empty clientId as unset (null)", () => {
+		const raw = parseFile(
+			new URL("../../config/application.conf", import.meta.url).pathname,
+			{ env: { CLIENT_ID: "", CLIENT_SECRET: "" } },
+		);
+		const config = validate(raw, AppConfigSchema);
+
+		expect(config.auth.client.clientId).toBeNull();
+		expect(config.auth.client.clientSecret).toBeNull();
+	});
+
+	it("rejects config when only clientId is empty and clientSecret is set", () => {
+		const raw = parseFile(
+			new URL("../../config/application.conf", import.meta.url).pathname,
+			{ env: { CLIENT_ID: "", CLIENT_SECRET: "s3cret" } },
+		);
+		expect(() => validate(raw, AppConfigSchema)).toThrow();
+	});
 });

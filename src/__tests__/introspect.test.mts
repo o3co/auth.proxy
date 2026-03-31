@@ -8,14 +8,14 @@ const mockedAxios = vi.mocked(axios);
 
 describe("buildAuthHeader", () => {
 	it("returns Basic auth when client credentials are provided", () => {
-		const header = buildAuthHeader("my-proxy", "s3cret", "some-token");
+		const header = buildAuthHeader({ clientId: "my-proxy", clientSecret: "s3cret" }, "some-token");
 		expect(header).toBe(
 			`Basic ${Buffer.from("my-proxy:s3cret").toString("base64")}`,
 		);
 	});
 
 	it("returns Bearer with the request token when no client credentials", () => {
-		const header = buildAuthHeader(null, null, "my-bearer-token");
+		const header = buildAuthHeader(null, "my-bearer-token");
 		expect(header).toBe("Bearer my-bearer-token");
 	});
 });
@@ -62,7 +62,7 @@ describe("introspect", () => {
 			data: { active: true },
 		});
 
-		const authHeader = buildAuthHeader("client-id", "client-secret", "some-token");
+		const authHeader = buildAuthHeader({ clientId: "client-id", clientSecret: "client-secret" }, "some-token");
 		await introspect("some-token", "http://auth/introspect", 30, "req-3", authHeader);
 
 		const headers = mockedAxios.post.mock.calls[0][2]?.headers;

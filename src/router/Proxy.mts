@@ -37,13 +37,17 @@ export const clearCache = (): void => {
   cache.clear();
 };
 
+export interface ClientCredentials {
+  clientId: string;
+  clientSecret: string;
+}
+
 export const buildAuthHeader = (
-  clientId: string | null,
-  clientSecret: string | null,
+  credentials: ClientCredentials | null,
   token: string,
 ): string =>
-  clientId !== null && clientSecret !== null
-    ? `Basic ${Buffer.from(`${clientId}:${clientSecret}`).toString('base64')}`
+  credentials !== null
+    ? `Basic ${Buffer.from(`${credentials.clientId}:${credentials.clientSecret}`).toString('base64')}`
     : `Bearer ${token}`;
 
 const getCacheKey = (token: string): string =>
@@ -86,6 +90,10 @@ export const createRouter = ({ config }: { config: AppConfig }): express.Router 
   const cacheTtlSec: number = config.auth.introspect.cacheTtlSec;
 
   const { clientId, clientSecret } = config.auth.client;
+  const credentials: ClientCredentials | null =
+    clientId !== null && clientSecret !== null
+      ? { clientId, clientSecret }
+      : null;
 
   router
     .use((req: Request, res: Response, next) => {
@@ -107,7 +115,7 @@ export const createRouter = ({ config }: { config: AppConfig }): express.Router 
         return res.status(400).json({ code: 400, message: 'Invalid Token Type' });
       }
 
-      const authHeader = buildAuthHeader(clientId, clientSecret, token);
+      const authHeader = buildAuthHeader(credentials, token);
 
       try {
         const result = await introspect(token, introspectUrl, cacheTtlSec, requestId, authHeader);

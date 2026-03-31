@@ -29,8 +29,8 @@ export const AppConfigSchema = z.object({
 	}),
 	auth: z.object({
 		client: z.object({
-			clientId: z.string().nullable().default(null),
-			clientSecret: z.string().nullable().default(null),
+			clientId: z.string().nullable().default(null).transform((v) => v === "" ? null : v),
+			clientSecret: z.string().nullable().default(null).transform((v) => v === "" ? null : v),
 		}).refine(
 			(c) => (c.clientId === null) === (c.clientSecret === null),
 			{ message: "auth.client.clientId and auth.client.clientSecret must both be set or both be unset" },
