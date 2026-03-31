@@ -48,6 +48,7 @@ const introspect = async (
   introspectUrl: string,
   cacheTtlSec: number,
   requestId: string,
+  authHeader: string,
 ): Promise<IntrospectionResult> => {
   const key = getCacheKey(token);
   const now = Date.now();
@@ -59,8 +60,8 @@ const introspect = async (
 
   const { data } = await axios.post<IntrospectionResult>(
     introspectUrl,
-    { token },
-    { headers: { 'Content-Type': 'application/json', 'Authorization': `Bearer ${token}`, 'x-request-id': requestId } },
+    `token=${encodeURIComponent(token)}`,
+    { headers: { 'Content-Type': 'application/x-www-form-urlencoded', 'Authorization': authHeader, 'x-request-id': requestId } },
   );
 
   cache.set(key, { result: data, expiresAt: now + cacheTtlSec * 1000 });
@@ -71,6 +72,10 @@ export const createRouter = ({ config }: { config: AppConfig }): express.Router 
   const router = express.Router();
   const introspectUrl: string = config.introspect.url;
   const cacheTtlSec: number = config.introspect.cacheTtlSec;
+
+  const clientCredentials = config.client.clientId !== null
+    ? `Basic ${Buffer.from(`${config.client.clientId}:${config.client.clientSecret}`).toString('base64')}`
+    : null;
 
   router
     .use((req: Request, res: Response, next) => {
@@ -92,8 +97,10 @@ export const createRouter = ({ config }: { config: AppConfig }): express.Router 
         return res.status(400).json({ code: 400, message: 'Invalid Token Type' });
       }
 
+      const authHeader = clientCredentials ?? `Bearer ${token}`;
+
       try {
-        const result = await introspect(token, introspectUrl, cacheTtlSec, requestId);
+        const result = await introspect(token, introspectUrl, cacheTtlSec, requestId, authHeader);
         if (!result.active) {
           return res.status(401).json({ code: 401, message: 'Invalid Token' });
         }
