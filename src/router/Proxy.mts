@@ -31,8 +31,20 @@ interface CacheEntry {
   expiresAt: number;
 }
 
-// インメモリキャッシュ（トークンハッシュ → introspection 結果）
 const cache = new Map<string, CacheEntry>();
+
+export const clearCache = (): void => {
+  cache.clear();
+};
+
+export const buildAuthHeader = (
+  clientId: string | null,
+  clientSecret: string | null,
+  token: string,
+): string =>
+  clientId !== null && clientSecret !== null
+    ? `Basic ${Buffer.from(`${clientId}:${clientSecret}`).toString('base64')}`
+    : `Bearer ${token}`;
 
 const getCacheKey = (token: string): string =>
   crypto.createHash('sha256').update(token).digest('hex');
@@ -43,7 +55,7 @@ const generateRequestId = (): string => {
   return `${ts}_${uid}`
 }
 
-const introspect = async (
+export const introspect = async (
   token: string,
   introspectUrl: string,
   cacheTtlSec: number,
@@ -60,7 +72,7 @@ const introspect = async (
 
   const { data } = await axios.post<IntrospectionResult>(
     introspectUrl,
-    `token=${encodeURIComponent(token)}`,
+    new URLSearchParams({ token }).toString(),
     { headers: { 'Content-Type': 'application/x-www-form-urlencoded', 'Authorization': authHeader, 'x-request-id': requestId } },
   );
 
@@ -73,9 +85,7 @@ export const createRouter = ({ config }: { config: AppConfig }): express.Router 
   const introspectUrl: string = config.auth.introspect.url;
   const cacheTtlSec: number = config.auth.introspect.cacheTtlSec;
 
-  const clientCredentials = config.auth.client.clientId !== null
-    ? `Basic ${Buffer.from(`${config.auth.client.clientId}:${config.auth.client.clientSecret}`).toString('base64')}`
-    : null;
+  const { clientId, clientSecret } = config.auth.client;
 
   router
     .use((req: Request, res: Response, next) => {
@@ -97,7 +107,7 @@ export const createRouter = ({ config }: { config: AppConfig }): express.Router 
         return res.status(400).json({ code: 400, message: 'Invalid Token Type' });
       }
 
-      const authHeader = clientCredentials ?? `Bearer ${token}`;
+      const authHeader = buildAuthHeader(clientId, clientSecret, token);
 
       try {
         const result = await introspect(token, introspectUrl, cacheTtlSec, requestId, authHeader);
