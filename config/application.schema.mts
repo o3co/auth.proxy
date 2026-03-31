@@ -21,6 +21,13 @@ export const AppConfigSchema = z.object({
 		port: z.coerce.number().default(80),
 		pathPrefix: z.string().default("/"),
 	}),
+	client: z.object({
+		clientId: z.string().nullable().default(null),
+		clientSecret: z.string().nullable().default(null),
+	}).refine(
+		(c) => (c.clientId === null) === (c.clientSecret === null),
+		{ message: "client.clientId and client.clientSecret must both be set or both be unset" },
+	),
 	introspect: z.object({
 		url: z.string(),
 		cacheTtlSec: z.coerce.number().default(30),

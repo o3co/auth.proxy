@@ -25,4 +25,41 @@ describe("proxy config", () => {
 		expect(config.http.port).toBe(8080);
 		expect(config.introspect.url).toBe("http://auth:3000/oauth/introspect");
 	});
+
+	it("loads config with client credentials (both set)", () => {
+		const raw = parseFile(
+			new URL("../../config/application.conf", import.meta.url).pathname,
+			{ env: { CLIENT_ID: "my-proxy", CLIENT_SECRET: "s3cret" } },
+		);
+		const config = validate(raw, AppConfigSchema);
+
+		expect(config.client.clientId).toBe("my-proxy");
+		expect(config.client.clientSecret).toBe("s3cret");
+	});
+
+	it("loads config with self-introspect mode (neither set)", () => {
+		const raw = parseFile(
+			new URL("../../config/application.conf", import.meta.url).pathname,
+		);
+		const config = validate(raw, AppConfigSchema);
+
+		expect(config.client.clientId).toBeNull();
+		expect(config.client.clientSecret).toBeNull();
+	});
+
+	it("rejects config when only clientId is set", () => {
+		const raw = parseFile(
+			new URL("../../config/application.conf", import.meta.url).pathname,
+			{ env: { CLIENT_ID: "my-proxy" } },
+		);
+		expect(() => validate(raw, AppConfigSchema)).toThrow();
+	});
+
+	it("rejects config when only clientSecret is set", () => {
+		const raw = parseFile(
+			new URL("../../config/application.conf", import.meta.url).pathname,
+			{ env: { CLIENT_SECRET: "s3cret" } },
+		);
+		expect(() => validate(raw, AppConfigSchema)).toThrow();
+	});
 });
