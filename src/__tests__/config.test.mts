@@ -11,19 +11,23 @@ describe("proxy config", () => {
 		const config = validate(raw, AppConfigSchema);
 
 		expect(config.http.port).toBe(80);
-		expect(config.introspect.cacheTtlSec).toBe(30);
-		expect(config.endpoint.baseURL).toBe("http://localhost:3000");
+		expect(config.http.bodyLimitSize).toBe("10mb");
+		expect(config.http.cors.origin.pattern).toBeNull();
+		expect(config.auth.introspect.cacheTtlSec).toBe(30);
+		expect(config.auth.client.clientId).toBeNull();
+		expect(config.upstream.baseURL).toBe("http://localhost:3000");
 	});
 
 	it("overrides with env vars", () => {
 		const raw = parseFile(
 			new URL("../../config/application.conf", import.meta.url).pathname,
-			{ env: { HTTP_PORT: "8080", INTROSPECT_URL: "http://auth:3000/oauth/introspect" } },
+			{ env: { HTTP_PORT: "8080", INTROSPECT_URL: "http://auth:3000/oauth/introspect", UPSTREAM_BASEURL: "http://backend:4000" } },
 		);
 		const config = validate(raw, AppConfigSchema);
 
 		expect(config.http.port).toBe(8080);
-		expect(config.introspect.url).toBe("http://auth:3000/oauth/introspect");
+		expect(config.auth.introspect.url).toBe("http://auth:3000/oauth/introspect");
+		expect(config.upstream.baseURL).toBe("http://backend:4000");
 	});
 
 	it("loads config with client credentials (both set)", () => {
@@ -33,8 +37,8 @@ describe("proxy config", () => {
 		);
 		const config = validate(raw, AppConfigSchema);
 
-		expect(config.client.clientId).toBe("my-proxy");
-		expect(config.client.clientSecret).toBe("s3cret");
+		expect(config.auth.client.clientId).toBe("my-proxy");
+		expect(config.auth.client.clientSecret).toBe("s3cret");
 	});
 
 	it("loads config with self-introspect mode (neither set)", () => {
@@ -43,8 +47,8 @@ describe("proxy config", () => {
 		);
 		const config = validate(raw, AppConfigSchema);
 
-		expect(config.client.clientId).toBeNull();
-		expect(config.client.clientSecret).toBeNull();
+		expect(config.auth.client.clientId).toBeNull();
+		expect(config.auth.client.clientSecret).toBeNull();
 	});
 
 	it("rejects config when only clientId is set", () => {

@@ -46,9 +46,16 @@ make docker       # ランタイムイメージのビルド
 
 | 環境変数 | 説明 |
 | --- | --- |
+| `HTTP_PORT` | HTTP リッスンポート（デフォルト: 80） |
+| `HTTP_HOSTNAME` | HTTP リッスンホスト名（デフォルト: 0.0.0.0） |
+| `HTTP_PATH_PREFIX` | プロキシルートのパスプレフィックス（デフォルト: /） |
+| `HTTP_BODY_LIMIT_SIZE` | リクエストボディサイズ上限（デフォルト: 10mb） |
+| `CLIENT_ID` | イントロスペクション認証のクライアント ID（任意） |
+| `CLIENT_SECRET` | イントロスペクション認証のクライアントシークレット（任意） |
 | `INTROSPECT_URL` | イントロスペクションエンドポイント URL |
-| `INTROSPECT_CACHE_TTL_SEC` | キャッシュ TTL（秒） |
-| `ENDPOINT_BASEURL` | ダウンストリームサービスのベース URL |
+| `INTROSPECT_CACHE_TTL_SEC` | キャッシュ TTL（秒、デフォルト: 30） |
+| `UPSTREAM_BASEURL` | アップストリームサービスのベース URL |
+| `CORS_ORIGIN_PATTERN` | CORS オリジン正規表現パターン（任意） |
 
 ## 関連プロジェクト
 

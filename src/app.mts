@@ -29,7 +29,7 @@ const config: AppConfig = validate(
 
 const app = express();
 
-const corsOrigin = config.cors.origin.pattern ? new RegExp(config.cors.origin.pattern) : false;
+const corsOrigin = config.http.cors.origin.pattern ? new RegExp(config.http.cors.origin.pattern) : false;
 
 const server = app
   .use(routers.Healthcheck.createRouter())

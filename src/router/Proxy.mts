@@ -70,11 +70,11 @@ const introspect = async (
 
 export const createRouter = ({ config }: { config: AppConfig }): express.Router => {
   const router = express.Router();
-  const introspectUrl: string = config.introspect.url;
-  const cacheTtlSec: number = config.introspect.cacheTtlSec;
+  const introspectUrl: string = config.auth.introspect.url;
+  const cacheTtlSec: number = config.auth.introspect.cacheTtlSec;
 
-  const clientCredentials = config.client.clientId !== null
-    ? `Basic ${Buffer.from(`${config.client.clientId}:${config.client.clientSecret}`).toString('base64')}`
+  const clientCredentials = config.auth.client.clientId !== null
+    ? `Basic ${Buffer.from(`${config.auth.client.clientId}:${config.auth.client.clientSecret}`).toString('base64')}`
     : null;
 
   router
@@ -115,8 +115,8 @@ export const createRouter = ({ config }: { config: AppConfig }): express.Router 
       return next();
     })
     .use(
-      proxy(config.endpoint.baseURL, {
-        limit: config.proxy.bodyLimitSize,
+      proxy(config.upstream.baseURL, {
+        limit: config.http.bodyLimitSize,
         proxyReqOptDecorator: async (proxyReqOpts, srcReq) => {
           if (srcReq?.headers?.authorization) {
             proxyReqOpts.headers.AUTHORIZATION = srcReq.headers.authorization;

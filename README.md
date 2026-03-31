@@ -46,9 +46,16 @@ make docker       # Build runtime image
 
 | Environment Variable | Description |
 | --- | --- |
+| `HTTP_PORT` | HTTP listen port (default: 80) |
+| `HTTP_HOSTNAME` | HTTP listen hostname (default: 0.0.0.0) |
+| `HTTP_PATH_PREFIX` | Path prefix for proxy routes (default: /) |
+| `HTTP_BODY_LIMIT_SIZE` | Request body size limit (default: 10mb) |
+| `CLIENT_ID` | Client ID for introspection auth (optional) |
+| `CLIENT_SECRET` | Client secret for introspection auth (optional) |
 | `INTROSPECT_URL` | Introspection endpoint URL |
-| `INTROSPECT_CACHE_TTL_SEC` | Cache TTL in seconds |
-| `ENDPOINT_BASEURL` | Downstream service base URL |
+| `INTROSPECT_CACHE_TTL_SEC` | Cache TTL in seconds (default: 30) |
+| `UPSTREAM_BASEURL` | Upstream service base URL |
+| `CORS_ORIGIN_PATTERN` | CORS origin regex pattern (optional) |
 
 ## Related Projects
 
