@@ -1,7 +1,7 @@
 import axios from "axios";
 import { beforeEach, describe, expect, it, vi } from "vitest";
 
-import { buildAuthHeader, clearCache, introspect } from "../router/Proxy.mjs";
+import { buildAuthHeader, clearCache, introspect } from "../introspect.mjs";
 
 vi.mock("axios");
 const mockedAxios = vi.mocked(axios);

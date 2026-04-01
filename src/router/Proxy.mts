@@ -19,70 +19,14 @@ import type { Request, Response } from 'express';
 import express from 'express';
 import proxy from 'express-http-proxy';
 import type { AppConfig } from '../../config/application.schema.mjs';
+import { buildAuthHeader, type ClientCredentials, introspect } from '../introspect.mjs';
 import logger from '../logger.mjs';
-
-interface IntrospectionResult {
-  active: boolean;
-  [key: string]: unknown;
-}
-
-interface CacheEntry {
-  result: IntrospectionResult;
-  expiresAt: number;
-}
-
-const cache = new Map<string, CacheEntry>();
-
-export const clearCache = (): void => {
-  cache.clear();
-};
-
-export interface ClientCredentials {
-  clientId: string;
-  clientSecret: string;
-}
-
-export const buildAuthHeader = (
-  credentials: ClientCredentials | null,
-  token: string,
-): string =>
-  credentials !== null
-    ? `Basic ${Buffer.from(`${credentials.clientId}:${credentials.clientSecret}`).toString('base64')}`
-    : `Bearer ${token}`;
-
-const getCacheKey = (token: string): string =>
-  crypto.createHash('sha256').update(token).digest('hex');
 
 const generateRequestId = (): string => {
   const ts = new Date().toISOString().replace(/[-:T]/g, '').slice(0, 14)
   const uid = crypto.randomUUID().replace(/-/g, '')
   return `${ts}_${uid}`
 }
-
-export const introspect = async (
-  token: string,
-  introspectUrl: string,
-  cacheTtlSec: number,
-  requestId: string,
-  authHeader: string,
-): Promise<IntrospectionResult> => {
-  const key = getCacheKey(token);
-  const now = Date.now();
-
-  const cached = cache.get(key);
-  if (cached && cached.expiresAt > now) {
-    return cached.result;
-  }
-
-  const { data } = await axios.post<IntrospectionResult>(
-    introspectUrl,
-    new URLSearchParams({ token }).toString(),
-    { headers: { 'Content-Type': 'application/x-www-form-urlencoded', 'Authorization': authHeader, 'x-request-id': requestId } },
-  );
-
-  cache.set(key, { result: data, expiresAt: now + cacheTtlSec * 1000 });
-  return data;
-};
 
 export const createRouter = ({ config }: { config: AppConfig }): express.Router => {
   const router = express.Router();

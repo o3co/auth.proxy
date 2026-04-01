@@ -50,8 +50,8 @@ make docker       # ランタイムイメージのビルド
 | `HTTP_HOSTNAME` | HTTP リッスンホスト名（デフォルト: 0.0.0.0） |
 | `HTTP_PATH_PREFIX` | プロキシルートのパスプレフィックス（デフォルト: /） |
 | `HTTP_BODY_LIMIT_SIZE` | リクエストボディサイズ上限（デフォルト: 10mb） |
-| `CLIENT_ID` | イントロスペクション認証のクライアント ID（任意） |
-| `CLIENT_SECRET` | イントロスペクション認証のクライアントシークレット（任意） |
+| `CLIENT_ID` | イントロスペクション認証のクライアント ID（`CLIENT_SECRET` とペアで設定／両方未設定も可） |
+| `CLIENT_SECRET` | イントロスペクション認証のクライアントシークレット（`CLIENT_ID` とペアで設定／両方未設定も可） |
 | `INTROSPECT_URL` | イントロスペクションエンドポイント URL |
 | `INTROSPECT_CACHE_TTL_SEC` | キャッシュ TTL（秒、デフォルト: 30） |
 | `UPSTREAM_BASEURL` | アップストリームサービスのベース URL |

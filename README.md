@@ -50,8 +50,8 @@ make docker       # Build runtime image
 | `HTTP_HOSTNAME` | HTTP listen hostname (default: 0.0.0.0) |
 | `HTTP_PATH_PREFIX` | Path prefix for proxy routes (default: /) |
 | `HTTP_BODY_LIMIT_SIZE` | Request body size limit (default: 10mb) |
-| `CLIENT_ID` | Client ID for introspection auth (optional) |
-| `CLIENT_SECRET` | Client secret for introspection auth (optional) |
+| `CLIENT_ID` | Client ID for introspection auth (optional; must be set together with `CLIENT_SECRET`) |
+| `CLIENT_SECRET` | Client secret for introspection auth (optional; must be set together with `CLIENT_ID`) |
 | `INTROSPECT_URL` | Introspection endpoint URL |
 | `INTROSPECT_CACHE_TTL_SEC` | Cache TTL in seconds (default: 30) |
 | `UPSTREAM_BASEURL` | Upstream service base URL |
