@@ -13,6 +13,7 @@
  * See the License for the specific language governing permissions and
  * limitations under the License.
  */
+import { gracefulShutdown } from "@o3co/auth.utils";
 import { parseFile } from "@o3co/ts.hocon";
 import { validate } from "@o3co/ts.hocon/zod";
 import cors from "cors";
@@ -45,8 +46,4 @@ const server = app
     logger.info(`Server ready at http://${config.http.hostname}:${config.http.port}`);
   });
 
-const shutdown = (): void => {
-  server.close(() => process.exit(0));
-};
-process.on("SIGTERM", shutdown);
-process.on("SIGINT", shutdown);
+gracefulShutdown(server);
