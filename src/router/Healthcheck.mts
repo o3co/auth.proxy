@@ -13,18 +13,8 @@
  * See the License for the specific language governing permissions and
  * limitations under the License.
  */
+import { createHealthcheckRouter } from "@o3co/auth.utils/express";
 
-import type { Request, Response } from 'express';
-import express from 'express'
-
-export const createRouter = (): express.Router => {
-  const router = express.Router();
-
-  router.use('/_healthcheck', (_req: Request, res: Response) => {
-    return res.json({
-      code: 200,
-      message: 'healthy',
-    })
-  })
-  return router;
-}
+export const createRouter = (): ReturnType<typeof createHealthcheckRouter> => {
+  return createHealthcheckRouter("/_healthcheck");
+};

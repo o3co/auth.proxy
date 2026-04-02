@@ -13,7 +13,7 @@
  * See the License for the specific language governing permissions and
  * limitations under the License.
  */
-import crypto from 'node:crypto';
+import { createRequestIdMiddleware, extractBearerToken } from '@o3co/auth.utils/express';
 import axios from 'axios';
 import type { Request, Response } from 'express';
 import express from 'express';
@@ -21,12 +21,6 @@ import proxy from 'express-http-proxy';
 import type { AppConfig } from '../../config/application.schema.mjs';
 import { buildAuthHeader, type ClientCredentials, introspect } from '../introspect.mjs';
 import logger from '../logger.mjs';
-
-const generateRequestId = (): string => {
-  const ts = new Date().toISOString().replace(/[-:T]/g, '').slice(0, 14)
-  const uid = crypto.randomUUID().replace(/-/g, '')
-  return `${ts}_${uid}`
-}
 
 export const createRouter = ({ config }: { config: AppConfig }): express.Router => {
   const router = express.Router();
@@ -40,11 +34,9 @@ export const createRouter = ({ config }: { config: AppConfig }): express.Router 
       : null;
 
   router
-    .use((req: Request, res: Response, next) => {
-      const requestId = (req.headers['x-request-id'] as string | undefined) ?? generateRequestId()
-      req.headers['x-request-id'] = requestId
-      res.setHeader('x-request-id', requestId)
-      logger.info({ 'x-request-id': requestId, method: req.method, path: req.path }, 'incoming request')
+    .use(createRequestIdMiddleware())
+    .use((req: Request, _res: Response, next) => {
+      logger.info({ 'x-request-id': req.headers['x-request-id'], method: req.method, path: req.path }, 'incoming request')
       return next()
     })
     .use(async (req: Request, res: Response, next) => {
@@ -53,16 +45,16 @@ export const createRouter = ({ config }: { config: AppConfig }): express.Router 
       }
 
       const requestId = req.headers['x-request-id'] as string
-      const [tokenType, token] = req.headers.authorization.split(' ');
+      const bearer = extractBearerToken(req.headers.authorization);
 
-      if (tokenType !== 'Bearer' || !token) {
+      if (!bearer) {
         return res.status(400).json({ code: 400, message: 'Invalid Token Type' });
       }
 
-      const authHeader = buildAuthHeader(credentials, token);
+      const authHeader = buildAuthHeader(credentials, bearer.token);
 
       try {
-        const result = await introspect(token, introspectUrl, cacheTtlSec, requestId, authHeader);
+        const result = await introspect(bearer.token, introspectUrl, cacheTtlSec, requestId, authHeader);
         if (!result.active) {
           return res.status(401).json({ code: 401, message: 'Invalid Token' });
         }
