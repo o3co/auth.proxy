@@ -1,5 +1,9 @@
 # auth.proxy
 
+[![CI](https://github.com/o3co/auth.proxy/actions/workflows/ci.yml/badge.svg)](https://github.com/o3co/auth.proxy/actions/workflows/ci.yml)
+[![codecov](https://codecov.io/gh/o3co/auth.proxy/graph/badge.svg)](https://codecov.io/gh/o3co/auth.proxy)
+[![License](https://img.shields.io/badge/license-Apache--2.0-blue)](LICENSE)
+
 Token validation reverse proxy with introspection result caching. Sits between client and downstream service.
 
 This component is optional. auth.policy-verifier and grpc.authz validate JWT directly, so the system works without auth.proxy. Benefits of adding it:
