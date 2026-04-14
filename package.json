@@ -3,8 +3,8 @@
   "description": "Proxy to validate authorization token",
   "packageManager": "pnpm@10.29.3",
   "version": "0.0.0",
+  "private": true,
   "license": "Apache-2.0",
-
   "type": "module",
   "imports": {
     "#/*": "./src/*"
