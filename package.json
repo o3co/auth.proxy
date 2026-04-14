@@ -30,7 +30,7 @@
     "debug": "4.3.4",
     "pino": "^10.3.1",
     "tsx": "^4.21.0",
-    "typescript": "5.9.x",
+    "typescript": "6.0.x",
     "vitest": "^4.1.4"
   },
   "scripts": {
