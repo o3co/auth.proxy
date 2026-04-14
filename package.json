@@ -31,7 +31,7 @@
     "pino": "^10.3.1",
     "tsx": "^4.21.0",
     "typescript": "5.9.x",
-    "vitest": "^4.1.2"
+    "vitest": "^4.1.4"
   },
   "scripts": {
     "build": "tsc --build",
@@ -39,6 +39,7 @@
     "lint": "biome check src",
     "format": "prettier --write \"**/*.{js,ts,json,mjs,yml}\"",
     "audit": "pnpm audit --audit-level=high",
+    "test": "vitest run",
     "debug": "tsx src/app.mts",
     "start": "node dist/src/app.mjs"
   }
