@@ -39,7 +39,7 @@
     "lint": "biome check src",
     "format": "prettier --write \"**/*.{js,ts,json,mjs,yml}\"",
     "audit": "pnpm audit --audit-level=high",
-    "test": "vitest run --passWithNoTests",
+    "test": "vitest run",
     "debug": "tsx src/app.mts",
     "start": "node dist/src/app.mjs"
   }
