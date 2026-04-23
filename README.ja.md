@@ -1,8 +1,10 @@
 # auth.proxy
 
+> このリポジトリは、[auth](https://github.com/o3co/auth) スタックの 3 層責務分離（[認証・トークン発行](https://github.com/o3co/auth.provider) / [認可判定](https://github.com/o3co/auth.policy-verifier) / [認可実施](https://github.com/o3co/protobuf.interceptors)）の外に位置する任意の境界ゲートで、不正／失効トークンをダウンストリーム到達前に遮断します。
+
 トークン検証リバースプロキシ。イントロスペクション結果のキャッシュ機能付き。クライアントとダウンストリームサービスの間に配置する。
 
-このコンポーネントはオプション。auth.policy-verifier と grpc.authz は JWT を直接検証するため、auth.proxy なしでもシステムは動作する。導入するメリット:
+このコンポーネントはオプション。auth.policy-verifier と protobuf.interceptors は JWT を直接検証するため、auth.proxy なしでもシステムは動作する。導入するメリット:
 
 - **イントロスペクションベースの検証** — 失効したトークンを即座に検出可能。JWT ローカル検証のみの場合はトークンの有効期限まで検出できない
 - **キャッシュ** — イントロスペクション結果をキャッシュ（デフォルト 30 秒 TTL）し、auth.provider への負荷を軽減
@@ -62,7 +64,7 @@ make docker       # ランタイムイメージのビルド
 - [auth.provider](https://github.com/o3co/auth.provider) — OAuth 2.0 トークン発行
 - [auth.policy-verifier](https://github.com/o3co/auth.policy-verifier) — DSL 不要の ABAC ポリシー検証器
 - [auth](https://github.com/o3co/auth) — アーキテクチャドキュメントとクロスコンポーネント E2E テスト
-- [grpc.authz](https://github.com/o3co/grpc.authz) — gRPC 認可ミドルウェア
+- [protobuf.interceptors](https://github.com/o3co/protobuf.interceptors) — gRPC / ConnectRPC 向け protobuf option ベースの認可 interceptor
 
 ## ライセンス
 

@@ -4,9 +4,11 @@
 [![codecov](https://codecov.io/gh/o3co/auth.proxy/graph/badge.svg)](https://codecov.io/gh/o3co/auth.proxy)
 [![License](https://img.shields.io/badge/license-Apache--2.0-blue)](LICENSE)
 
+> This repository is an optional perimeter gate that sits outside the three-layer separation of concerns ([authentication & token issuance](https://github.com/o3co/auth.provider) / [authorization decision](https://github.com/o3co/auth.policy-verifier) / [authorization enforcement](https://github.com/o3co/protobuf.interceptors)) of the [auth](https://github.com/o3co/auth) stack — blocking invalid / revoked tokens at the edge before they reach downstream services.
+
 Token validation reverse proxy with introspection result caching. Sits between client and downstream service.
 
-This component is optional. auth.policy-verifier and grpc.authz validate JWT directly, so the system works without auth.proxy. Benefits of adding it:
+This component is optional. auth.policy-verifier and protobuf.interceptors validate JWT directly, so the system works without auth.proxy. Benefits of adding it:
 
 - **Introspection-based validation** — detects revoked tokens immediately, unlike JWT-only local validation which relies on token expiry
 - **Caching** — introspection results are cached (default 30s TTL), reducing load on auth.provider
@@ -66,7 +68,7 @@ make docker       # Build runtime image
 - [auth.provider](https://github.com/o3co/auth.provider) — OAuth 2.0 token issuance
 - [auth.policy-verifier](https://github.com/o3co/auth.policy-verifier) — No-DSL ABAC policy verifier
 - [auth](https://github.com/o3co/auth) — Architecture docs and cross-component E2E tests
-- [grpc.authz](https://github.com/o3co/grpc.authz) — gRPC authorization middleware
+- [protobuf.interceptors](https://github.com/o3co/protobuf.interceptors) — protobuf-option-driven authorization interceptors for gRPC / ConnectRPC
 
 ## License
 
