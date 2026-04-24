@@ -14,15 +14,25 @@ describe("createSingleFlight", () => {
 		);
 
 		expect(fetcher).toHaveBeenCalledTimes(1);
-		expect(results).toEqual(Array(10).fill("tok"));
+		const leaderCount = results.filter((r) => !r.wasWaiter).length;
+		const waiterCount = results.filter((r) => r.wasWaiter).length;
+		expect(leaderCount).toBe(1);
+		expect(waiterCount).toBe(9);
+		expect(results.every((r) => r.value === "tok")).toBe(true);
 	});
 
 	it("invokes fetcher again for a second run() after the first resolves", async () => {
 		const sf = createSingleFlight<string>();
 		const fetcher = vi.fn().mockResolvedValueOnce("tok1").mockResolvedValueOnce("tok2");
 
-		expect(await sf.run("k1", fetcher)).toBe("tok1");
-		expect(await sf.run("k1", fetcher)).toBe("tok2");
+		const r1 = await sf.run("k1", fetcher);
+		expect(r1.value).toBe("tok1");
+		expect(r1.wasWaiter).toBe(false);
+
+		const r2 = await sf.run("k1", fetcher);
+		expect(r2.value).toBe("tok2");
+		expect(r2.wasWaiter).toBe(false);
+
 		expect(fetcher).toHaveBeenCalledTimes(2);
 	});
 
@@ -47,7 +57,9 @@ describe("createSingleFlight", () => {
 
 	it("clears pending entry after success", async () => {
 		const sf = createSingleFlight<string>();
-		await sf.run("k1", () => Promise.resolve("tok"));
+		const result = await sf.run("k1", () => Promise.resolve("tok"));
+		expect(result.value).toBe("tok");
+		expect(result.wasWaiter).toBe(false);
 		expect(sf._sizeForTesting()).toBe(0);
 	});
 
@@ -63,8 +75,10 @@ describe("createSingleFlight", () => {
 		const f2 = vi.fn().mockResolvedValue("b");
 
 		const [r1, r2] = await Promise.all([sf.run("a", f1), sf.run("b", f2)]);
-		expect(r1).toBe("a");
-		expect(r2).toBe("b");
+		expect(r1.value).toBe("a");
+		expect(r1.wasWaiter).toBe(false);
+		expect(r2.value).toBe("b");
+		expect(r2.wasWaiter).toBe(false);
 		expect(f1).toHaveBeenCalledTimes(1);
 		expect(f2).toHaveBeenCalledTimes(1);
 	});

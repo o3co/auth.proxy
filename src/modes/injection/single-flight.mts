@@ -14,17 +14,25 @@
  * limitations under the License.
  */
 
+export interface SingleFlightResult<T> {
+	value: T;
+	wasWaiter: boolean;
+}
+
 export interface SingleFlight<T> {
-	run(key: string, fetch: () => Promise<T>): Promise<T>;
+	run(key: string, fetch: () => Promise<T>): Promise<SingleFlightResult<T>>;
 	_sizeForTesting(): number;
 }
 
 export const createSingleFlight = <T,>(): SingleFlight<T> => {
 	const pending = new Map<string, Promise<T>>();
 	return {
-		run(key, fetch) {
+		async run(key, fetch) {
 			const existing = pending.get(key);
-			if (existing !== undefined) return existing;
+			if (existing !== undefined) {
+				const value = await existing;
+				return { value, wasWaiter: true };
+			}
 			const promise = (async () => {
 				try {
 					return await fetch();
@@ -33,7 +41,8 @@ export const createSingleFlight = <T,>(): SingleFlight<T> => {
 				}
 			})();
 			pending.set(key, promise);
-			return promise;
+			const value = await promise;
+			return { value, wasWaiter: false };
 		},
 		_sizeForTesting() {
 			return pending.size;

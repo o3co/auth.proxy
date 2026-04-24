@@ -95,9 +95,9 @@ const injectionMiddleware =
 			return;
 		}
 
-		logger.info({ requestId, event: "injection.grant_fetch" }, "fetching grant");
 		try {
-			const token = await singleFlight.run(cacheKey, async () => {
+			const { value: token, wasWaiter } = await singleFlight.run(cacheKey, async () => {
+				logger.info({ requestId, event: "injection.grant_fetch" }, "fetching grant");
 				const result = await grantClient.exchange({
 					sessionCookieValue,
 					requestId,
@@ -112,6 +112,9 @@ const injectionMiddleware =
 				);
 				return result.accessToken;
 			});
+			if (wasWaiter) {
+				logger.debug({ requestId, event: "injection.single_flight_wait" }, "coalesced");
+			}
 			applyAuthorization(token);
 			next();
 		} catch (err) {
