@@ -1,6 +1,11 @@
 import { afterEach, beforeEach, describe, expect, it, vi } from "vitest";
 
-import { buildAuthHeader, clearCache, introspect } from "../introspect.mjs";
+import {
+	buildAuthHeader,
+	clearCache,
+	IntrospectHttpError,
+	introspect,
+} from "../introspect.mjs";
 
 const jsonResponse = (status: number, body: unknown): Response =>
 	new Response(JSON.stringify(body), {
@@ -127,6 +132,39 @@ describe("introspect", () => {
 
 		expect(fetchMock).toHaveBeenCalledTimes(1);
 		expect(result1).toEqual(result2);
+	});
+
+	it("throws IntrospectHttpError(502) on 200 with non-JSON body", async () => {
+		fetchMock.mockResolvedValueOnce(
+			new Response("not json at all", {
+				status: 200,
+				headers: { "Content-Type": "text/plain" },
+			}),
+		);
+
+		await expect(
+			introspect("t", "http://auth/introspect", 30, "r", "Bearer t"),
+		).rejects.toMatchObject({
+			name: "IntrospectHttpError",
+			status: 502,
+		});
+	});
+
+	it("throws IntrospectHttpError with matching status on non-2xx response", async () => {
+		fetchMock.mockResolvedValueOnce(new Response("", { status: 503 }));
+
+		const p = introspect("t", "http://auth/introspect", 30, "r", "Bearer t");
+		await expect(p).rejects.toBeInstanceOf(IntrospectHttpError);
+		await expect(p).rejects.toMatchObject({ status: 503 });
+	});
+
+	it("propagates fetch rejection (network error / AbortError)", async () => {
+		const abortErr = new DOMException("The operation was aborted", "AbortError");
+		fetchMock.mockRejectedValueOnce(abortErr);
+
+		await expect(
+			introspect("t", "http://auth/introspect", 30, "r", "Bearer t"),
+		).rejects.toBe(abortErr);
 	});
 
 	it("evicts oldest entry when cache exceeds maxCacheEntries", async () => {

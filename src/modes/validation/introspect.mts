@@ -88,7 +88,13 @@ export const introspect = async (
 		throw new IntrospectHttpError(resp.status, `introspect returned ${resp.status}`);
 	}
 
-	const data = (await resp.json()) as IntrospectionResult;
+	let data: IntrospectionResult;
+	try {
+		data = (await resp.json()) as IntrospectionResult;
+	} catch {
+		// Provider returned 200 with a non-JSON body — treat as provider bug, not auth decision.
+		throw new IntrospectHttpError(502, "introspect returned 200 with a non-JSON body");
+	}
 
 	for (const [k, entry] of cache) {
 		if (entry.expiresAt <= now) {
