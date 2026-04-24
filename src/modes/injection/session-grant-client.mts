@@ -91,7 +91,10 @@ export const createSessionGrantClient = (
 				});
 
 				const data = resp.data;
-				const accessToken = typeof data.access_token === "string" ? data.access_token : null;
+				const accessToken =
+					typeof data.access_token === "string" && data.access_token.length > 0
+						? data.access_token
+						: null;
 				if (accessToken === null) {
 					throw new SessionGrantError(
 						"provider_invalid_response",

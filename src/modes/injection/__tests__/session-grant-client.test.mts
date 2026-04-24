@@ -129,6 +129,21 @@ describe("createSessionGrantClient.exchange", () => {
 		});
 	});
 
+	it("throws provider_invalid_response on 200 with empty-string access_token", async () => {
+		mockedAxios.post.mockResolvedValueOnce({
+			...okResponse(),
+			data: { access_token: "", token_type: "Bearer" },
+		});
+		const client = createSessionGrantClient(baseCfg);
+
+		await expect(
+			client.exchange({ sessionCookieValue: "c", requestId: "r" }),
+		).rejects.toMatchObject({
+			code: "provider_invalid_response",
+			status: 502,
+		});
+	});
+
 	it("throws session_unauthorized on provider 401 with Retry-After propagation", async () => {
 		const err = Object.assign(new AxiosError("Unauthorized"), {
 			isAxiosError: true,
@@ -154,6 +169,31 @@ describe("createSessionGrantClient.exchange", () => {
 		});
 	});
 
+	it("captures Title-case Retry-After header", async () => {
+		const err = Object.assign(new AxiosError("Unauthorized"), {
+			isAxiosError: true,
+			response: {
+				status: 401,
+				data: { error: "invalid_grant" },
+				headers: { "Retry-After": "60" },
+				statusText: "Unauthorized",
+				config: { headers: {} },
+			},
+		}) as AxiosError;
+		mockedAxios.post.mockRejectedValueOnce(err);
+		mockedAxios.isAxiosError.mockReturnValue(true);
+
+		const client = createSessionGrantClient(baseCfg);
+
+		await expect(
+			client.exchange({ sessionCookieValue: "c", requestId: "r" }),
+		).rejects.toMatchObject({
+			code: "session_unauthorized",
+			status: 401,
+			retryAfter: "60",
+		});
+	});
+
 	it("throws provider_config_error on provider 400", async () => {
 		const err = Object.assign(new AxiosError("Bad Request"), {
 			isAxiosError: true,
@@ -175,6 +215,7 @@ describe("createSessionGrantClient.exchange", () => {
 		).rejects.toMatchObject({
 			code: "provider_config_error",
 			status: 502,
+			retryAfter: null,
 		});
 	});
 
@@ -196,7 +237,7 @@ describe("createSessionGrantClient.exchange", () => {
 
 		await expect(
 			client.exchange({ sessionCookieValue: "c", requestId: "r" }),
-		).rejects.toMatchObject({ code: "provider_unavailable", status: 502 });
+		).rejects.toMatchObject({ code: "provider_unavailable", status: 502, retryAfter: null });
 	});
 
 	it("throws provider_unavailable on network error (no response)", async () => {
@@ -212,7 +253,7 @@ describe("createSessionGrantClient.exchange", () => {
 
 		await expect(
 			client.exchange({ sessionCookieValue: "c", requestId: "r" }),
-		).rejects.toMatchObject({ code: "provider_unavailable", status: 502 });
+		).rejects.toMatchObject({ code: "provider_unavailable", status: 502, retryAfter: null });
 	});
 
 	it("throws provider_unavailable on unexpected 4xx", async () => {
@@ -233,7 +274,7 @@ describe("createSessionGrantClient.exchange", () => {
 
 		await expect(
 			client.exchange({ sessionCookieValue: "c", requestId: "r" }),
-		).rejects.toMatchObject({ code: "provider_unavailable", status: 502 });
+		).rejects.toMatchObject({ code: "provider_unavailable", status: 502, retryAfter: null });
 	});
 });
 
