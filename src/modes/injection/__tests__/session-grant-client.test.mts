@@ -216,6 +216,33 @@ describe("createSessionGrantClient.exchange", () => {
 			code: "provider_config_error",
 			status: 502,
 			retryAfter: null,
+			message: expect.stringContaining("unknown scope"),
+		});
+	});
+
+	it("throws provider_config_error with generic message when provider omits error_description", async () => {
+		const err = Object.assign(new AxiosError("Bad Request"), {
+			isAxiosError: true,
+			response: {
+				status: 400,
+				data: { error: "invalid_scope" },
+				headers: {},
+				statusText: "Bad Request",
+				config: { headers: {} },
+			},
+		}) as AxiosError;
+		mockedAxios.post.mockRejectedValueOnce(err);
+		mockedAxios.isAxiosError.mockReturnValue(true);
+
+		const client = createSessionGrantClient(baseCfg);
+
+		await expect(
+			client.exchange({ sessionCookieValue: "c", requestId: "r" }),
+		).rejects.toMatchObject({
+			code: "provider_config_error",
+			status: 502,
+			retryAfter: null,
+			message: "provider rejected proxy configuration (client_id or scope)",
 		});
 	});
 
@@ -237,7 +264,12 @@ describe("createSessionGrantClient.exchange", () => {
 
 		await expect(
 			client.exchange({ sessionCookieValue: "c", requestId: "r" }),
-		).rejects.toMatchObject({ code: "provider_unavailable", status: 502, retryAfter: null });
+		).rejects.toMatchObject({
+			code: "provider_unavailable",
+			status: 502,
+			retryAfter: null,
+			message: expect.stringContaining("provider call failed"),
+		});
 	});
 
 	it("throws provider_unavailable on network error (no response)", async () => {

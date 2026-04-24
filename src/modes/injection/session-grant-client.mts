@@ -119,10 +119,16 @@ export const createSessionGrantClient = (
 						);
 					}
 					if (status === 400) {
+						const provided =
+							typeof (err.response?.data as Record<string, unknown> | undefined)?.error_description === "string"
+								? ((err.response?.data as Record<string, unknown>).error_description as string)
+								: null;
 						throw new SessionGrantError(
 							"provider_config_error",
 							502,
-							"provider rejected proxy configuration (client_id or scope)",
+							provided !== null
+								? `provider rejected proxy configuration: ${provided}`
+								: "provider rejected proxy configuration (client_id or scope)",
 							retryAfter,
 						);
 					}
@@ -130,7 +136,7 @@ export const createSessionGrantClient = (
 						throw new SessionGrantError(
 							"provider_unavailable",
 							502,
-							`provider returned ${status}`,
+							`provider call failed: returned ${status}`,
 							retryAfter,
 						);
 					}

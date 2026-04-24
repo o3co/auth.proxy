@@ -286,6 +286,35 @@ describe("injection router", () => {
 		expect(mockedAxios.post).not.toHaveBeenCalled();
 	});
 
+	it("passes through upstream 5xx unchanged after Bearer injection", async () => {
+		mockedAxios.post.mockResolvedValueOnce(okGrant("tok-1"));
+		upstream.respond(503, "upstream is sad");
+		const app = mountApp(makeConfig(upstream.baseURL));
+
+		const res = await request(app).get("/any").set("Cookie", "sid=s1");
+
+		expect(res.status).toBe(503);
+		expect(res.text).toBe("upstream is sad");
+		expect(upstream.received[0].headers.authorization).toBe("Bearer tok-1");
+	});
+
+	it("returns 502 provider_invalid_response when provider 200 has no access_token", async () => {
+		mockedAxios.post.mockResolvedValueOnce({
+			status: 200,
+			statusText: "OK",
+			headers: {},
+			data: { token_type: "Bearer" },
+			config: { headers: {} } as unknown,
+		});
+		const app = mountApp(makeConfig(upstream.baseURL));
+
+		const res = await request(app).get("/any").set("Cookie", "sid=s1");
+
+		expect(res.status).toBe(502);
+		expect(res.body.error).toBe("provider_invalid_response");
+		expect(upstream.received).toHaveLength(0);
+	});
+
 	it("re-fetches after cache expiry", async () => {
 		mockedAxios.post
 			.mockResolvedValueOnce(okGrant("tok-1", 1))

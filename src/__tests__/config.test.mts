@@ -199,4 +199,18 @@ describe("proxy config — mode selection", () => {
 		const raw = parseFile(confPath, { env: { AUTH_MODE: "validaton" } });
 		expect(() => validate(raw, AppConfigSchema)).toThrow();
 	});
+
+	it("rejects when auth.mode=\"validation\" but validation section is empty/missing", () => {
+		// Use an env-injected mode with no validation block present.
+		// Since application.conf always has a validation block, craft a raw
+		// object directly using the Zod schema's parse method (validate() from
+		// ts.hocon/zod requires a HOCON Config object, not a plain object).
+		expect(() =>
+			AppConfigSchema.parse({
+				http: { cors: { origin: { pattern: null } } },
+				auth: { mode: "validation" },
+				upstream: { baseURL: "http://u" },
+			}),
+		).toThrow();
+	});
 });
