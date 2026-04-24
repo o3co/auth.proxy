@@ -1,12 +1,8 @@
-import axios, { AxiosError, type AxiosResponse } from "axios";
-import { beforeEach, describe, expect, it, vi } from "vitest";
+import { afterEach, beforeEach, describe, expect, it, vi } from "vitest";
 import {
 	createSessionGrantClient,
 	SessionGrantError,
 } from "../session-grant-client.mjs";
-
-vi.mock("axios");
-const mockedAxios = vi.mocked(axios);
 
 const baseCfg = {
 	providerOrigin: "http://provider.example",
@@ -16,21 +12,52 @@ const baseCfg = {
 	timeoutMs: 5000,
 };
 
-describe("createSessionGrantClient.exchange", () => {
-	beforeEach(() => {
-		vi.clearAllMocks();
+const jsonResponse = (
+	status: number,
+	body: unknown,
+	headers: Record<string, string> = {},
+): Response =>
+	new Response(JSON.stringify(body), {
+		status,
+		headers: { "Content-Type": "application/json", ...headers },
 	});
 
-	const okResponse = (): AxiosResponse => ({
-		status: 200,
-		data: { access_token: "tok-123", token_type: "Bearer", expires_in: 120 },
-		statusText: "OK",
-		headers: {},
-		config: { headers: {} } as unknown as AxiosResponse["config"],
+const getFetchCallInit = (
+	fetchMock: ReturnType<typeof vi.fn>,
+	index = 0,
+): RequestInit => fetchMock.mock.calls[index][1] as RequestInit;
+
+const getFetchCallUrl = (
+	fetchMock: ReturnType<typeof vi.fn>,
+	index = 0,
+): string => fetchMock.mock.calls[index][0] as string;
+
+const getFetchCallHeaders = (
+	fetchMock: ReturnType<typeof vi.fn>,
+	index = 0,
+): Record<string, string> =>
+	getFetchCallInit(fetchMock, index).headers as Record<string, string>;
+
+describe("createSessionGrantClient.exchange", () => {
+	let fetchMock: ReturnType<typeof vi.fn>;
+
+	beforeEach(() => {
+		fetchMock = vi.fn();
+		vi.stubGlobal("fetch", fetchMock);
+	});
+
+	afterEach(() => {
+		vi.unstubAllGlobals();
 	});
 
 	it("returns access token and expires_in on provider 200", async () => {
-		mockedAxios.post.mockResolvedValueOnce(okResponse());
+		fetchMock.mockResolvedValueOnce(
+			jsonResponse(200, {
+				access_token: "tok-123",
+				token_type: "Bearer",
+				expires_in: 120,
+			}),
+		);
 		const client = createSessionGrantClient(baseCfg);
 
 		const result = await client.exchange({
@@ -42,31 +69,38 @@ describe("createSessionGrantClient.exchange", () => {
 	});
 
 	it("sends POST to <providerOrigin>/oauth/token", async () => {
-		mockedAxios.post.mockResolvedValueOnce(okResponse());
+		fetchMock.mockResolvedValueOnce(
+			jsonResponse(200, { access_token: "tok", token_type: "Bearer" }),
+		);
 		const client = createSessionGrantClient(baseCfg);
 		await client.exchange({ sessionCookieValue: "cookie-abc", requestId: "req-1" });
 
-		expect(mockedAxios.post).toHaveBeenCalledTimes(1);
-		expect(mockedAxios.post.mock.calls[0][0]).toBe("http://provider.example/oauth/token");
+		expect(fetchMock).toHaveBeenCalledTimes(1);
+		expect(getFetchCallUrl(fetchMock)).toBe("http://provider.example/oauth/token");
+		expect(getFetchCallInit(fetchMock).method).toBe("POST");
 	});
 
 	it("tolerates providerOrigin with a trailing slash", async () => {
-		mockedAxios.post.mockResolvedValueOnce(okResponse());
+		fetchMock.mockResolvedValueOnce(
+			jsonResponse(200, { access_token: "tok", token_type: "Bearer" }),
+		);
 		const client = createSessionGrantClient({
 			...baseCfg,
 			providerOrigin: "http://provider.example/",
 		});
 		await client.exchange({ sessionCookieValue: "cookie-abc", requestId: "req-1" });
 
-		expect(mockedAxios.post.mock.calls[0][0]).toBe("http://provider.example/oauth/token");
+		expect(getFetchCallUrl(fetchMock)).toBe("http://provider.example/oauth/token");
 	});
 
 	it("sends form-urlencoded body with grant_type=session, client_id, scope", async () => {
-		mockedAxios.post.mockResolvedValueOnce(okResponse());
+		fetchMock.mockResolvedValueOnce(
+			jsonResponse(200, { access_token: "tok", token_type: "Bearer" }),
+		);
 		const client = createSessionGrantClient(baseCfg);
 		await client.exchange({ sessionCookieValue: "cookie-abc", requestId: "req-1" });
 
-		const body = mockedAxios.post.mock.calls[0][1] as string;
+		const body = getFetchCallInit(fetchMock).body as string;
 		const params = new URLSearchParams(body);
 		expect(params.get("grant_type")).toBe("session");
 		expect(params.get("client_id")).toBe("my-spa");
@@ -74,12 +108,13 @@ describe("createSessionGrantClient.exchange", () => {
 	});
 
 	it("sends only isolated headers (no Authorization, no extra cookies)", async () => {
-		mockedAxios.post.mockResolvedValueOnce(okResponse());
+		fetchMock.mockResolvedValueOnce(
+			jsonResponse(200, { access_token: "tok", token_type: "Bearer" }),
+		);
 		const client = createSessionGrantClient(baseCfg);
 		await client.exchange({ sessionCookieValue: "cookie-abc", requestId: "req-1" });
 
-		const opts = mockedAxios.post.mock.calls[0][2];
-		const headers = opts?.headers as Record<string, string>;
+		const headers = getFetchCallHeaders(fetchMock);
 		expect(Object.keys(headers).sort()).toEqual([
 			"Accept",
 			"Content-Type",
@@ -93,20 +128,21 @@ describe("createSessionGrantClient.exchange", () => {
 		expect(headers.Authorization).toBeUndefined();
 	});
 
-	it("passes configured timeout to axios", async () => {
-		mockedAxios.post.mockResolvedValueOnce(okResponse());
+	it("passes configured timeout as AbortSignal.timeout", async () => {
+		fetchMock.mockResolvedValueOnce(
+			jsonResponse(200, { access_token: "tok", token_type: "Bearer" }),
+		);
 		const client = createSessionGrantClient({ ...baseCfg, timeoutMs: 1234 });
 		await client.exchange({ sessionCookieValue: "cookie-abc", requestId: "req-1" });
 
-		const opts = mockedAxios.post.mock.calls[0][2];
-		expect(opts?.timeout).toBe(1234);
+		const init = getFetchCallInit(fetchMock);
+		expect(init.signal).toBeInstanceOf(AbortSignal);
 	});
 
 	it("returns null expiresIn when provider omits expires_in (RFC 6749 §5.1 OPTIONAL)", async () => {
-		mockedAxios.post.mockResolvedValueOnce({
-			...okResponse(),
-			data: { access_token: "tok-no-exp", token_type: "Bearer" },
-		});
+		fetchMock.mockResolvedValueOnce(
+			jsonResponse(200, { access_token: "tok-no-exp", token_type: "Bearer" }),
+		);
 		const client = createSessionGrantClient(baseCfg);
 
 		const result = await client.exchange({ sessionCookieValue: "c", requestId: "r" });
@@ -115,10 +151,7 @@ describe("createSessionGrantClient.exchange", () => {
 	});
 
 	it("throws provider_invalid_response on 200 without access_token", async () => {
-		mockedAxios.post.mockResolvedValueOnce({
-			...okResponse(),
-			data: { token_type: "Bearer" },
-		});
+		fetchMock.mockResolvedValueOnce(jsonResponse(200, { token_type: "Bearer" }));
 		const client = createSessionGrantClient(baseCfg);
 
 		await expect(
@@ -130,10 +163,26 @@ describe("createSessionGrantClient.exchange", () => {
 	});
 
 	it("throws provider_invalid_response on 200 with empty-string access_token", async () => {
-		mockedAxios.post.mockResolvedValueOnce({
-			...okResponse(),
-			data: { access_token: "", token_type: "Bearer" },
+		fetchMock.mockResolvedValueOnce(
+			jsonResponse(200, { access_token: "", token_type: "Bearer" }),
+		);
+		const client = createSessionGrantClient(baseCfg);
+
+		await expect(
+			client.exchange({ sessionCookieValue: "c", requestId: "r" }),
+		).rejects.toMatchObject({
+			code: "provider_invalid_response",
+			status: 502,
 		});
+	});
+
+	it("throws provider_invalid_response on 200 with non-JSON body", async () => {
+		fetchMock.mockResolvedValueOnce(
+			new Response("not json at all", {
+				status: 200,
+				headers: { "Content-Type": "text/plain" },
+			}),
+		);
 		const client = createSessionGrantClient(baseCfg);
 
 		await expect(
@@ -145,19 +194,9 @@ describe("createSessionGrantClient.exchange", () => {
 	});
 
 	it("throws session_unauthorized on provider 401 with Retry-After propagation", async () => {
-		const err = Object.assign(new AxiosError("Unauthorized"), {
-			isAxiosError: true,
-			response: {
-				status: 401,
-				data: { error: "invalid_grant" },
-				headers: { "retry-after": "30" },
-				statusText: "Unauthorized",
-				config: { headers: {} },
-			},
-		}) as AxiosError;
-		mockedAxios.post.mockRejectedValueOnce(err);
-		mockedAxios.isAxiosError.mockReturnValue(true);
-
+		fetchMock.mockResolvedValueOnce(
+			jsonResponse(401, { error: "invalid_grant" }, { "retry-after": "30" }),
+		);
 		const client = createSessionGrantClient(baseCfg);
 
 		await expect(
@@ -170,19 +209,9 @@ describe("createSessionGrantClient.exchange", () => {
 	});
 
 	it("captures Title-case Retry-After header", async () => {
-		const err = Object.assign(new AxiosError("Unauthorized"), {
-			isAxiosError: true,
-			response: {
-				status: 401,
-				data: { error: "invalid_grant" },
-				headers: { "Retry-After": "60" },
-				statusText: "Unauthorized",
-				config: { headers: {} },
-			},
-		}) as AxiosError;
-		mockedAxios.post.mockRejectedValueOnce(err);
-		mockedAxios.isAxiosError.mockReturnValue(true);
-
+		fetchMock.mockResolvedValueOnce(
+			jsonResponse(401, { error: "invalid_grant" }, { "Retry-After": "60" }),
+		);
 		const client = createSessionGrantClient(baseCfg);
 
 		await expect(
@@ -195,19 +224,12 @@ describe("createSessionGrantClient.exchange", () => {
 	});
 
 	it("throws provider_config_error on provider 400", async () => {
-		const err = Object.assign(new AxiosError("Bad Request"), {
-			isAxiosError: true,
-			response: {
-				status: 400,
-				data: { error: "invalid_scope", error_description: "unknown scope" },
-				headers: {},
-				statusText: "Bad Request",
-				config: { headers: {} },
-			},
-		}) as AxiosError;
-		mockedAxios.post.mockRejectedValueOnce(err);
-		mockedAxios.isAxiosError.mockReturnValue(true);
-
+		fetchMock.mockResolvedValueOnce(
+			jsonResponse(400, {
+				error: "invalid_scope",
+				error_description: "unknown scope",
+			}),
+		);
 		const client = createSessionGrantClient(baseCfg);
 
 		await expect(
@@ -221,19 +243,7 @@ describe("createSessionGrantClient.exchange", () => {
 	});
 
 	it("throws provider_config_error with generic message when provider omits error_description", async () => {
-		const err = Object.assign(new AxiosError("Bad Request"), {
-			isAxiosError: true,
-			response: {
-				status: 400,
-				data: { error: "invalid_scope" },
-				headers: {},
-				statusText: "Bad Request",
-				config: { headers: {} },
-			},
-		}) as AxiosError;
-		mockedAxios.post.mockRejectedValueOnce(err);
-		mockedAxios.isAxiosError.mockReturnValue(true);
-
+		fetchMock.mockResolvedValueOnce(jsonResponse(400, { error: "invalid_scope" }));
 		const client = createSessionGrantClient(baseCfg);
 
 		await expect(
@@ -247,19 +257,7 @@ describe("createSessionGrantClient.exchange", () => {
 	});
 
 	it("throws provider_unavailable on provider 500", async () => {
-		const err = Object.assign(new AxiosError("ISE"), {
-			isAxiosError: true,
-			response: {
-				status: 500,
-				data: {},
-				headers: {},
-				statusText: "ISE",
-				config: { headers: {} },
-			},
-		}) as AxiosError;
-		mockedAxios.post.mockRejectedValueOnce(err);
-		mockedAxios.isAxiosError.mockReturnValue(true);
-
+		fetchMock.mockResolvedValueOnce(jsonResponse(500, {}));
 		const client = createSessionGrantClient(baseCfg);
 
 		await expect(
@@ -272,36 +270,35 @@ describe("createSessionGrantClient.exchange", () => {
 		});
 	});
 
-	it("throws provider_unavailable on network error (no response)", async () => {
-		const err = Object.assign(new AxiosError("ECONNREFUSED"), {
-			isAxiosError: true,
-			code: "ECONNREFUSED",
-			response: undefined,
-		}) as AxiosError;
-		mockedAxios.post.mockRejectedValueOnce(err);
-		mockedAxios.isAxiosError.mockReturnValue(true);
-
+	it("throws provider_unavailable on network error (fetch throws TypeError)", async () => {
+		fetchMock.mockRejectedValueOnce(new TypeError("fetch failed"));
 		const client = createSessionGrantClient(baseCfg);
 
 		await expect(
 			client.exchange({ sessionCookieValue: "c", requestId: "r" }),
-		).rejects.toMatchObject({ code: "provider_unavailable", status: 502, retryAfter: null });
+		).rejects.toMatchObject({
+			code: "provider_unavailable",
+			status: 502,
+			retryAfter: null,
+		});
+	});
+
+	it("throws provider_unavailable on timeout (AbortError)", async () => {
+		const abortErr = new DOMException("The operation was aborted", "AbortError");
+		fetchMock.mockRejectedValueOnce(abortErr);
+		const client = createSessionGrantClient(baseCfg);
+
+		await expect(
+			client.exchange({ sessionCookieValue: "c", requestId: "r" }),
+		).rejects.toMatchObject({
+			code: "provider_unavailable",
+			status: 502,
+			retryAfter: null,
+		});
 	});
 
 	it("throws provider_unavailable on unexpected 4xx", async () => {
-		const err = Object.assign(new AxiosError("Teapot"), {
-			isAxiosError: true,
-			response: {
-				status: 418,
-				data: {},
-				headers: {},
-				statusText: "Teapot",
-				config: { headers: {} },
-			},
-		}) as AxiosError;
-		mockedAxios.post.mockRejectedValueOnce(err);
-		mockedAxios.isAxiosError.mockReturnValue(true);
-
+		fetchMock.mockResolvedValueOnce(jsonResponse(418, {}));
 		const client = createSessionGrantClient(baseCfg);
 
 		await expect(

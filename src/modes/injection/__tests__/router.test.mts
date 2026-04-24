@@ -1,15 +1,11 @@
 import type { IncomingMessage, Server, ServerResponse } from "node:http";
 import http from "node:http";
 import type { AddressInfo } from "node:net";
-import axios from "axios";
 import express from "express";
 import request from "supertest";
 import { afterEach, beforeEach, describe, expect, it, vi } from "vitest";
 import type { AppConfig } from "../../../../config/application.schema.mjs";
 import { createRouter } from "../router.mjs";
-
-vi.mock("axios");
-const mockedAxios = vi.mocked(axios);
 
 type UpstreamRecorder = {
 	server: Server;
@@ -79,31 +75,35 @@ const mountApp = (config: AppConfig): express.Express => {
 	return app;
 };
 
-const okGrant = (accessToken = "grant-tok", expiresIn: number | null = 120) => ({
-	status: 200,
-	statusText: "OK",
-	headers: {},
-	data: {
+const jsonResponse = (
+	status: number,
+	body: unknown,
+	headers: Record<string, string> = {},
+): Response =>
+	new Response(JSON.stringify(body), {
+		status,
+		headers: { "Content-Type": "application/json", ...headers },
+	});
+
+const okGrantResponse = (accessToken = "grant-tok", expiresIn: number | null = 120): Response =>
+	jsonResponse(200, {
 		access_token: accessToken,
 		token_type: "Bearer",
 		...(expiresIn !== null ? { expires_in: expiresIn } : {}),
-	},
-	config: { headers: {} } as unknown,
-});
+	});
 
 describe("injection router", () => {
 	let upstream: UpstreamRecorder;
+	let fetchMock: ReturnType<typeof vi.fn>;
 
 	beforeEach(async () => {
-		vi.clearAllMocks();
-		mockedAxios.isAxiosError.mockImplementation(
-			(e: unknown) =>
-				typeof (e as { isAxiosError?: boolean }).isAxiosError === "boolean",
-		);
+		fetchMock = vi.fn();
+		vi.stubGlobal("fetch", fetchMock);
 		upstream = await startUpstream();
 	});
 
 	afterEach(async () => {
+		vi.unstubAllGlobals();
 		await upstream.close();
 	});
 
@@ -115,37 +115,37 @@ describe("injection router", () => {
 		expect(res.status).toBe(204);
 		expect(upstream.received).toHaveLength(1);
 		expect(upstream.received[0].headers.authorization).toBeUndefined();
-		expect(mockedAxios.post).not.toHaveBeenCalled();
+		expect(fetchMock).not.toHaveBeenCalled();
 	});
 
 	it("exchanges cookie -> Bearer on cache miss and forwards", async () => {
-		mockedAxios.post.mockResolvedValueOnce(okGrant("tok-1"));
+		fetchMock.mockResolvedValueOnce(okGrantResponse("tok-1"));
 		const app = mountApp(makeConfig(upstream.baseURL));
 
 		const res = await request(app).get("/any").set("Cookie", "sid=s1");
 
 		expect(res.status).toBe(204);
-		expect(mockedAxios.post).toHaveBeenCalledTimes(1);
+		expect(fetchMock).toHaveBeenCalledTimes(1);
 		expect(upstream.received[0].headers.authorization).toBe("Bearer tok-1");
 	});
 
 	it("returns cached token on second request with same cookie", async () => {
-		mockedAxios.post.mockResolvedValueOnce(okGrant("tok-1"));
+		fetchMock.mockResolvedValueOnce(okGrantResponse("tok-1"));
 		const app = mountApp(makeConfig(upstream.baseURL));
 
 		await request(app).get("/any").set("Cookie", "sid=s1");
 		await request(app).get("/any").set("Cookie", "sid=s1");
 
-		expect(mockedAxios.post).toHaveBeenCalledTimes(1);
+		expect(fetchMock).toHaveBeenCalledTimes(1);
 		expect(upstream.received).toHaveLength(2);
 		expect(upstream.received[0].headers.authorization).toBe("Bearer tok-1");
 		expect(upstream.received[1].headers.authorization).toBe("Bearer tok-1");
 	});
 
 	it("coalesces concurrent requests with the same cookie into one provider call", async () => {
-		const grantControl = { resolve: null as ((v: unknown) => void) | null };
-		mockedAxios.post.mockReturnValueOnce(
-			new Promise((resolve) => {
+		const grantControl = { resolve: null as ((v: Response) => void) | null };
+		fetchMock.mockReturnValueOnce(
+			new Promise<Response>((resolve) => {
 				grantControl.resolve = resolve;
 			}),
 		);
@@ -157,25 +157,14 @@ describe("injection router", () => {
 			request(app).get("/c").set("Cookie", "sid=s1"),
 		]);
 		await new Promise((r) => setTimeout(r, 10));
-		grantControl.resolve?.(okGrant("tok-shared"));
+		grantControl.resolve?.(okGrantResponse("tok-shared"));
 		await inflight;
 
-		expect(mockedAxios.post).toHaveBeenCalledTimes(1);
+		expect(fetchMock).toHaveBeenCalledTimes(1);
 	});
 
 	it("returns 401 session_required on provider 401 (no WWW-Authenticate)", async () => {
-		mockedAxios.post.mockRejectedValueOnce(
-			Object.assign(new Error("Unauthorized"), {
-				isAxiosError: true,
-				response: {
-					status: 401,
-					data: { error: "invalid_grant" },
-					headers: {},
-					statusText: "Unauthorized",
-					config: { headers: {} },
-				},
-			}),
-		);
+		fetchMock.mockResolvedValueOnce(jsonResponse(401, { error: "invalid_grant" }));
 		const app = mountApp(makeConfig(upstream.baseURL));
 
 		const res = await request(app).get("/any").set("Cookie", "sid=s1");
@@ -188,17 +177,8 @@ describe("injection router", () => {
 	});
 
 	it("propagates Retry-After on provider 401", async () => {
-		mockedAxios.post.mockRejectedValueOnce(
-			Object.assign(new Error("Unauthorized"), {
-				isAxiosError: true,
-				response: {
-					status: 401,
-					data: { error: "invalid_grant" },
-					headers: { "retry-after": "30" },
-					statusText: "Unauthorized",
-					config: { headers: {} },
-				},
-			}),
+		fetchMock.mockResolvedValueOnce(
+			jsonResponse(401, { error: "invalid_grant" }, { "retry-after": "30" }),
 		);
 		const app = mountApp(makeConfig(upstream.baseURL));
 
@@ -209,18 +189,7 @@ describe("injection router", () => {
 	});
 
 	it("returns 502 provider_config_error on provider 400", async () => {
-		mockedAxios.post.mockRejectedValueOnce(
-			Object.assign(new Error("Bad Request"), {
-				isAxiosError: true,
-				response: {
-					status: 400,
-					data: { error: "invalid_scope" },
-					headers: {},
-					statusText: "Bad Request",
-					config: { headers: {} },
-				},
-			}),
-		);
+		fetchMock.mockResolvedValueOnce(jsonResponse(400, { error: "invalid_scope" }));
 		const app = mountApp(makeConfig(upstream.baseURL));
 
 		const res = await request(app).get("/any").set("Cookie", "sid=s1");
@@ -231,18 +200,7 @@ describe("injection router", () => {
 	});
 
 	it("returns 502 provider_unavailable with Retry-After passthrough on provider 503", async () => {
-		mockedAxios.post.mockRejectedValueOnce(
-			Object.assign(new Error("Unavailable"), {
-				isAxiosError: true,
-				response: {
-					status: 503,
-					data: {},
-					headers: { "retry-after": "30" },
-					statusText: "Unavailable",
-					config: { headers: {} },
-				},
-			}),
-		);
+		fetchMock.mockResolvedValueOnce(jsonResponse(503, {}, { "retry-after": "30" }));
 		const app = mountApp(makeConfig(upstream.baseURL));
 
 		const res = await request(app).get("/any").set("Cookie", "sid=s1");
@@ -253,7 +211,7 @@ describe("injection router", () => {
 	});
 
 	it("silently overrides an inbound Authorization header with the injected Bearer", async () => {
-		mockedAxios.post.mockResolvedValueOnce(okGrant("tok-injected"));
+		fetchMock.mockResolvedValueOnce(okGrantResponse("tok-injected"));
 		const app = mountApp(makeConfig(upstream.baseURL));
 
 		const res = await request(app)
@@ -266,13 +224,13 @@ describe("injection router", () => {
 	});
 
 	it("forwards only the configured cookie to the provider (cookie-name filtering)", async () => {
-		mockedAxios.post.mockResolvedValueOnce(okGrant("tok-ok"));
+		fetchMock.mockResolvedValueOnce(okGrantResponse("tok-ok"));
 		const app = mountApp(makeConfig(upstream.baseURL));
 
 		await request(app).get("/any").set("Cookie", "sid=s1; analytics=xyz; other=foo");
 
-		const opts = mockedAxios.post.mock.calls[0][2];
-		const headers = opts?.headers as Record<string, string>;
+		const init = fetchMock.mock.calls[0][1] as RequestInit;
+		const headers = init.headers as Record<string, string>;
 		expect(headers.Cookie).toBe("sid=s1");
 	});
 
@@ -283,11 +241,11 @@ describe("injection router", () => {
 
 		expect(res.status).toBe(204);
 		expect(upstream.received[0].headers.authorization).toBeUndefined();
-		expect(mockedAxios.post).not.toHaveBeenCalled();
+		expect(fetchMock).not.toHaveBeenCalled();
 	});
 
 	it("passes through upstream 5xx unchanged after Bearer injection", async () => {
-		mockedAxios.post.mockResolvedValueOnce(okGrant("tok-1"));
+		fetchMock.mockResolvedValueOnce(okGrantResponse("tok-1"));
 		upstream.respond(503, "upstream is sad");
 		const app = mountApp(makeConfig(upstream.baseURL));
 
@@ -299,13 +257,7 @@ describe("injection router", () => {
 	});
 
 	it("returns 502 provider_invalid_response when provider 200 has no access_token", async () => {
-		mockedAxios.post.mockResolvedValueOnce({
-			status: 200,
-			statusText: "OK",
-			headers: {},
-			data: { token_type: "Bearer" },
-			config: { headers: {} } as unknown,
-		});
+		fetchMock.mockResolvedValueOnce(jsonResponse(200, { token_type: "Bearer" }));
 		const app = mountApp(makeConfig(upstream.baseURL));
 
 		const res = await request(app).get("/any").set("Cookie", "sid=s1");
@@ -316,9 +268,9 @@ describe("injection router", () => {
 	});
 
 	it("re-fetches after cache expiry", async () => {
-		mockedAxios.post
-			.mockResolvedValueOnce(okGrant("tok-1", 1))
-			.mockResolvedValueOnce(okGrant("tok-2", 120));
+		fetchMock
+			.mockResolvedValueOnce(okGrantResponse("tok-1", 1))
+			.mockResolvedValueOnce(okGrantResponse("tok-2", 120));
 
 		const cfg = makeConfig(upstream.baseURL);
 		if (cfg.auth.mode !== "injection") throw new Error("narrow");
@@ -334,6 +286,6 @@ describe("injection router", () => {
 
 		await request(app).get("/any").set("Cookie", "sid=s1");
 		expect(upstream.received[1].headers.authorization).toBe("Bearer tok-2");
-		expect(mockedAxios.post).toHaveBeenCalledTimes(2);
+		expect(fetchMock).toHaveBeenCalledTimes(2);
 	});
 });

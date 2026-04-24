@@ -13,7 +13,6 @@
  * See the License for the specific language governing permissions and
  * limitations under the License.
  */
-import axios from "axios";
 
 export type SessionGrantErrorCode =
 	| "session_unauthorized"
@@ -58,11 +57,17 @@ const buildTokenUrl = (providerOrigin: string): string => {
 	return new URL("/oauth/token", providerOrigin).toString();
 };
 
-const extractRetryAfter = (headers: unknown): string | null => {
-	if (headers === null || typeof headers !== "object") return null;
-	const h = headers as Record<string, unknown>;
-	const v = h["retry-after"] ?? h["Retry-After"];
-	return typeof v === "string" ? v : null;
+const parseJsonBody = async (resp: Response): Promise<Record<string, unknown> | null> => {
+	try {
+		const text = await resp.text();
+		if (text.length === 0) return null;
+		const parsed = JSON.parse(text);
+		return typeof parsed === "object" && parsed !== null
+			? (parsed as Record<string, unknown>)
+			: null;
+	} catch {
+		return null;
+	}
 };
 
 export const createSessionGrantClient = (
@@ -78,19 +83,39 @@ export const createSessionGrantClient = (
 				scope: cfg.scope,
 			}).toString();
 
+			let resp: Response;
 			try {
-				const resp = await axios.post<Record<string, unknown>>(url, body, {
+				resp = await fetch(url, {
+					method: "POST",
 					headers: {
 						"Content-Type": "application/x-www-form-urlencoded",
 						Cookie: `${cfg.sessionCookieName}=${sessionCookieValue}`,
 						"X-Request-Id": requestId,
 						Accept: "application/json",
 					},
-					timeout: cfg.timeoutMs,
-					// Let axios throw on non-2xx so we can branch in catch.
+					body,
+					signal: AbortSignal.timeout(cfg.timeoutMs),
 				});
+			} catch (err) {
+				// Network error, timeout (AbortError), DNS failure, etc.
+				throw new SessionGrantError(
+					"provider_unavailable",
+					502,
+					`provider call failed: ${err instanceof Error ? err.message : String(err)}`,
+				);
+			}
 
-				const data = resp.data;
+			const retryAfter = resp.headers.get("retry-after");
+
+			if (resp.ok) {
+				const data = await parseJsonBody(resp);
+				if (data === null) {
+					throw new SessionGrantError(
+						"provider_invalid_response",
+						502,
+						"provider returned 200 with a non-JSON body",
+					);
+				}
 				const accessToken =
 					typeof data.access_token === "string" && data.access_token.length > 0
 						? data.access_token
@@ -105,57 +130,46 @@ export const createSessionGrantClient = (
 				const expiresIn =
 					typeof data.expires_in === "number" ? data.expires_in : null;
 				return { accessToken, expiresIn };
-			} catch (err) {
-				if (err instanceof SessionGrantError) throw err;
-				if (axios.isAxiosError(err)) {
-					const status = err.response?.status;
-					const retryAfter = extractRetryAfter(err.response?.headers);
-					if (status === 401) {
-						throw new SessionGrantError(
-							"session_unauthorized",
-							401,
-							"provider reported the session is invalid or expired",
-							retryAfter,
-						);
-					}
-					if (status === 400) {
-						const provided =
-							typeof (err.response?.data as Record<string, unknown> | undefined)?.error_description === "string"
-								? ((err.response?.data as Record<string, unknown>).error_description as string)
-								: null;
-						throw new SessionGrantError(
-							"provider_config_error",
-							502,
-							provided !== null
-								? provided
-								: "provider rejected proxy configuration (client_id or scope)",
-							retryAfter,
-						);
-					}
-					if (typeof status === "number" && status >= 500) {
-						throw new SessionGrantError(
-							"provider_unavailable",
-							502,
-							`provider call failed: returned ${status}`,
-							retryAfter,
-						);
-					}
-					// Network error / timeout / unexpected 4xx.
-					throw new SessionGrantError(
-						"provider_unavailable",
-						502,
-						typeof status === "number"
-							? `unexpected provider response: ${status}`
-							: `provider call failed: ${err.code ?? err.message}`,
-						retryAfter,
-					);
-				}
+			}
+
+			if (resp.status === 401) {
+				throw new SessionGrantError(
+					"session_unauthorized",
+					401,
+					"provider reported the session is invalid or expired",
+					retryAfter,
+				);
+			}
+			if (resp.status === 400) {
+				const data = await parseJsonBody(resp);
+				const provided =
+					data !== null && typeof data.error_description === "string"
+						? data.error_description
+						: null;
+				throw new SessionGrantError(
+					"provider_config_error",
+					502,
+					provided !== null
+						? provided
+						: "provider rejected proxy configuration (client_id or scope)",
+					retryAfter,
+				);
+			}
+			if (resp.status >= 500) {
 				throw new SessionGrantError(
 					"provider_unavailable",
 					502,
-					`provider call failed: ${String(err)}`,
+					`provider call failed: returned ${resp.status}`,
+					retryAfter,
 				);
 			}
+			// Unexpected 4xx.
+			throw new SessionGrantError(
+				"provider_unavailable",
+				502,
+				`unexpected provider response: ${resp.status}`,
+				retryAfter,
+			);
 		},
 	};
 };

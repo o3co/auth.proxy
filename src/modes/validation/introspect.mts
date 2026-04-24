@@ -14,11 +14,20 @@
  * limitations under the License.
  */
 import crypto from "node:crypto";
-import axios from "axios";
 
 export interface IntrospectionResult {
 	active: boolean;
 	[key: string]: unknown;
+}
+
+export class IntrospectHttpError extends Error {
+	constructor(
+		public readonly status: number,
+		message: string,
+	) {
+		super(message);
+		this.name = "IntrospectHttpError";
+	}
 }
 
 interface CacheEntry {
@@ -64,18 +73,22 @@ export const introspect = async (
 		return cached.result;
 	}
 
-	const { data } = await axios.post<IntrospectionResult>(
-		introspectUrl,
-		new URLSearchParams({ token }).toString(),
-		{
-			headers: {
-				"Content-Type": "application/x-www-form-urlencoded",
-				Authorization: authHeader,
-				"x-request-id": requestId,
-			},
-			timeout: timeoutMs,
+	const resp = await fetch(introspectUrl, {
+		method: "POST",
+		headers: {
+			"Content-Type": "application/x-www-form-urlencoded",
+			Authorization: authHeader,
+			"x-request-id": requestId,
 		},
-	);
+		body: new URLSearchParams({ token }).toString(),
+		signal: AbortSignal.timeout(timeoutMs),
+	});
+
+	if (!resp.ok) {
+		throw new IntrospectHttpError(resp.status, `introspect returned ${resp.status}`);
+	}
+
+	const data = (await resp.json()) as IntrospectionResult;
 
 	for (const [k, entry] of cache) {
 		if (entry.expiresAt <= now) {

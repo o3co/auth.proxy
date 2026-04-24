@@ -12,7 +12,6 @@
   "dependencies": {
     "@o3co/auth.utils": "^0.0.3",
     "@o3co/ts.hocon": "^0.1.2",
-    "axios": "1.8.x",
     "cors": "2.8.x",
     "cross-env": "7.0.x",
     "express": "^5.2.1",
