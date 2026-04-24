@@ -163,6 +163,30 @@ describe("proxy config — injection mode", () => {
 		if (config.auth.mode !== "injection") throw new Error("narrow");
 		expect(config.auth.injection.providerOrigin).toBe("https://provider.example");
 	});
+
+	it("rejects providerOrigin with non-HTTP scheme", () => {
+		const raw = parseFile(confPath, {
+			env: {
+				AUTH_MODE: "injection",
+				INJECTION_CLIENT_ID: "my-spa",
+				INJECTION_SCOPE: "api",
+				INJECTION_PROVIDER_ORIGIN: "ftp://provider.example",
+			},
+		});
+		expect(() => validate(raw, AppConfigSchema)).toThrow();
+	});
+
+	it("rejects providerOrigin with embedded userinfo", () => {
+		const raw = parseFile(confPath, {
+			env: {
+				AUTH_MODE: "injection",
+				INJECTION_CLIENT_ID: "my-spa",
+				INJECTION_SCOPE: "api",
+				INJECTION_PROVIDER_ORIGIN: "https://user:pass@provider.example",
+			},
+		});
+		expect(() => validate(raw, AppConfigSchema)).toThrow();
+	});
 });
 
 describe("proxy config — mode selection", () => {

@@ -69,6 +69,9 @@ export const AppConfigSchema = z.object({
 						(u) => {
 							const parsed = new URL(u);
 							return (
+								(parsed.protocol === "http:" || parsed.protocol === "https:") &&
+								parsed.username === "" &&
+								parsed.password === "" &&
 								(parsed.pathname === "" || parsed.pathname === "/") &&
 								!parsed.search &&
 								!parsed.hash
@@ -76,7 +79,7 @@ export const AppConfigSchema = z.object({
 						},
 						{
 							message:
-								"providerOrigin must be an origin only (scheme://host[:port]), no path/query/fragment",
+								"providerOrigin must be an http(s) origin only (scheme://host[:port]), no userinfo/path/query/fragment",
 						},
 					),
 				clientId: z.string().min(1),
