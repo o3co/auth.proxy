@@ -1,5 +1,5 @@
 /*
- * Copyright 2026 1o1 Inc.
+ * Copyright 2026 1o1 Co. Ltd.
  *
  * Licensed under the Apache License, Version 2.0 (the "License");
  * you may not use this file except in compliance with the License.
@@ -27,21 +27,81 @@ export const AppConfigSchema = z.object({
 			}),
 		}),
 	}),
-	auth: z.object({
-		client: z.object({
-			clientId: z.string().nullable().default(null).transform((v) => v === "" ? null : v),
-			clientSecret: z.string().nullable().default(null).transform((v) => v === "" ? null : v),
-		}).refine(
-			(c) => (c.clientId === null) === (c.clientSecret === null),
-			{ message: "auth.client.clientId and auth.client.clientSecret must both be set or both be unset" },
-		),
-		introspect: z.object({
-			url: z.string(),
-			cacheTtlSec: z.coerce.number().default(30),
-			cacheMaxEntries: z.coerce.number().int().positive().default(10000),
-			timeoutMs: z.coerce.number().int().positive().default(5000),
+	auth: z.discriminatedUnion("mode", [
+		z.object({
+			mode: z.literal("validation"),
+			validation: z.object({
+				client: z
+					.object({
+						clientId: z
+							.string()
+							.nullable()
+							.default(null)
+							.transform((v) => (v === "" ? null : v)),
+						clientSecret: z
+							.string()
+							.nullable()
+							.default(null)
+							.transform((v) => (v === "" ? null : v)),
+					})
+					.refine(
+						(c) => (c.clientId === null) === (c.clientSecret === null),
+						{
+							message:
+								"auth.validation.client.clientId and auth.validation.client.clientSecret must both be set or both be unset",
+						},
+					),
+				introspect: z.object({
+					url: z.string(),
+					cacheTtlSec: z.coerce.number().default(30),
+					cacheMaxEntries: z.coerce.number().int().positive().default(10000),
+					timeoutMs: z.coerce.number().int().positive().default(5000),
+				}),
+			}),
 		}),
-	}),
+		z.object({
+			mode: z.literal("injection"),
+			injection: z.object({
+				providerOrigin: z
+					.string()
+					.url()
+					.refine(
+						(u) => {
+							const parsed = new URL(u);
+							return (
+								(parsed.protocol === "http:" || parsed.protocol === "https:") &&
+								parsed.username === "" &&
+								parsed.password === "" &&
+								(parsed.pathname === "" || parsed.pathname === "/") &&
+								!parsed.search &&
+								!parsed.hash
+							);
+						},
+						{
+							message:
+								"providerOrigin must be an http(s) origin only (scheme://host[:port]), no userinfo/path/query/fragment",
+						},
+					),
+				clientId: z.string().min(1),
+				scope: z.string().min(1),
+				sessionCookieName: z.string().min(1),
+				tokenCache: z
+					.object({
+						ttlSeconds: z.coerce.number().int().positive().default(60),
+						maxEntries: z.coerce.number().int().positive().default(10000),
+						safetyMarginSeconds: z.coerce.number().int().nonnegative().default(5),
+					})
+					.refine(
+						(tc) => tc.safetyMarginSeconds < tc.ttlSeconds,
+						{
+							message:
+								"auth.injection.tokenCache.safetyMarginSeconds must be less than auth.injection.tokenCache.ttlSeconds",
+						},
+					),
+				timeoutMs: z.coerce.number().int().positive().default(5000),
+			}),
+		}),
+	]),
 	upstream: z.object({
 		baseURL: z.string(),
 	}),

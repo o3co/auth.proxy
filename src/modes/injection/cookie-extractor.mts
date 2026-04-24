@@ -13,4 +13,21 @@
  * See the License for the specific language governing permissions and
  * limitations under the License.
  */
-export * as Healthcheck from "./Healthcheck.mjs";
+
+export const extractCookie = (
+	cookieHeader: string | undefined,
+	name: string,
+): string | null => {
+	if (!cookieHeader) return null;
+	const parts = cookieHeader.split(";");
+	for (const raw of parts) {
+		const trimmed = raw.trim();
+		const eq = trimmed.indexOf("=");
+		if (eq === -1) continue;
+		const cookieName = trimmed.slice(0, eq).trim();
+		if (cookieName !== name) continue;
+		const value = trimmed.slice(eq + 1).trim();
+		return value === "" ? null : value;
+	}
+	return null;
+};
