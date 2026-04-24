@@ -216,7 +216,7 @@ describe("createSessionGrantClient.exchange", () => {
 			code: "provider_config_error",
 			status: 502,
 			retryAfter: null,
-			message: expect.stringContaining("unknown scope"),
+			message: "unknown scope",
 		});
 	});
 

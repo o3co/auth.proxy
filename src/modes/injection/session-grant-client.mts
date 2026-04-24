@@ -127,7 +127,7 @@ export const createSessionGrantClient = (
 							"provider_config_error",
 							502,
 							provided !== null
-								? `provider rejected proxy configuration: ${provided}`
+								? provided
 								: "provider rejected proxy configuration (client_id or scope)",
 							retryAfter,
 						);

@@ -187,6 +187,32 @@ describe("proxy config — injection mode", () => {
 		});
 		expect(() => validate(raw, AppConfigSchema)).toThrow();
 	});
+
+	it("rejects tokenCache where safetyMarginSeconds >= ttlSeconds (equal)", () => {
+		const raw = parseFile(confPath, {
+			env: {
+				AUTH_MODE: "injection",
+				INJECTION_CLIENT_ID: "my-spa",
+				INJECTION_SCOPE: "api",
+				INJECTION_TOKEN_CACHE_TTL_SEC: "5",
+				INJECTION_TOKEN_CACHE_SAFETY_MARGIN_SEC: "5",
+			},
+		});
+		expect(() => validate(raw, AppConfigSchema)).toThrow();
+	});
+
+	it("rejects tokenCache where safetyMarginSeconds > ttlSeconds", () => {
+		const raw = parseFile(confPath, {
+			env: {
+				AUTH_MODE: "injection",
+				INJECTION_CLIENT_ID: "my-spa",
+				INJECTION_SCOPE: "api",
+				INJECTION_TOKEN_CACHE_TTL_SEC: "5",
+				INJECTION_TOKEN_CACHE_SAFETY_MARGIN_SEC: "10",
+			},
+		});
+		expect(() => validate(raw, AppConfigSchema)).toThrow();
+	});
 });
 
 describe("proxy config — mode selection", () => {

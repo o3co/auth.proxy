@@ -85,11 +85,19 @@ export const AppConfigSchema = z.object({
 				clientId: z.string().min(1),
 				scope: z.string().min(1),
 				sessionCookieName: z.string().min(1),
-				tokenCache: z.object({
-					ttlSeconds: z.coerce.number().int().positive().default(60),
-					maxEntries: z.coerce.number().int().positive().default(10000),
-					safetyMarginSeconds: z.coerce.number().int().nonnegative().default(5),
-				}),
+				tokenCache: z
+					.object({
+						ttlSeconds: z.coerce.number().int().positive().default(60),
+						maxEntries: z.coerce.number().int().positive().default(10000),
+						safetyMarginSeconds: z.coerce.number().int().nonnegative().default(5),
+					})
+					.refine(
+						(tc) => tc.safetyMarginSeconds < tc.ttlSeconds,
+						{
+							message:
+								"auth.injection.tokenCache.safetyMarginSeconds must be less than auth.injection.tokenCache.ttlSeconds",
+						},
+					),
 				timeoutMs: z.coerce.number().int().positive().default(5000),
 			}),
 		}),

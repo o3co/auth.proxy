@@ -137,6 +137,11 @@ const injectionMiddleware =
 						{ requestId, event: "injection.provider_config_error", error: err.message },
 						"grant failed",
 					);
+				} else if (err.code === "provider_invalid_response") {
+					logger.error(
+						{ requestId, event: "injection.provider_invalid_response", error: err.message },
+						"grant failed",
+					);
 				} else {
 					logger.error(
 						{ requestId, event: "injection.provider_unavailable", error: err.message },
@@ -147,12 +152,12 @@ const injectionMiddleware =
 				return;
 			}
 			logger.error(
-				{ requestId, event: "injection.provider_unavailable", error: String(err) },
+				{ requestId, event: "injection.unexpected_error", error: String(err) },
 				"grant failed (unknown)",
 			);
 			res.status(502).json({
 				error: "provider_unavailable",
-				error_description: `provider call failed: ${String(err)}`,
+				error_description: "provider call failed",
 			});
 		}
 	};

@@ -18,11 +18,18 @@ import type { AppConfig } from "../config/application.schema.mjs";
 import { createRouter as createInjectionRouter } from "./modes/injection/router.mjs";
 import { createRouter as createValidationRouter } from "./modes/validation/router.mjs";
 
+const assertNever = (value: never): never => {
+	throw new Error(`Unsupported auth.mode: ${String(value)}`);
+};
+
 export const resolveRouter = (config: AppConfig): Router => {
-	switch (config.auth.mode) {
+	const { mode } = config.auth;
+	switch (mode) {
 		case "validation":
 			return createValidationRouter({ config });
 		case "injection":
 			return createInjectionRouter({ config });
+		default:
+			return assertNever(mode);
 	}
 };
