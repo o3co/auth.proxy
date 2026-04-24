@@ -19,7 +19,7 @@ export interface SingleFlight<T> {
 	_sizeForTesting(): number;
 }
 
-export const createSingleFlight = <T>(): SingleFlight<T> => {
+export const createSingleFlight = <T,>(): SingleFlight<T> => {
 	const pending = new Map<string, Promise<T>>();
 	return {
 		run(key, fetch) {
