@@ -1,5 +1,5 @@
 /*
- * Copyright 2026 1o1 Inc.
+ * Copyright 2026 1o1 Co. Ltd.
  *
  * Licensed under the Apache License, Version 2.0 (the "License");
  * you may not use this file except in compliance with the License.
@@ -21,29 +21,38 @@ import express from "express";
 
 import { type AppConfig, AppConfigSchema } from "../config/application.schema.mjs";
 import logger from "./logger.mjs";
+import { createRouter as createValidationRouter } from "./modes/validation/router.mjs";
 import * as routers from "./router/index.mjs";
 
 const config: AppConfig = validate(
-  parseFile(new URL("../config/application.conf", import.meta.url).pathname),
-  AppConfigSchema,
+	parseFile(new URL("../config/application.conf", import.meta.url).pathname),
+	AppConfigSchema,
 );
 
 const app = express();
 
-const corsOrigin = config.http.cors.origin.pattern ? new RegExp(config.http.cors.origin.pattern) : false;
+const corsOrigin = config.http.cors.origin.pattern
+	? new RegExp(config.http.cors.origin.pattern)
+	: false;
+
+const authRouter =
+	config.auth.mode === "validation"
+		? createValidationRouter({ config })
+		: (() => {
+				throw new Error(`auth.mode "${config.auth.mode}" not yet implemented`);
+			})();
 
 const server = app
-  .use(routers.Healthcheck.createRouter())
-  .use(
-    cors({
-      origin: corsOrigin,
-      credentials: true,
-    })
-  )
-  // Content Proxy
-  .use(config.http.pathPrefix, routers.Proxy.createRouter({ config }))
-  .listen(config.http.port, config.http.hostname, () => {
-    logger.info(`Server ready at http://${config.http.hostname}:${config.http.port}`);
-  });
+	.use(routers.Healthcheck.createRouter())
+	.use(
+		cors({
+			origin: corsOrigin,
+			credentials: true,
+		}),
+	)
+	.use(config.http.pathPrefix, authRouter)
+	.listen(config.http.port, config.http.hostname, () => {
+		logger.info(`Server ready at http://${config.http.hostname}:${config.http.port}`);
+	});
 
 gracefulShutdown(server);
