@@ -20,8 +20,8 @@ import cors from "cors";
 import express from "express";
 
 import { type AppConfig, AppConfigSchema } from "../config/application.schema.mjs";
+import { resolveRouter } from "./app-internal.mjs";
 import logger from "./logger.mjs";
-import { createRouter as createValidationRouter } from "./modes/validation/router.mjs";
 import * as routers from "./router/index.mjs";
 
 const config: AppConfig = validate(
@@ -35,13 +35,6 @@ const corsOrigin = config.http.cors.origin.pattern
 	? new RegExp(config.http.cors.origin.pattern)
 	: false;
 
-const authRouter =
-	config.auth.mode === "validation"
-		? createValidationRouter({ config })
-		: (() => {
-				throw new Error(`auth.mode "${config.auth.mode}" not yet implemented`);
-			})();
-
 const server = app
 	.use(routers.Healthcheck.createRouter())
 	.use(
@@ -50,7 +43,7 @@ const server = app
 			credentials: true,
 		}),
 	)
-	.use(config.http.pathPrefix, authRouter)
+	.use(config.http.pathPrefix, resolveRouter(config))
 	.listen(config.http.port, config.http.hostname, () => {
 		logger.info(`Server ready at http://${config.http.hostname}:${config.http.port}`);
 	});
