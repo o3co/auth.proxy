@@ -14,11 +14,20 @@
  * limitations under the License.
  */
 import crypto from "node:crypto";
-import axios from "axios";
 
 export interface IntrospectionResult {
 	active: boolean;
 	[key: string]: unknown;
+}
+
+export class IntrospectHttpError extends Error {
+	constructor(
+		public readonly status: number,
+		message: string,
+	) {
+		super(message);
+		this.name = "IntrospectHttpError";
+	}
 }
 
 interface CacheEntry {
@@ -64,18 +73,43 @@ export const introspect = async (
 		return cached.result;
 	}
 
-	const { data } = await axios.post<IntrospectionResult>(
-		introspectUrl,
-		new URLSearchParams({ token }).toString(),
-		{
-			headers: {
-				"Content-Type": "application/x-www-form-urlencoded",
-				Authorization: authHeader,
-				"x-request-id": requestId,
-			},
-			timeout: timeoutMs,
+	const resp = await fetch(introspectUrl, {
+		method: "POST",
+		headers: {
+			"Content-Type": "application/x-www-form-urlencoded",
+			Authorization: authHeader,
+			"x-request-id": requestId,
 		},
-	);
+		body: new URLSearchParams({ token }).toString(),
+		signal: AbortSignal.timeout(timeoutMs),
+	});
+
+	if (!resp.ok) {
+		throw new IntrospectHttpError(resp.status, `introspect returned ${resp.status}`);
+	}
+
+	let parsed: unknown;
+	try {
+		parsed = await resp.json();
+	} catch {
+		// Provider returned 200 with a non-JSON body — treat as provider bug, not auth decision.
+		throw new IntrospectHttpError(502, "introspect returned 200 with a non-JSON body");
+	}
+
+	// RFC 7662 §2.2: `active` MUST be a boolean. Reject anything else so a provider
+	// returning {"active":"false"} or a non-object cannot bypass auth via truthy coercion.
+	if (
+		parsed === null ||
+		typeof parsed !== "object" ||
+		Array.isArray(parsed) ||
+		typeof (parsed as { active?: unknown }).active !== "boolean"
+	) {
+		throw new IntrospectHttpError(
+			502,
+			"introspect returned 200 but the body is not a valid introspection response (RFC 7662)",
+		);
+	}
+	const data = parsed as IntrospectionResult;
 
 	for (const [k, entry] of cache) {
 		if (entry.expiresAt <= now) {

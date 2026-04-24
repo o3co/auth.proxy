@@ -1,10 +1,25 @@
-import axios from "axios";
-import { beforeEach, describe, expect, it, vi } from "vitest";
+import { afterEach, beforeEach, describe, expect, it, vi } from "vitest";
 
-import { buildAuthHeader, clearCache, introspect } from "../introspect.mjs";
+import {
+	buildAuthHeader,
+	clearCache,
+	IntrospectHttpError,
+	introspect,
+} from "../introspect.mjs";
 
-vi.mock("axios");
-const mockedAxios = vi.mocked(axios);
+const jsonResponse = (status: number, body: unknown): Response =>
+	new Response(JSON.stringify(body), {
+		status,
+		headers: { "Content-Type": "application/json" },
+	});
+
+const getFetchCall = (
+	fetchMock: ReturnType<typeof vi.fn>,
+	index = 0,
+): { url: string; init: RequestInit } => ({
+	url: fetchMock.mock.calls[index][0] as string,
+	init: fetchMock.mock.calls[index][1] as RequestInit,
+});
 
 describe("buildAuthHeader", () => {
 	it("returns Basic auth when client credentials are provided", () => {
@@ -22,32 +37,37 @@ describe("buildAuthHeader", () => {
 });
 
 describe("introspect", () => {
+	let fetchMock: ReturnType<typeof vi.fn>;
+
 	beforeEach(() => {
 		clearCache();
-		vi.clearAllMocks();
+		fetchMock = vi.fn();
+		vi.stubGlobal("fetch", fetchMock);
+	});
+
+	afterEach(() => {
+		vi.unstubAllGlobals();
+		vi.restoreAllMocks();
 	});
 
 	it("sends form-urlencoded body with correct Content-Type", async () => {
-		mockedAxios.post.mockResolvedValueOnce({ data: { active: true } });
+		fetchMock.mockResolvedValueOnce(jsonResponse(200, { active: true }));
 
 		await introspect("test-token", "http://auth/introspect", 30, "req-1", "Bearer test-token");
 
-		expect(mockedAxios.post).toHaveBeenCalledWith(
-			"http://auth/introspect",
-			"token=test-token",
-			{
-				headers: {
-					"Content-Type": "application/x-www-form-urlencoded",
-					Authorization: "Bearer test-token",
-					"x-request-id": "req-1",
-				},
-				timeout: 5000,
-			},
-		);
+		const { url, init } = getFetchCall(fetchMock);
+		expect(url).toBe("http://auth/introspect");
+		expect(init.method).toBe("POST");
+		expect(init.body).toBe("token=test-token");
+		const headers = init.headers as Record<string, string>;
+		expect(headers["Content-Type"]).toBe("application/x-www-form-urlencoded");
+		expect(headers.Authorization).toBe("Bearer test-token");
+		expect(headers["x-request-id"]).toBe("req-1");
 	});
 
-	it("passes custom timeoutMs to axios", async () => {
-		mockedAxios.post.mockResolvedValueOnce({ data: { active: true } });
+	it("passes custom timeoutMs as AbortSignal.timeout", async () => {
+		fetchMock.mockResolvedValueOnce(jsonResponse(200, { active: true }));
+		const timeoutSpy = vi.spyOn(AbortSignal, "timeout");
 
 		await introspect(
 			"test-token",
@@ -59,12 +79,13 @@ describe("introspect", () => {
 			1234,
 		);
 
-		const opts = mockedAxios.post.mock.calls[0][2];
-		expect(opts?.timeout).toBe(1234);
+		expect(timeoutSpy).toHaveBeenCalledWith(1234);
+		const { init } = getFetchCall(fetchMock);
+		expect(init.signal).toBeInstanceOf(AbortSignal);
 	});
 
 	it("encodes special characters in token using URLSearchParams", async () => {
-		mockedAxios.post.mockResolvedValueOnce({ data: { active: true } });
+		fetchMock.mockResolvedValueOnce(jsonResponse(200, { active: true }));
 
 		await introspect(
 			"token+with=special&chars",
@@ -74,12 +95,12 @@ describe("introspect", () => {
 			"Bearer x",
 		);
 
-		const body = mockedAxios.post.mock.calls[0][1] as string;
-		expect(body).toBe("token=token%2Bwith%3Dspecial%26chars");
+		const { init } = getFetchCall(fetchMock);
+		expect(init.body).toBe("token=token%2Bwith%3Dspecial%26chars");
 	});
 
 	it("uses Basic auth header when client credentials are configured", async () => {
-		mockedAxios.post.mockResolvedValueOnce({ data: { active: true } });
+		fetchMock.mockResolvedValueOnce(jsonResponse(200, { active: true }));
 
 		const authHeader = buildAuthHeader(
 			{ clientId: "client-id", clientSecret: "client-secret" },
@@ -87,14 +108,15 @@ describe("introspect", () => {
 		);
 		await introspect("some-token", "http://auth/introspect", 30, "req-3", authHeader);
 
-		const headers = mockedAxios.post.mock.calls[0][2]?.headers;
-		expect(headers?.Authorization).toBe(
+		const { init } = getFetchCall(fetchMock);
+		const headers = init.headers as Record<string, string>;
+		expect(headers.Authorization).toBe(
 			`Basic ${Buffer.from("client-id:client-secret").toString("base64")}`,
 		);
 	});
 
 	it("returns cached result on second call within TTL", async () => {
-		mockedAxios.post.mockResolvedValueOnce({ data: { active: true, sub: "user-1" } });
+		fetchMock.mockResolvedValueOnce(jsonResponse(200, { active: true, sub: "user-1" }));
 
 		const result1 = await introspect(
 			"cached-token",
@@ -111,22 +133,103 @@ describe("introspect", () => {
 			"Bearer cached-token",
 		);
 
-		expect(mockedAxios.post).toHaveBeenCalledTimes(1);
+		expect(fetchMock).toHaveBeenCalledTimes(1);
 		expect(result1).toEqual(result2);
 	});
 
+	it.each([
+		["string active value (truthy, would bypass)", { active: "false" }],
+		["numeric active value", { active: 1 }],
+		["null active value", { active: null }],
+		["missing active key", { token_type: "Bearer" }],
+	])(
+		"throws IntrospectHttpError(502) when active is not a boolean — %s",
+		async (_label, body) => {
+			fetchMock.mockResolvedValueOnce(
+				new Response(JSON.stringify(body), {
+					status: 200,
+					headers: { "Content-Type": "application/json" },
+				}),
+			);
+
+			await expect(
+				introspect("t", "http://auth/introspect", 30, "r", "Bearer t"),
+			).rejects.toMatchObject({
+				name: "IntrospectHttpError",
+				status: 502,
+			});
+		},
+	);
+
+	it.each([
+		["JSON string body", JSON.stringify("not-an-object")],
+		["JSON number body", "42"],
+		["JSON array body", "[1,2,3]"],
+		["JSON null body", "null"],
+	])(
+		"throws IntrospectHttpError(502) when 200 body is valid JSON but not a plain object — %s",
+		async (_label, rawBody) => {
+			fetchMock.mockResolvedValueOnce(
+				new Response(rawBody, {
+					status: 200,
+					headers: { "Content-Type": "application/json" },
+				}),
+			);
+
+			await expect(
+				introspect("t", "http://auth/introspect", 30, "r", "Bearer t"),
+			).rejects.toMatchObject({
+				name: "IntrospectHttpError",
+				status: 502,
+			});
+		},
+	);
+
+	it("throws IntrospectHttpError(502) on 200 with non-JSON body", async () => {
+		fetchMock.mockResolvedValueOnce(
+			new Response("not json at all", {
+				status: 200,
+				headers: { "Content-Type": "text/plain" },
+			}),
+		);
+
+		await expect(
+			introspect("t", "http://auth/introspect", 30, "r", "Bearer t"),
+		).rejects.toMatchObject({
+			name: "IntrospectHttpError",
+			status: 502,
+		});
+	});
+
+	it("throws IntrospectHttpError with matching status on non-2xx response", async () => {
+		fetchMock.mockResolvedValueOnce(new Response("", { status: 503 }));
+
+		const p = introspect("t", "http://auth/introspect", 30, "r", "Bearer t");
+		await expect(p).rejects.toBeInstanceOf(IntrospectHttpError);
+		await expect(p).rejects.toMatchObject({ status: 503 });
+	});
+
+	it("propagates fetch rejection (network error / AbortError)", async () => {
+		const abortErr = new DOMException("The operation was aborted", "AbortError");
+		fetchMock.mockRejectedValueOnce(abortErr);
+
+		await expect(
+			introspect("t", "http://auth/introspect", 30, "r", "Bearer t"),
+		).rejects.toBe(abortErr);
+	});
+
 	it("evicts oldest entry when cache exceeds maxCacheEntries", async () => {
-		mockedAxios.post
-			.mockResolvedValueOnce({ data: { active: true, sub: "user-a" } })
-			.mockResolvedValueOnce({ data: { active: true, sub: "user-b" } })
-			.mockResolvedValueOnce({ data: { active: true, sub: "user-c" } })
-			.mockResolvedValueOnce({ data: { active: true, sub: "user-a-re" } });
+		fetchMock
+			.mockResolvedValueOnce(jsonResponse(200, { active: true, sub: "user-a" }))
+			.mockResolvedValueOnce(jsonResponse(200, { active: true, sub: "user-b" }))
+			.mockResolvedValueOnce(jsonResponse(200, { active: true, sub: "user-c" }))
+			.mockResolvedValueOnce(jsonResponse(200, { active: true, sub: "user-a-re" }));
 
 		await introspect("token-a", "http://auth/introspect", 30, "r1", "Bearer x", 2);
 		await introspect("token-b", "http://auth/introspect", 30, "r2", "Bearer x", 2);
 		await introspect("token-c", "http://auth/introspect", 30, "r3", "Bearer x", 2);
 
 		await introspect("token-a", "http://auth/introspect", 30, "r4", "Bearer x", 2);
-		expect(mockedAxios.post).toHaveBeenCalledTimes(4);
+		expect(fetchMock).toHaveBeenCalledTimes(4);
 	});
 });

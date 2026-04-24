@@ -14,13 +14,17 @@
  * limitations under the License.
  */
 import { createRequestIdMiddleware, extractBearerToken } from "@o3co/auth.utils/express";
-import axios from "axios";
 import type { Request, Response } from "express";
 import express from "express";
 import proxy from "express-http-proxy";
 import type { AppConfig } from "../../../config/application.schema.mjs";
 import logger from "../../logger.mjs";
-import { buildAuthHeader, type ClientCredentials, introspect } from "./introspect.mjs";
+import {
+	buildAuthHeader,
+	type ClientCredentials,
+	IntrospectHttpError,
+	introspect,
+} from "./introspect.mjs";
 
 type ValidationConfig = Extract<AppConfig["auth"], { mode: "validation" }>;
 
@@ -84,7 +88,7 @@ export const createRouter = ({ config }: { config: AppConfig }): express.Router 
 				}
 			} catch (e) {
 				logger.error({ "x-request-id": requestId, error: e }, "introspect failed");
-				if (axios.isAxiosError(e) && e.response?.status === 401) {
+				if (e instanceof IntrospectHttpError && e.status === 401) {
 					return res.status(401).json({ code: 401, message: "Invalid Token" });
 				}
 				return res.status(500).json({ code: 500, message: "Internal Server Error" });
