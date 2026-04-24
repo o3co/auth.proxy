@@ -88,13 +88,28 @@ export const introspect = async (
 		throw new IntrospectHttpError(resp.status, `introspect returned ${resp.status}`);
 	}
 
-	let data: IntrospectionResult;
+	let parsed: unknown;
 	try {
-		data = (await resp.json()) as IntrospectionResult;
+		parsed = await resp.json();
 	} catch {
 		// Provider returned 200 with a non-JSON body — treat as provider bug, not auth decision.
 		throw new IntrospectHttpError(502, "introspect returned 200 with a non-JSON body");
 	}
+
+	// RFC 7662 §2.2: `active` MUST be a boolean. Reject anything else so a provider
+	// returning {"active":"false"} or a non-object cannot bypass auth via truthy coercion.
+	if (
+		parsed === null ||
+		typeof parsed !== "object" ||
+		Array.isArray(parsed) ||
+		typeof (parsed as { active?: unknown }).active !== "boolean"
+	) {
+		throw new IntrospectHttpError(
+			502,
+			"introspect returned 200 but the body is not a valid introspection response (RFC 7662)",
+		);
+	}
+	const data = parsed as IntrospectionResult;
 
 	for (const [k, entry] of cache) {
 		if (entry.expiresAt <= now) {

@@ -134,6 +134,54 @@ describe("introspect", () => {
 		expect(result1).toEqual(result2);
 	});
 
+	it.each([
+		["string active value (truthy, would bypass)", { active: "false" }],
+		["numeric active value", { active: 1 }],
+		["null active value", { active: null }],
+		["missing active key", { token_type: "Bearer" }],
+	])(
+		"throws IntrospectHttpError(502) when active is not a boolean — %s",
+		async (_label, body) => {
+			fetchMock.mockResolvedValueOnce(
+				new Response(JSON.stringify(body), {
+					status: 200,
+					headers: { "Content-Type": "application/json" },
+				}),
+			);
+
+			await expect(
+				introspect("t", "http://auth/introspect", 30, "r", "Bearer t"),
+			).rejects.toMatchObject({
+				name: "IntrospectHttpError",
+				status: 502,
+			});
+		},
+	);
+
+	it.each([
+		["JSON string body", JSON.stringify("not-an-object")],
+		["JSON number body", "42"],
+		["JSON array body", "[1,2,3]"],
+		["JSON null body", "null"],
+	])(
+		"throws IntrospectHttpError(502) when 200 body is valid JSON but not a plain object — %s",
+		async (_label, rawBody) => {
+			fetchMock.mockResolvedValueOnce(
+				new Response(rawBody, {
+					status: 200,
+					headers: { "Content-Type": "application/json" },
+				}),
+			);
+
+			await expect(
+				introspect("t", "http://auth/introspect", 30, "r", "Bearer t"),
+			).rejects.toMatchObject({
+				name: "IntrospectHttpError",
+				status: 502,
+			});
+		},
+	);
+
 	it("throws IntrospectHttpError(502) on 200 with non-JSON body", async () => {
 		fetchMock.mockResolvedValueOnce(
 			new Response("not json at all", {
