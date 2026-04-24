@@ -48,6 +48,7 @@ describe("createSessionGrantClient.exchange", () => {
 
 	afterEach(() => {
 		vi.unstubAllGlobals();
+		vi.restoreAllMocks();
 	});
 
 	it("returns access token and expires_in on provider 200", async () => {
@@ -132,9 +133,11 @@ describe("createSessionGrantClient.exchange", () => {
 		fetchMock.mockResolvedValueOnce(
 			jsonResponse(200, { access_token: "tok", token_type: "Bearer" }),
 		);
+		const timeoutSpy = vi.spyOn(AbortSignal, "timeout");
 		const client = createSessionGrantClient({ ...baseCfg, timeoutMs: 1234 });
 		await client.exchange({ sessionCookieValue: "cookie-abc", requestId: "req-1" });
 
+		expect(timeoutSpy).toHaveBeenCalledWith(1234);
 		const init = getFetchCallInit(fetchMock);
 		expect(init.signal).toBeInstanceOf(AbortSignal);
 	});

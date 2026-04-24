@@ -47,6 +47,7 @@ describe("introspect", () => {
 
 	afterEach(() => {
 		vi.unstubAllGlobals();
+		vi.restoreAllMocks();
 	});
 
 	it("sends form-urlencoded body with correct Content-Type", async () => {
@@ -66,6 +67,7 @@ describe("introspect", () => {
 
 	it("passes custom timeoutMs as AbortSignal.timeout", async () => {
 		fetchMock.mockResolvedValueOnce(jsonResponse(200, { active: true }));
+		const timeoutSpy = vi.spyOn(AbortSignal, "timeout");
 
 		await introspect(
 			"test-token",
@@ -77,6 +79,7 @@ describe("introspect", () => {
 			1234,
 		);
 
+		expect(timeoutSpy).toHaveBeenCalledWith(1234);
 		const { init } = getFetchCall(fetchMock);
 		expect(init.signal).toBeInstanceOf(AbortSignal);
 	});

@@ -113,7 +113,7 @@ export const createSessionGrantClient = (
 					throw new SessionGrantError(
 						"provider_invalid_response",
 						502,
-						"provider returned 200 with a non-JSON body",
+						"provider returned 200 with a non-JSON or non-object JSON body",
 					);
 				}
 				const accessToken =
