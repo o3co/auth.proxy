@@ -8,9 +8,9 @@ ENV NODE_ENV=production
 
 WORKDIR ${HOME}
 
-ADD package.json pnpm-lock.yaml .npmrc* ./
+COPY package.json pnpm-lock.yaml .npmrc* ./
 
-RUN corepack enable
+RUN corepack enable && corepack prepare --activate
 
 ##############################################
 FROM base AS builder
