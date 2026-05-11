@@ -25,10 +25,10 @@ jobs:
         uses: actions/cache@v4
         with:
           path: ${{ steps.pnpm-store.outputs.path }}
-          key: pnpm-store-${{ hashFiles('**/package.json') }}
+          key: pnpm-store-${{ hashFiles('pnpm-lock.yaml') }}
           restore-keys: pnpm-store-
 
-      - run: pnpm install
+      - run: pnpm install --frozen-lockfile
       - run: pnpm run typecheck
       - run: pnpm run lint
       - run: pnpm run build

@@ -6,4 +6,3 @@ dist/
 .env.*
 .worktrees/
 docs/superpowers/
-pnpm-lock.yaml
