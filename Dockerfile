@@ -8,14 +8,14 @@ ENV NODE_ENV=production
 
 WORKDIR ${HOME}
 
-ADD package.json .npmrc* ./
+ADD package.json pnpm-lock.yaml .npmrc* ./
 
 RUN corepack enable
 
 ##############################################
 FROM base AS builder
 
-RUN pnpm install
+RUN pnpm install --frozen-lockfile
 
 ADD config ./config
 ADD src ./src
