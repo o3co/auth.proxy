@@ -10,7 +10,7 @@
     "#/*": "./src/*"
   },
   "dependencies": {
-    "@o3co/auth.utils": "^0.0.3",
+    "@o3co/auth.utils": "^0.0.4",
     "@o3co/ts.hocon": "^1.1.0",
     "cors": "2.8.x",
     "cross-env": "7.0.x",
