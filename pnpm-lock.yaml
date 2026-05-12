@@ -12,8 +12,8 @@ importers:
         specifier: ^0.0.3
         version: 0.0.3(express@5.2.1)(pino@10.3.1)
       '@o3co/ts.hocon':
-        specifier: ^0.1.2
-        version: 0.1.5(zod@4.3.6)
+        specifier: ^1.1.0
+        version: 1.1.0(zod@4.3.6)
       cors:
         specifier: 2.8.x
         version: 2.8.6
@@ -319,8 +319,9 @@ packages:
       pino:
         optional: true
 
-  '@o3co/ts.hocon@0.1.5':
-    resolution: {integrity: sha512-gn9e9AEv2UnkzyeHYt2A3T6/u09ttD38lSG9XYBn37Pzv0N7J1LCe90IqE93D0KUT+zKAHekW9vJ/H5yOUNG1w==}
+  '@o3co/ts.hocon@1.1.0':
+    resolution: {integrity: sha512-lN3h9DL9h2Wz6Dh7Td+vlhugAcK8HK/Mb1HEWoYAsjE6C5Skt+f36ebfdSLaWBFIkZEAUkabkRNvATwdCTX9Tg==}
+    engines: {node: '>=18'}
     peerDependencies:
       zod: '>=4.0.0'
     peerDependenciesMeta:
@@ -1439,7 +1440,7 @@ snapshots:
     optionalDependencies:
       pino: 10.3.1
 
-  '@o3co/ts.hocon@0.1.5(zod@4.3.6)':
+  '@o3co/ts.hocon@1.1.0(zod@4.3.6)':
     optionalDependencies:
       zod: 4.3.6
 
