@@ -13,7 +13,7 @@ importers:
         version: 0.0.4(express@5.2.1)(pino@10.3.1)
       '@o3co/ts.hocon':
         specifier: ^1.1.0
-        version: 1.1.0(zod@4.3.6)
+        version: 1.1.0(zod@4.4.3)
       cors:
         specifier: 2.8.x
         version: 2.8.6
@@ -30,8 +30,8 @@ importers:
         specifier: 9.0.x
         version: 9.0.3
       zod:
-        specifier: ^4.3.6
-        version: 4.3.6
+        specifier: ^4.4.3
+        version: 4.4.3
     devDependencies:
       '@biomejs/biome':
         specifier: ^2.3.14
@@ -1290,8 +1290,8 @@ packages:
   wrappy@1.0.2:
     resolution: {integrity: sha512-l4Sp/DRseor9wL6EvV2+TuQn63dMkPjZ/sp9XkghTEbV9KlPS1xUsZ3u7/IQO4wxtcFB4bgpQPRcR3QCvezPcQ==}
 
-  zod@4.3.6:
-    resolution: {integrity: sha512-rftlrkhHZOcjDwkGlnUtZZkvaPHCsDATp4pGpuOOMDaTdDDXF91wuVDJoWoPsKX/3YPQ5fHuF3STjcYyKr+Qhg==}
+  zod@4.4.3:
+    resolution: {integrity: sha512-ytENFjIJFl2UwYglde2jchW2Hwm4GJFLDiSXWdTrJQBIN9Fcyp7n4DhxJEiWNAJMV1/BqWfW/kkg71UDcHJyTQ==}
 
 snapshots:
 
@@ -1441,9 +1441,9 @@ snapshots:
     optionalDependencies:
       pino: 10.3.1
 
-  '@o3co/ts.hocon@1.1.0(zod@4.3.6)':
+  '@o3co/ts.hocon@1.1.0(zod@4.4.3)':
     optionalDependencies:
-      zod: 4.3.6
+      zod: 4.4.3
 
   '@oxc-project/types@0.124.0': {}
 
@@ -2375,4 +2375,4 @@ snapshots:
 
   wrappy@1.0.2: {}
 
-  zod@4.3.6: {}
+  zod@4.4.3: {}
