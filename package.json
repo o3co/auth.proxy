@@ -13,7 +13,7 @@
     "@o3co/auth.utils": "^0.0.4",
     "@o3co/ts.hocon": "^1.1.0",
     "cors": "2.8.x",
-    "cross-env": "7.0.x",
+    "cross-env": "10.1.x",
     "express": "^5.2.1",
     "express-http-proxy": "^2.1.2",
     "jsonwebtoken": "9.0.x",
