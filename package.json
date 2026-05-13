@@ -20,7 +20,7 @@
     "zod": "^4.3.6"
   },
   "devDependencies": {
-    "@biomejs/biome": "^2.3.14",
+    "@biomejs/biome": "^2.4.15",
     "@types/cors": "^2.8.19",
     "@types/express": "^5.0.6",
     "@types/express-http-proxy": "^1.6.7",
