@@ -31,7 +31,7 @@
     "pino": "^10.3.1",
     "supertest": "^7.2.2",
     "tsx": "^4.22.3",
-    "typescript": "5.9.x",
+    "typescript": "6.0.x",
     "vitest": "^4.1.6"
   },
   "scripts": {
