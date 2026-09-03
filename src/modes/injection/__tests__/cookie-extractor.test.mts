@@ -66,6 +66,20 @@ describe("extractCookie", () => {
 				expect(extractCookie("sid=abc\tdef", "sid")).toBeNull();
 			});
 
+			it("rejects whitespace immediately after '=' instead of normalising it away", () => {
+				expect(extractCookie("sid= abc", "sid")).toBeNull();
+				expect(extractCookie("sid=\tabc", "sid")).toBeNull();
+				expect(extractCookie("sid= abc; other=foo", "sid")).toBeNull();
+			});
+
+			it("treats only SP / HTAB next to the ';' separator or the header ends as slack", () => {
+				expect(extractCookie("sid=abc ; other=foo", "sid")).toBe("abc");
+				expect(extractCookie("sid=abc\t", "sid")).toBe("abc");
+				expect(extractCookie("other=foo;\tsid=abc", "sid")).toBe("abc");
+				// A latin-1 NBSP is not OWS: it stays in the value and is refused.
+				expect(extractCookie("sid=abc\u00a0; other=foo", "sid")).toBeNull();
+			});
+
 			it("rejects a DQUOTE inside the value or an unbalanced DQUOTE", () => {
 				expect(extractCookie('sid=ab"c', "sid")).toBeNull();
 				expect(extractCookie('sid="abc', "sid")).toBeNull();

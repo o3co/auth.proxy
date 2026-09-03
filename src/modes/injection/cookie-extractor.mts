@@ -43,9 +43,26 @@
  * outside the grammar and rejected. An empty quoted value (`""`) is treated as
  * missing just like an empty bare value: there is no session identifier to
  * exchange.
+ *
+ * Whitespace decision (#23 review): RFC 6265 section 4.2.1 is
+ *
+ *   cookie-string = cookie-pair *( ";" SP cookie-pair )
+ *
+ * so the only whitespace the grammar allows is the SP after ";" (plus OWS at the
+ * ends of the header). Whitespace touching the ";" separator or the header ends
+ * is therefore separator slack: the cookie-pair token is trimmed of OWS so that
+ * `a=1;  sid=abc ; b=2` still yields `abc`, and the name is trimmed as well
+ * because it is only compared, never forwarded. The value is taken verbatim
+ * after "=": whitespace there touches no separator, so it is part of the value,
+ * fails COOKIE_VALUE_RE, and `sid= abc` is treated as missing instead of being
+ * normalised into a valid outbound value. Only SP / HTAB count as slack (RFC 7230
+ * OWS); String.prototype.trim would also strip a latin-1 NBSP and other Unicode
+ * whitespace, which must stay in the value and be rejected as non-ASCII.
  */
 const COOKIE_VALUE_RE =
 	/^(?:[\x21\x23-\x2B\x2D-\x3A\x3C-\x5B\x5D-\x7E]*|"[\x21\x23-\x2B\x2D-\x3A\x3C-\x5B\x5D-\x7E]*")$/;
+
+const trimOws = (s: string): string => s.replace(/^[ \t]+|[ \t]+$/g, "");
 
 export const extractCookie = (
 	cookieHeader: string | undefined,
@@ -54,12 +71,12 @@ export const extractCookie = (
 	if (!cookieHeader) return null;
 	const parts = cookieHeader.split(";");
 	for (const raw of parts) {
-		const trimmed = raw.trim();
-		const eq = trimmed.indexOf("=");
+		const pair = trimOws(raw);
+		const eq = pair.indexOf("=");
 		if (eq === -1) continue;
-		const cookieName = trimmed.slice(0, eq).trim();
+		const cookieName = trimOws(pair.slice(0, eq));
 		if (cookieName !== name) continue;
-		const value = trimmed.slice(eq + 1).trim();
+		const value = pair.slice(eq + 1);
 		if (!COOKIE_VALUE_RE.test(value)) return null;
 		return value === "" || value === '""' ? null : value;
 	}
