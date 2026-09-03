@@ -244,6 +244,16 @@ describe("injection router", () => {
 		expect(fetchMock).not.toHaveBeenCalled();
 	});
 
+	it("treats a session cookie value outside the RFC 6265 cookie-octet grammar as absent (#23)", async () => {
+		const app = mountApp(makeConfig(upstream.baseURL));
+
+		const res = await request(app).get("/any").set("Cookie", "sid=abc,def");
+
+		expect(res.status).toBe(204);
+		expect(upstream.received[0].headers.authorization).toBeUndefined();
+		expect(fetchMock).not.toHaveBeenCalled();
+	});
+
 	it("passes through upstream 5xx unchanged after Bearer injection", async () => {
 		fetchMock.mockResolvedValueOnce(okGrantResponse("tok-1"));
 		upstream.respond(503, "upstream is sad");

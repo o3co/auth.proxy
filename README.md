@@ -62,6 +62,8 @@ The proxy is a transparent augmentation layer. It injects the Bearer but does NO
 
 Only the cookie named in `auth.injection.sessionCookieName` is forwarded to the provider on the session grant call. Other cookies (analytics, CSRF tokens, third-party) do not reach the provider.
 
+The forwarded value must conform to the RFC 6265 section 4.1.1 `cookie-value` grammar: `cookie-octet`s (printable US-ASCII excluding whitespace, DQUOTE, comma, semicolon, and backslash), optionally wrapped in a single DQUOTE pair. A value outside the grammar — one containing `,`, whitespace, `"`, `\`, a control character, or a non-ASCII byte — is treated as if the cookie were absent: the request is forwarded without `Authorization` and the provider is not called. `;` is the cookie-pair delimiter and never becomes part of a value. A DQUOTE-wrapped value is forwarded verbatim (quotes preserved) so the provider's own cookie parser decides how to read it. Default session stores (express-session `connect.sid`, hex / base64url / JWT session ids) always conform.
+
 #### Threat model — process memory
 
 Active access tokens reside in process memory. An attacker with read access to proxy process memory can extract all cached tokens. Standard host-security practices apply (container isolation, minimal image, no unnecessary `ptrace` capabilities).
