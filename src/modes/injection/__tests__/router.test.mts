@@ -103,6 +103,7 @@ describe("injection router", () => {
 	});
 
 	afterEach(async () => {
+		vi.useRealTimers();
 		vi.unstubAllGlobals();
 		await upstream.close();
 	});
@@ -268,24 +269,29 @@ describe("injection router", () => {
 	});
 
 	it("re-fetches after cache expiry", async () => {
+		// Fake only Date: cache expiry is decided from Date.now() (token-cache.mts,
+		// router.mts computeExpiresAt), while supertest and the upstream recorder
+		// need real timers and real IO for their HTTP round trips. Faking
+		// setTimeout & co. would stall those, and a real 1.1 s sleep was slow and
+		// CI-flaky (#24). With the default ttlSeconds=60 / safetyMarginSeconds=5
+		// and expires_in=120 the effective TTL is 55 s.
+		vi.useFakeTimers({ toFake: ["Date"] });
 		fetchMock
-			.mockResolvedValueOnce(okGrantResponse("tok-1", 1))
+			.mockResolvedValueOnce(okGrantResponse("tok-1", 120))
 			.mockResolvedValueOnce(okGrantResponse("tok-2", 120));
-
-		const cfg = makeConfig(upstream.baseURL);
-		if (cfg.auth.mode !== "injection") throw new Error("narrow");
-		cfg.auth.injection.tokenCache.ttlSeconds = 1;
-		cfg.auth.injection.tokenCache.safetyMarginSeconds = 0;
-
-		const app = mountApp(cfg);
+		const app = mountApp(makeConfig(upstream.baseURL));
 
 		await request(app).get("/any").set("Cookie", "sid=s1");
 		expect(upstream.received[0].headers.authorization).toBe("Bearer tok-1");
 
-		await new Promise((r) => setTimeout(r, 1100));
-
+		vi.setSystemTime(Date.now() + 30_000);
 		await request(app).get("/any").set("Cookie", "sid=s1");
-		expect(upstream.received[1].headers.authorization).toBe("Bearer tok-2");
+		expect(upstream.received[1].headers.authorization).toBe("Bearer tok-1");
+		expect(fetchMock).toHaveBeenCalledTimes(1);
+
+		vi.setSystemTime(Date.now() + 30_000);
+		await request(app).get("/any").set("Cookie", "sid=s1");
+		expect(upstream.received[2].headers.authorization).toBe("Bearer tok-2");
 		expect(fetchMock).toHaveBeenCalledTimes(2);
 	});
 });
