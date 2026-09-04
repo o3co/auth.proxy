@@ -15,6 +15,20 @@
  */
 import { z } from "zod";
 
+/**
+ * RFC 6265 section 4.1.1 `cookie-name = token`, with RFC 9110 section 5.6.2
+ *
+ *   token = 1*tchar
+ *   tchar = "!" / "#" / "$" / "%" / "&" / "'" / "*" / "+" / "-" / "." /
+ *           "^" / "_" / "`" / "|" / "~" / DIGIT / ALPHA
+ *
+ * The configured name is interpolated verbatim into the outbound `Cookie` header
+ * of the session grant call (session-grant-client.mts). A separator or
+ * whitespace in it (`"sid "`, `"a=b"`) would malform that header, or smuggle a
+ * second cookie-pair, on every request, so it is refused at boot (#75).
+ */
+const COOKIE_NAME_RE = /^[!#$%&'*+.^_`|~0-9A-Za-z-]+$/;
+
 export const AppConfigSchema = z.object({
 	http: z.object({
 		hostname: z.string().default("0.0.0.0"),
@@ -84,7 +98,10 @@ export const AppConfigSchema = z.object({
 					),
 				clientId: z.string().min(1),
 				scope: z.string().min(1),
-				sessionCookieName: z.string().min(1),
+				sessionCookieName: z.string().regex(COOKIE_NAME_RE, {
+					message:
+						"auth.injection.sessionCookieName must be an RFC 6265 cookie-name (RFC 9110 token: one or more of !#$%&'*+-.^_`|~ DIGIT ALPHA; no whitespace, '=' or other separators)",
+				}),
 				tokenCache: z
 					.object({
 						ttlSeconds: z.coerce.number().int().positive().default(60),

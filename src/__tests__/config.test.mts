@@ -188,6 +188,66 @@ describe("proxy config — injection mode", () => {
 		expect(() => validate(raw, AppConfigSchema)).toThrow();
 	});
 
+	// RFC 6265 section 4.1.1 `cookie-name = token` (RFC 9110 token: 1*tchar). The
+	// configured name is interpolated verbatim into the outbound `Cookie` header
+	// of the session grant call, so a separator or whitespace in it would malform
+	// that header at every request; it must fail at boot instead (#75).
+	describe("sessionCookieName must be an RFC 6265 cookie-name (#75)", () => {
+		const injectionEnv = (sessionCookieName: string) => ({
+			AUTH_MODE: "injection",
+			INJECTION_CLIENT_ID: "my-spa",
+			INJECTION_SCOPE: "api",
+			INJECTION_SESSION_COOKIE_NAME: sessionCookieName,
+		});
+
+		it("accepts the default connect.sid and common prefixed names", () => {
+			for (const name of ["connect.sid", "__Host-sid", "__Secure-session_id", "SID"]) {
+				const raw = parseFile(confPath, { env: injectionEnv(name) });
+				const config = validate(raw, AppConfigSchema);
+				if (config.auth.mode !== "injection") throw new Error("narrow");
+				expect(config.auth.injection.sessionCookieName, name).toBe(name);
+			}
+		});
+
+		it("accepts every tchar (!#$%&'*+-.^_`|~ DIGIT ALPHA)", () => {
+			const tchars =
+				"!#$%&'*+-.^_`|~0123456789ABCDEFGHIJKLMNOPQRSTUVWXYZabcdefghijklmnopqrstuvwxyz";
+			const raw = parseFile(confPath, { env: injectionEnv(tchars) });
+			const config = validate(raw, AppConfigSchema);
+			if (config.auth.mode !== "injection") throw new Error("narrow");
+			expect(config.auth.injection.sessionCookieName).toBe(tchars);
+		});
+
+		it("rejects a name with whitespace, naming the key in the error", () => {
+			const raw = parseFile(confPath, { env: injectionEnv("sid ") });
+			expect(() => validate(raw, AppConfigSchema)).toThrow(
+				/auth\.injection\.sessionCookieName/,
+			);
+		});
+
+		it("rejects a name containing '=' — it would smuggle a value into the outbound Cookie header", () => {
+			const raw = parseFile(confPath, { env: injectionEnv("a=b") });
+			expect(() => validate(raw, AppConfigSchema)).toThrow(
+				/auth\.injection\.sessionCookieName/,
+			);
+		});
+
+		it("rejects every RFC 9110 separator and non-ASCII", () => {
+			const separators = ['"', "(", ")", ",", "/", ":", ";", "<", ">", "?", "@", "[", "\\", "]", "{", "}"];
+			for (const sep of [...separators, "\t", "\u00a0", "é"]) {
+				const raw = parseFile(confPath, { env: injectionEnv(`sid${sep}x`) });
+				expect(() => validate(raw, AppConfigSchema), JSON.stringify(sep)).toThrow(
+					/auth\.injection\.sessionCookieName/,
+				);
+			}
+		});
+
+		it("still rejects an empty name", () => {
+			const raw = parseFile(confPath, { env: injectionEnv("") });
+			expect(() => validate(raw, AppConfigSchema)).toThrow();
+		});
+	});
+
 	it("rejects tokenCache where safetyMarginSeconds >= ttlSeconds (equal)", () => {
 		const raw = parseFile(confPath, {
 			env: {
