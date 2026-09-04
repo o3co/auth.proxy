@@ -53,6 +53,7 @@ const injectionConfig: AppConfig = {
 			clientId: "my-spa",
 			scope: "api",
 			sessionCookieName: "sid",
+			stripInboundAuthorization: false,
 			tokenCache: { ttlSeconds: 60, maxEntries: 100, safetyMarginSeconds: 5 },
 			timeoutMs: 5000,
 		},

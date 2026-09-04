@@ -49,7 +49,10 @@ const startUpstream = async (): Promise<UpstreamRecorder> => {
 	};
 };
 
-const makeConfig = (upstreamBaseURL: string): AppConfig => ({
+const makeConfig = (
+	upstreamBaseURL: string,
+	injectionOverrides: Partial<Extract<AppConfig["auth"], { mode: "injection" }>["injection"]> = {},
+): AppConfig => ({
 	http: {
 		hostname: "127.0.0.1",
 		port: 0,
@@ -64,8 +67,10 @@ const makeConfig = (upstreamBaseURL: string): AppConfig => ({
 			clientId: "my-spa",
 			scope: "api",
 			sessionCookieName: "sid",
+			stripInboundAuthorization: false,
 			tokenCache: { ttlSeconds: 60, maxEntries: 100, safetyMarginSeconds: 5 },
 			timeoutMs: 5000,
+			...injectionOverrides,
 		},
 	},
 	upstream: { baseURL: upstreamBaseURL },
@@ -381,5 +386,118 @@ describe("injection router", () => {
 		await request(app).get("/any").set("Cookie", "sid=s1");
 		expect(upstream.received[2].headers.authorization).toBe("Bearer tok-2");
 		expect(fetchMock).toHaveBeenCalledTimes(2);
+	});
+	// The proxy overrides an inbound Authorization only on the paths where a
+	// session cookie actually produced a token. On the two paths where it did
+	// not mint one — no cookie, or a cookie refused by the grammar check — the
+	// header is forwarded untouched, so an upstream service cannot read "a
+	// Bearer header arrived from the proxy" as "the proxy minted this".
+	// `stripInboundAuthorization` lets a deployment close that gap; it defaults
+	// to the pass-through behaviour so no existing deployment changes silently.
+	describe("inbound Authorization on a request the proxy did not mint for", () => {
+		it("forwards an inbound Authorization untouched when the cookie is absent (default)", async () => {
+			const app = mountApp(makeConfig(upstream.baseURL));
+
+			const res = await request(app)
+				.get("/any")
+				.set("Authorization", "Bearer client-supplied");
+
+			expect(res.status).toBe(204);
+			expect(upstream.received[0].headers.authorization).toBe("Bearer client-supplied");
+			expect(fetchMock).not.toHaveBeenCalled();
+		});
+
+		it("forwards an inbound Authorization untouched when the cookie is refused (default)", async () => {
+			const app = mountApp(makeConfig(upstream.baseURL));
+
+			const res = await request(app)
+				.get("/any")
+				.set("Cookie", "sid=abc,def")
+				.set("Authorization", "Bearer client-supplied");
+
+			expect(res.status).toBe(204);
+			expect(upstream.received[0].headers.authorization).toBe("Bearer client-supplied");
+			expect(fetchMock).not.toHaveBeenCalled();
+		});
+
+		it("strips an inbound Authorization when the cookie is absent and the flag is on", async () => {
+			const warnSpy = vi.spyOn(logger, "warn");
+			const app = mountApp(
+				makeConfig(upstream.baseURL, { stripInboundAuthorization: true }),
+			);
+
+			const res = await request(app)
+				.get("/any")
+				.set("Authorization", "Bearer client-supplied")
+				.set("X-Request-Id", "req-strip-absent");
+
+			expect(res.status).toBe(204);
+			expect(upstream.received[0].headers.authorization).toBeUndefined();
+			expect(fetchMock).not.toHaveBeenCalled();
+			expect(loggedFields(warnSpy)).toContainEqual(
+				expect.objectContaining({
+					event: "injection.inbound_authorization_stripped",
+					requestId: "req-strip-absent",
+					reason: "no_cookie",
+				}),
+			);
+			// The stripped credential never reaches the log.
+			expect(JSON.stringify(warnSpy.mock.calls)).not.toContain("client-supplied");
+		});
+
+		it("strips an inbound Authorization when the cookie is refused and the flag is on", async () => {
+			const warnSpy = vi.spyOn(logger, "warn");
+			const app = mountApp(
+				makeConfig(upstream.baseURL, { stripInboundAuthorization: true }),
+			);
+
+			const res = await request(app)
+				.get("/any")
+				.set("Cookie", "sid=abc,def")
+				.set("Authorization", "Bearer client-supplied")
+				.set("X-Request-Id", "req-strip-rejected");
+
+			expect(res.status).toBe(204);
+			expect(upstream.received[0].headers.authorization).toBeUndefined();
+			expect(fetchMock).not.toHaveBeenCalled();
+			expect(loggedFields(warnSpy)).toContainEqual(
+				expect.objectContaining({
+					event: "injection.inbound_authorization_stripped",
+					requestId: "req-strip-rejected",
+					reason: "cookie_rejected",
+				}),
+			);
+		});
+
+		it("logs nothing extra when the flag is on and no inbound Authorization was sent", async () => {
+			const warnSpy = vi.spyOn(logger, "warn");
+			const app = mountApp(
+				makeConfig(upstream.baseURL, { stripInboundAuthorization: true }),
+			);
+
+			const res = await request(app).get("/any");
+
+			expect(res.status).toBe(204);
+			expect(upstream.received[0].headers.authorization).toBeUndefined();
+			expect(eventsOf(warnSpy)).not.toContain("injection.inbound_authorization_stripped");
+		});
+
+		it("still injects the minted Bearer when the flag is on and a cookie produced a token", async () => {
+			const warnSpy = vi.spyOn(logger, "warn");
+			fetchMock.mockResolvedValueOnce(okGrantResponse("tok-minted"));
+			const app = mountApp(
+				makeConfig(upstream.baseURL, { stripInboundAuthorization: true }),
+			);
+
+			const res = await request(app)
+				.get("/any")
+				.set("Cookie", "sid=s1")
+				.set("Authorization", "Bearer client-supplied");
+
+			expect(res.status).toBe(204);
+			expect(upstream.received[0].headers.authorization).toBe("Bearer tok-minted");
+			expect(eventsOf(warnSpy)).toContain("injection.authorization_override");
+			expect(eventsOf(warnSpy)).not.toContain("injection.inbound_authorization_stripped");
+		});
 	});
 });

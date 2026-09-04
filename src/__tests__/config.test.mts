@@ -248,6 +248,59 @@ describe("proxy config — injection mode", () => {
 		});
 	});
 
+	// An opt-in hardening switch, so it has to default to the pass-through
+	// behaviour and it has to be validated at boot like every other
+	// auth.injection key. `z.coerce.boolean()` would be wrong here: it is
+	// `Boolean(v)`, under which the string "false" an operator sets in the
+	// environment is `true` — the flag would silently refuse to turn off.
+	describe("stripInboundAuthorization", () => {
+		const injectionEnv = (extra: Record<string, string> = {}) => ({
+			AUTH_MODE: "injection",
+			INJECTION_CLIENT_ID: "my-spa",
+			INJECTION_SCOPE: "api",
+			...extra,
+		});
+
+		it("defaults to false — today's forward-untouched behaviour", () => {
+			const raw = parseFile(confPath, { env: injectionEnv() });
+			const config = validate(raw, AppConfigSchema);
+
+			if (config.auth.mode !== "injection") throw new Error("narrow");
+			expect(config.auth.injection.stripInboundAuthorization).toBe(false);
+		});
+
+		it('reads "true" from the environment as true', () => {
+			const raw = parseFile(confPath, {
+				env: injectionEnv({ INJECTION_STRIP_INBOUND_AUTHORIZATION: "true" }),
+			});
+			const config = validate(raw, AppConfigSchema);
+
+			if (config.auth.mode !== "injection") throw new Error("narrow");
+			expect(config.auth.injection.stripInboundAuthorization).toBe(true);
+		});
+
+		it('reads "false" from the environment as false, not as a truthy string', () => {
+			const raw = parseFile(confPath, {
+				env: injectionEnv({ INJECTION_STRIP_INBOUND_AUTHORIZATION: "false" }),
+			});
+			const config = validate(raw, AppConfigSchema);
+
+			if (config.auth.mode !== "injection") throw new Error("narrow");
+			expect(config.auth.injection.stripInboundAuthorization).toBe(false);
+		});
+
+		it("rejects a value that is neither true nor false, naming the key", () => {
+			for (const value of ["yes", "1", "TRUE", ""]) {
+				const raw = parseFile(confPath, {
+					env: injectionEnv({ INJECTION_STRIP_INBOUND_AUTHORIZATION: value }),
+				});
+				expect(() => validate(raw, AppConfigSchema), value).toThrow(
+					/auth\.injection\.stripInboundAuthorization/,
+				);
+			}
+		});
+	});
+
 	it("rejects tokenCache where safetyMarginSeconds >= ttlSeconds (equal)", () => {
 		const raw = parseFile(confPath, {
 			env: {
