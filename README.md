@@ -36,7 +36,7 @@ Translates an inbound session cookie into an outbound `Authorization: Bearer` to
 Flow:
 
 1. Extracts the session cookie named in `auth.injection.sessionCookieName`.
-2. If absent, forwards the request unchanged (the service layer decides whether authentication is required).
+2. If absent, forwards the request unchanged (the service layer decides whether authentication is required). A cookie that is present but refused (see [Cookie forwarding](#cookie-forwarding)) is forwarded the same way, but logged.
 3. On cache hit, injects the cached Bearer and forwards.
 4. On cache miss, exchanges the cookie for an access token via the provider's `POST /oauth/token` with `grant_type=session`. Concurrent misses on the same cookie coalesce into a single provider call (single-flight).
 5. Injects `Authorization: Bearer <token>` and forwards upstream.
@@ -62,7 +62,13 @@ The proxy is a transparent augmentation layer. It injects the Bearer but does NO
 
 Only the cookie named in `auth.injection.sessionCookieName` is forwarded to the provider on the session grant call. Other cookies (analytics, CSRF tokens, third-party) do not reach the provider.
 
-The forwarded value must conform to the RFC 6265 section 4.1.1 `cookie-value` grammar: a run of `cookie-octet`s (printable US-ASCII excluding whitespace, DQUOTE, comma, semicolon, and backslash), optionally wrapped in exactly one surrounding DQUOTE pair. A surrounding DQUOTE pair is accepted and forwarded verbatim (quotes preserved) so the provider's own cookie parser decides how to read it. Anything else makes the value absent — a `,`, whitespace, `\`, a control character, or a non-ASCII byte anywhere in the value, or a DQUOTE anywhere other than as that surrounding pair (interior or unbalanced): the request is forwarded without `Authorization` and the provider is not called. Whitespace immediately after `=` is part of the value and is refused; SP / HTAB next to the `;` separator or at the ends of the header is separator slack and is ignored. `;` is the cookie-pair delimiter and never becomes part of a value. Default session stores (express-session `connect.sid`, hex / base64url / JWT session ids) always conform.
+The forwarded value must conform to the RFC 6265 section 4.1.1 `cookie-value` grammar: a run of `cookie-octet`s (printable US-ASCII excluding whitespace, DQUOTE, comma, semicolon, and backslash), optionally wrapped in exactly one surrounding DQUOTE pair. A surrounding DQUOTE pair is accepted and forwarded verbatim (quotes preserved) so the provider's own cookie parser decides how to read it. Anything else is refused — a `,`, whitespace, `\`, a control character, or a non-ASCII byte anywhere in the value, or a DQUOTE anywhere other than as that surrounding pair (interior or unbalanced), or an empty value: the request is forwarded without `Authorization` and the provider is not called. Whitespace immediately after `=` is part of the value and is refused; SP / HTAB next to the `;` separator or at the ends of the header is separator slack and is ignored. `;` is the cookie-pair delimiter and never becomes part of a value. Default session stores (express-session `connect.sid`, hex / base64url / JWT session ids) always conform.
+
+A refused cookie is not silent. A header that does not carry the cookie at all is an ordinary anonymous request and logs `injection.no_cookie` at debug; a header that carries it in a refused form logs `injection.cookie_rejected` at **warn** with the request id and a bounded `reason` — `empty` (`sid=` / `sid=""`), `quoting` (a DQUOTE anywhere other than one surrounding pair) or `grammar` (a character outside `cookie-octet`). The cookie bytes are never logged. A sustained rate of this event points at a misbehaving client or a provider issuing session cookies outside the grammar.
+
+When the header carries the same name more than once (RFC 6265 section 5.4 lets a user agent send two same-name pairs, ordered by path and then creation time), the first well-formed pair is used. A malformed pair before it is skipped and logged as `injection.cookie_rejected` with `action: "fallback"`; only when every same-name pair is malformed is the request forwarded anonymously, logged with `action: "forward"`. `sid=bad,val; sid=good` and `sid=good; sid=bad,val` both exchange `good`.
+
+The cookie name itself is checked at startup: `auth.injection.sessionCookieName` must be an RFC 6265 `cookie-name` (an RFC 9110 `token`: one or more of `` !#$%&'*+-.^_`|~ ``, digits and letters). A name containing whitespace, `=` or another separator is a configuration error naming the key, because the name is interpolated into the same outbound `Cookie` header.
 
 #### Threat model — process memory
 
@@ -120,7 +126,7 @@ Injection mode:
 | `INJECTION_PROVIDER_ORIGIN` | Provider origin — `scheme://host[:port]`, no path/query/fragment, no userinfo, http or https only (default: `http://localhost:3000`). |
 | `INJECTION_CLIENT_ID` | **Required.** OAuth `client_id`. |
 | `INJECTION_SCOPE` | **Required.** OAuth `scope` string (space-separated). |
-| `INJECTION_SESSION_COOKIE_NAME` | Session cookie name (default: `connect.sid`). |
+| `INJECTION_SESSION_COOKIE_NAME` | Session cookie name (default: `connect.sid`). Must be an RFC 6265 `cookie-name` (RFC 9110 token) — whitespace, `=` or other separators fail at startup. |
 | `INJECTION_TOKEN_CACHE_TTL_SEC` | Token cache TTL in seconds (default: 60). |
 | `INJECTION_TOKEN_CACHE_MAX_ENTRIES` | Token cache max entries (default: 10000). |
 | `INJECTION_TOKEN_CACHE_SAFETY_MARGIN_SEC` | Clock-drift safety margin in seconds (default: 5). |
