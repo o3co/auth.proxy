@@ -2,7 +2,11 @@ import { describe, expect, it } from "vitest";
 import { type CookieRejectReason, extractCookie } from "../cookie-extractor.mjs";
 
 const absent = { kind: "absent" } as const;
-const found = (value: string) => ({ kind: "found", value });
+const found = (value: string, skipped: CookieRejectReason | null = null) => ({
+	kind: "found",
+	value,
+	skipped,
+});
 const rejected = (reason: CookieRejectReason) => ({ kind: "rejected", reason });
 
 describe("extractCookie", () => {
@@ -51,6 +55,49 @@ describe("extractCookie", () => {
 
 		it("returns the first matching cookie when a name appears twice", () => {
 			expect(extractCookie("sid=first; sid=second", "sid")).toEqual(found("first"));
+		});
+	});
+
+	// A malformed pair must not abort the scan: user agents may legitimately send
+	// two same-name pairs (RFC 6265 section 5.4 orders them by path length and
+	// creation time), and a stale or broken duplicate should not blind the proxy
+	// to the well-formed one.
+	describe("same-name pairs — the first well-formed pair wins (#74)", () => {
+		it("skips a malformed first pair and uses the next well-formed one, reporting the skip", () => {
+			expect(extractCookie("sid=bad,val; sid=good", "sid")).toEqual(found("good", "grammar"));
+		});
+
+		it("skips an empty first pair and uses the next well-formed one", () => {
+			expect(extractCookie("sid=; sid=good", "sid")).toEqual(found("good", "empty"));
+		});
+
+		it("skips a badly quoted first pair and uses the next well-formed one", () => {
+			expect(extractCookie('sid="bad; sid=good', "sid")).toEqual(found("good", "quoting"));
+		});
+
+		it("reports the reason of the first skipped pair when several were skipped", () => {
+			expect(extractCookie('sid=; sid="bad; sid=good', "sid")).toEqual(found("good", "empty"));
+		});
+
+		it("keeps a well-formed first pair even when a later same-name pair is malformed", () => {
+			expect(extractCookie("sid=good; sid=bad,val", "sid")).toEqual(found("good"));
+		});
+
+		it("rejects with the first pair's reason when every same-name pair is malformed", () => {
+			expect(extractCookie('sid=bad,val; sid="x', "sid")).toEqual(rejected("grammar"));
+			expect(extractCookie('sid="x; sid=bad,val', "sid")).toEqual(rejected("quoting"));
+		});
+
+		it("ignores other cookies between the same-name pairs", () => {
+			expect(extractCookie("sid=bad,val; other=foo; sid=good; b=2", "sid")).toEqual(
+				found("good", "grammar"),
+			);
+		});
+
+		it("keeps the OWS-only trimming and verbatim value semantics while scanning (#23)", () => {
+			expect(extractCookie("sid= bad;  sid=good ; b=2", "sid")).toEqual(found("good", "grammar"));
+			expect(extractCookie("sid=bad,val; sid= good", "sid")).toEqual(rejected("grammar"));
+			expect(extractCookie("sid=bad,val; sid=good\u00a0", "sid")).toEqual(rejected("grammar"));
 		});
 	});
 
@@ -118,7 +165,7 @@ describe("extractCookie", () => {
 				expect(extractCookie("sid=abc\t", "sid")).toEqual(found("abc"));
 				expect(extractCookie("other=foo;\tsid=abc", "sid")).toEqual(found("abc"));
 				// A latin-1 NBSP is not OWS: it stays in the value and is refused.
-				expect(extractCookie("sid=abc ; other=foo", "sid")).toEqual(rejected("grammar"));
+				expect(extractCookie("sid=abc\u00a0; other=foo", "sid")).toEqual(rejected("grammar"));
 			});
 
 			it("rejects a DQUOTE inside the value or an unbalanced DQUOTE", () => {

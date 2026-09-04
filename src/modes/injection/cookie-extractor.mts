@@ -67,6 +67,15 @@
  *   - `empty`    the value is `` or `""` — nothing to exchange
  *   - `quoting`  a DQUOTE anywhere other than as exactly one surrounding pair
  *   - `grammar`  a character outside cookie-octet in the (unwrapped) value
+ *
+ * Same-name pairs (#74): a user agent may send the same name twice (RFC 6265
+ * section 5.4 orders them by path length, then creation time), so a malformed
+ * pair must not abort the scan. The first well-formed pair wins; a malformed
+ * pair before it is skipped and reported through `found.skipped` (the reason
+ * class of the first skipped pair) so the router can still log it. When every
+ * same-name pair is malformed the result is `rejected` with the first pair's
+ * reason. The pair-level OWS trimming and verbatim value semantics above are
+ * applied to each pair unchanged.
  */
 const COOKIE_OCTETS_RE = /^[\x21\x23-\x2B\x2D-\x3A\x3C-\x5B\x5D-\x7E]*$/;
 
@@ -77,9 +86,13 @@ export type CookieRejectReason = "empty" | "quoting" | "grammar";
 export type CookieExtraction =
 	| { kind: "absent" }
 	| { kind: "rejected"; reason: CookieRejectReason }
+	| { kind: "found"; value: string; skipped: CookieRejectReason | null };
+
+type ValueClass =
+	| { kind: "rejected"; reason: CookieRejectReason }
 	| { kind: "found"; value: string };
 
-const classifyValue = (value: string): CookieExtraction => {
+const classifyValue = (value: string): ValueClass => {
 	if (value === "" || value === '""') return { kind: "rejected", reason: "empty" };
 	const wrapped = value.length >= 2 && value.startsWith('"') && value.endsWith('"');
 	const interior = wrapped ? value.slice(1, -1) : value;
@@ -93,14 +106,16 @@ export const extractCookie = (
 	name: string,
 ): CookieExtraction => {
 	if (!cookieHeader) return { kind: "absent" };
-	const parts = cookieHeader.split(";");
-	for (const raw of parts) {
+	let skipped: CookieRejectReason | null = null;
+	for (const raw of cookieHeader.split(";")) {
 		const pair = trimOws(raw);
 		const eq = pair.indexOf("=");
 		if (eq === -1) continue;
 		const cookieName = trimOws(pair.slice(0, eq));
 		if (cookieName !== name) continue;
-		return classifyValue(pair.slice(eq + 1));
+		const classified = classifyValue(pair.slice(eq + 1));
+		if (classified.kind === "found") return { ...classified, skipped };
+		skipped ??= classified.reason;
 	}
-	return { kind: "absent" };
+	return skipped === null ? { kind: "absent" } : { kind: "rejected", reason: skipped };
 };
