@@ -89,6 +89,8 @@ export const createSessionGrantClient = (
 					method: "POST",
 					headers: {
 						"Content-Type": "application/x-www-form-urlencoded",
+						// Both halves are grammar-checked before they get here: the name by
+						// the Zod schema at boot (#75), the value by extractCookie (#23).
 						Cookie: `${cfg.sessionCookieName}=${sessionCookieValue}`,
 						"X-Request-Id": requestId,
 						Accept: "application/json",
