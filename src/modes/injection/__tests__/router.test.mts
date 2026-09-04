@@ -305,6 +305,34 @@ describe("injection router", () => {
 		expect(eventsOf(debugSpy)).not.toContain("injection.no_cookie");
 	});
 
+	it("uses the first well-formed same-name pair and logs the skipped malformed one (#74)", async () => {
+		const warnSpy = vi.spyOn(logger, "warn");
+		fetchMock.mockResolvedValueOnce(okGrantResponse("tok-good"));
+		const app = mountApp(makeConfig(upstream.baseURL));
+
+		const res = await request(app)
+			.get("/any")
+			.set("Cookie", "sid=bad,val; sid=good")
+			.set("X-Request-Id", "req-fallback");
+
+		expect(res.status).toBe(204);
+		expect(fetchMock).toHaveBeenCalledTimes(1);
+		const init = fetchMock.mock.calls[0][1] as RequestInit;
+		expect((init.headers as Record<string, string>).Cookie).toBe("sid=good");
+		expect(upstream.received[0].headers.authorization).toBe("Bearer tok-good");
+
+		const rejected = loggedFields(warnSpy).filter(
+			(fields) => fields.event === "injection.cookie_rejected",
+		);
+		expect(rejected).toHaveLength(1);
+		expect(rejected[0]).toMatchObject({
+			reason: "grammar",
+			requestId: "req-fallback",
+			action: "fallback",
+		});
+		expect(JSON.stringify(warnSpy.mock.calls)).not.toContain("bad,val");
+	});
+
 	it("passes through upstream 5xx unchanged after Bearer injection", async () => {
 		fetchMock.mockResolvedValueOnce(okGrantResponse("tok-1"));
 		upstream.respond(503, "upstream is sad");

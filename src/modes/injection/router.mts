@@ -20,7 +20,7 @@ import express from "express";
 import proxy from "express-http-proxy";
 import type { AppConfig } from "../../../config/application.schema.mjs";
 import logger from "../../logger.mjs";
-import { extractCookie } from "./cookie-extractor.mjs";
+import { type CookieRejectReason, extractCookie } from "./cookie-extractor.mjs";
 import {
 	createSessionGrantClient,
 	type SessionGrantClient,
@@ -54,6 +54,33 @@ const computeExpiresAt = (
 	return Date.now() + ttlMs;
 };
 
+/**
+ * A session cookie pair the proxy refuses to forward (#23). Unlike the absent
+ * case this deserves an operator's attention, so it is a distinct event at warn
+ * (#73). Only the bounded reason class is logged, never the value bytes.
+ * `action` tells the two outcomes apart: `forward` — every same-name pair was
+ * refused and the request goes upstream anonymously; `fallback` — a malformed
+ * pair was skipped and a later well-formed same-name pair is used (#74).
+ */
+const logCookieRejected = (
+	requestId: string,
+	reason: CookieRejectReason,
+	action: "forward" | "fallback",
+): void => {
+	logger.warn(
+		{
+			requestId,
+			event: "injection.cookie_rejected",
+			reason,
+			action,
+			metric: "auth_proxy_injection_cookie_rejected",
+		},
+		action === "forward"
+			? "session cookie rejected, forwarding without Authorization"
+			: "malformed session cookie pair skipped, using the next well-formed pair",
+	);
+};
+
 const injectionMiddleware =
 	(deps: Deps) =>
 	async (req: Request, res: Response, next: NextFunction): Promise<void> => {
@@ -72,21 +99,13 @@ const injectionMiddleware =
 		}
 
 		if (extraction.kind === "rejected") {
-			// The cookie is present but cannot be forwarded (#23). Unlike the absent
-			// case this deserves an operator's attention, so it is a distinct event at
-			// warn (#73). Only the bounded reason class is logged, never the value.
-			logger.warn(
-				{
-					requestId,
-					event: "injection.cookie_rejected",
-					reason: extraction.reason,
-					action: "forward",
-					metric: "auth_proxy_injection_cookie_rejected",
-				},
-				"session cookie rejected, forwarding without Authorization",
-			);
+			logCookieRejected(requestId, extraction.reason, "forward");
 			next();
 			return;
+		}
+
+		if (extraction.skipped !== null) {
+			logCookieRejected(requestId, extraction.skipped, "fallback");
 		}
 
 		const sessionCookieValue = extraction.value;
