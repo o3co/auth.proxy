@@ -5,6 +5,48 @@ All notable changes to this project are documented in this file.
 The format is based on [Keep a Changelog](https://keepachangelog.com/en/1.1.0/),
 and this project adheres to [Semantic Versioning](https://semver.org/spec/v2.0.0.html).
 
+## [0.4.0] — 2026-09-04
+
+### Security
+
+- Injection mode refuses session cookie values outside the RFC 6265 §4.1.1
+  `cookie-value` grammar (#23). The extracted value is interpolated verbatim
+  into the outbound `Cookie` header of the session grant call, and undici /
+  `http.validateHeaderValue` reject only CR/LF/NUL, CTLs/DEL and code points
+  above 0xFF — so a value carrying a comma, whitespace, DQUOTE, backslash or a
+  latin-1 byte reached the provider unchanged and could malform the header or
+  smuggle a second cookie-pair. A non-conforming value is now treated as
+  missing: the request is forwarded without `Authorization` and the provider is
+  not called.
+
+  A value wrapped in one DQUOTE pair is accepted and forwarded with the quotes
+  preserved — user agents echo the provider's `Set-Cookie` bytes opaquely
+  (§5.2), so the provider's own parser is the right place to interpret them. A
+  DQUOTE anywhere else (interior or unbalanced) makes the value absent, and an
+  empty quoted value is treated as missing like an empty bare value.
+
+### Fixed
+
+- The session cookie value is no longer trimmed before the cookie-octet check
+  (#23). `extractCookie` trimmed whitespace after `=`, normalising `sid= abc`
+  and `sid=\tabc` into valid outbound values even though whitespace is outside
+  `cookie-octet`. RFC 6265 §4.2.1 allows whitespace only as the SP after `;`
+  (plus OWS at the header ends), so the cookie-pair token and the name are now
+  trimmed of OWS only (SP / HTAB — `String.prototype.trim` would also strip a
+  latin-1 NBSP) and the value is taken verbatim: `sid= abc` fails the grammar
+  and reads as missing, while `a=1;  sid=abc ; b=2` still yields `abc`.
+
+### Changed
+
+- The router cache-expiry test drives a faked clock instead of sleeping (#24).
+  It slept a real 1.1 s with `ttlSeconds=1` / `safetyMarginSeconds=0`, adding
+  wall-clock time to every run and leaving 100 ms of slack under CI load. Cache
+  expiry is decided purely from `Date.now()`, so only `Date` is faked
+  (`vi.useFakeTimers({ toFake: ["Date"] })`), leaving `setTimeout` & co. real so
+  supertest's HTTP round trips are untouched. The case keeps the default TTL
+  (55 s effective), asserts a hit at 30 s and a re-fetch at 60 s, and runs in
+  about 3 ms.
+
 ## [0.3.0] — 2026-09-03
 
 ### Security
