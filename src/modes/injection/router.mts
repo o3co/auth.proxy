@@ -89,18 +89,53 @@ const injectionMiddleware =
 		const cookieHeader = req.headers.cookie;
 		const extraction = extractCookie(cookieHeader, cfg.sessionCookieName);
 
+		/**
+		 * The two paths that forward without the proxy having minted anything.
+		 * `applyAuthorization` overwrites an inbound `Authorization` on every
+		 * path that DID mint, so these are the only ones where a client's own
+		 * header survives to the upstream — the reason an upstream service must
+		 * never read "a Bearer header arrived from the proxy" as "the proxy
+		 * minted this". `stripInboundAuthorization` removes the ambiguity for
+		 * deployments that want it; it is opt-in because the pass-through is
+		 * load-bearing for topologies where a service account presents its own
+		 * token through the same proxy.
+		 *
+		 * The header is dropped from `req.headers` rather than in the proxy's
+		 * `proxyReqOptDecorator`: express-http-proxy copies `req.headers`
+		 * wholesale into the outbound request, so the decorator alone would
+		 * leave the original copy in place.
+		 */
+		const forwardWithoutInjection = (reason: "no_cookie" | "cookie_rejected"): void => {
+			if (cfg.stripInboundAuthorization && req.headers.authorization) {
+				logger.warn(
+					{
+						requestId,
+						event: "injection.inbound_authorization_stripped",
+						reason,
+						metric: "auth_proxy_injection_inbound_authorization_stripped",
+					},
+					"stripping inbound Authorization header the proxy did not mint",
+				);
+				// `delete`, not `= undefined`: express-http-proxy copies own
+				// enumerable properties, and Node's `setHeader` throws
+				// ERR_HTTP_INVALID_HEADER_VALUE on an undefined value.
+				delete req.headers.authorization;
+			}
+			next();
+		};
+
 		if (extraction.kind === "absent") {
 			logger.debug(
 				{ requestId, event: "injection.no_cookie", action: "forward" },
 				"no session cookie",
 			);
-			next();
+			forwardWithoutInjection("no_cookie");
 			return;
 		}
 
 		if (extraction.kind === "rejected") {
 			logCookieRejected(requestId, extraction.reason, "forward");
-			next();
+			forwardWithoutInjection("cookie_rejected");
 			return;
 		}
 
