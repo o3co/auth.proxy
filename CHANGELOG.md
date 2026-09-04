@@ -15,15 +15,23 @@ and this project adheres to [Semantic Versioning](https://semver.org/spec/v2.0.0
   `http.validateHeaderValue` reject only CR/LF/NUL, CTLs/DEL and code points
   above 0xFF — so a value carrying a comma, whitespace, DQUOTE, backslash or a
   latin-1 byte reached the provider unchanged and could malform the header or
-  smuggle a second cookie-pair. A non-conforming value is now treated as
-  missing: the request is forwarded without `Authorization` and the provider is
-  not called.
+  smuggle a second cookie-pair. A non-conforming value is now refused: the
+  request is forwarded without `Authorization` and the provider is not called
+  (the refusal is logged as `injection.cookie_rejected`, see Fixed below).
 
   A value wrapped in one DQUOTE pair is accepted and forwarded with the quotes
   preserved — user agents echo the provider's `Set-Cookie` bytes opaquely
   (§5.2), so the provider's own parser is the right place to interpret them. A
-  DQUOTE anywhere else (interior or unbalanced) makes the value absent, and an
-  empty quoted value is treated as missing like an empty bare value.
+  DQUOTE anywhere else (interior or unbalanced) is refused, and an empty quoted
+  value is refused like an empty bare value.
+- `auth.injection.sessionCookieName` is validated at boot against the RFC 6265
+  §4.1.1 `cookie-name` grammar (#75) — an RFC 9110 `token`, i.e. one or more
+  of `` !#$%&'*+-.^_`|~ ``, digits and letters. The name is interpolated
+  verbatim into the outbound `Cookie` header of the session grant call, and the
+  schema accepted any non-empty string, so `"sid "` or `"a=b"` (a typo, or a
+  copy-pasted `name=value`) malformed that header, or smuggled a second
+  cookie-pair, on every request. Such a name is now a configuration error at
+  startup whose message names the key.
 
 ### Fixed
 
@@ -34,7 +42,32 @@ and this project adheres to [Semantic Versioning](https://semver.org/spec/v2.0.0
   (plus OWS at the header ends), so the cookie-pair token and the name are now
   trimmed of OWS only (SP / HTAB — `String.prototype.trim` would also strip a
   latin-1 NBSP) and the value is taken verbatim: `sid= abc` fails the grammar
-  and reads as missing, while `a=1;  sid=abc ; b=2` still yields `abc`.
+  and is refused, while `a=1;  sid=abc ; b=2` still yields `abc`.
+- A session cookie the proxy refuses to forward is logged as
+  `injection.cookie_rejected` at warn instead of `injection.no_cookie` at debug
+  (#73). Both cases forward the request without `Authorization` and skip the
+  provider, but a header that never carried the cookie is an ordinary anonymous
+  request, while one that carried it in a refused form points at a misbehaving
+  client or a provider issuing cookies outside the grammar. The event carries
+  the request id, a bounded `reason` class — `empty` (`sid=` / `sid=""`),
+  `quoting` (a DQUOTE anywhere other than one surrounding pair) or `grammar` (a
+  character outside `cookie-octet`) — an `action` (`forward`: the request went
+  upstream anonymously; `fallback`: a later same-name pair was used, see #74)
+  and the `metric: auth_proxy_injection_cookie_rejected` hint that
+  `injection.authorization_override` already uses. The cookie bytes are never
+  logged. Operators should treat a sustained rate of this event as a signal to
+  look at the client or the provider's `Set-Cookie`; `injection.no_cookie`
+  stays at debug for the absent case. The proxy has no metrics endpoint, so the
+  log line is the deliverable.
+- The first well-formed same-name pair wins (#74). A malformed pair aborted the
+  scan, so `sid=bad,val; sid=good` was refused although a usable pair
+  followed — and user agents may legitimately send two same-name pairs (RFC
+  6265 §5.4 orders them by path, then creation time). The malformed pair is now
+  skipped (and logged as above with `action: "fallback"`) and `good` is
+  exchanged; `sid=good; sid=bad,val` still yields `good`; when every same-name
+  pair is malformed the request is forwarded anonymously with the first pair's
+  `reason`. Per-pair OWS trimming and the verbatim value semantics from #23 are
+  unchanged.
 
 ### Changed
 
@@ -46,6 +79,11 @@ and this project adheres to [Semantic Versioning](https://semver.org/spec/v2.0.0
   supertest's HTTP round trips are untouched. The case keeps the default TTL
   (55 s effective), asserts a hit at 30 s and a re-fetch at 60 s, and runs in
   about 3 ms.
+- Release workflow: a tag with a semver pre-release suffix (`vX.Y.Z-rc.1`) is
+  published as a GitHub pre-release (#76). `softprops/action-gh-release` ran
+  without a `prerelease` input, so such a tag would have been marked the latest
+  full release; a step now derives the flag from the tag name and nothing else
+  in the workflow changes.
 
 ## [0.3.0] — 2026-09-03
 
