@@ -60,9 +60,9 @@ const injectionMiddleware =
 		const { tokenCache, singleFlight, grantClient, cfg } = deps;
 		const requestId = (req.headers["x-request-id"] as string | undefined) ?? "";
 		const cookieHeader = req.headers.cookie;
-		const sessionCookieValue = extractCookie(cookieHeader, cfg.sessionCookieName);
+		const extraction = extractCookie(cookieHeader, cfg.sessionCookieName);
 
-		if (sessionCookieValue === null) {
+		if (extraction.kind === "absent") {
 			logger.debug(
 				{ requestId, event: "injection.no_cookie", action: "forward" },
 				"no session cookie",
@@ -71,6 +71,25 @@ const injectionMiddleware =
 			return;
 		}
 
+		if (extraction.kind === "rejected") {
+			// The cookie is present but cannot be forwarded (#23). Unlike the absent
+			// case this deserves an operator's attention, so it is a distinct event at
+			// warn (#73). Only the bounded reason class is logged, never the value.
+			logger.warn(
+				{
+					requestId,
+					event: "injection.cookie_rejected",
+					reason: extraction.reason,
+					action: "forward",
+					metric: "auth_proxy_injection_cookie_rejected",
+				},
+				"session cookie rejected, forwarding without Authorization",
+			);
+			next();
+			return;
+		}
+
+		const sessionCookieValue = extraction.value;
 		const cacheKey = sha256Hex(sessionCookieValue);
 		const cached = tokenCache.get(cacheKey);
 

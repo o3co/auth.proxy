@@ -1,10 +1,12 @@
 import type { IncomingMessage, Server, ServerResponse } from "node:http";
 import http from "node:http";
 import type { AddressInfo } from "node:net";
+import type { Logger } from "@o3co/auth.utils";
 import express from "express";
 import request from "supertest";
-import { afterEach, beforeEach, describe, expect, it, vi } from "vitest";
+import { afterEach, beforeEach, describe, expect, it, type MockInstance, vi } from "vitest";
 import type { AppConfig } from "../../../../config/application.schema.mjs";
+import logger from "../../../logger.mjs";
 import { createRouter } from "../router.mjs";
 
 type UpstreamRecorder = {
@@ -92,6 +94,18 @@ const okGrantResponse = (accessToken = "grant-tok", expiresIn: number | null = 1
 		...(expiresIn !== null ? { expires_in: expiresIn } : {}),
 	});
 
+type LogField = Record<string, unknown>;
+// Every Logger method shares one signature, so a debug spy fits this type too.
+type LogSpy = MockInstance<Logger["warn"]>;
+
+const loggedFields = (spy: LogSpy): LogField[] =>
+	spy.mock.calls
+		.map(([first]) => first)
+		.filter((first): first is LogField => typeof first === "object" && first !== null);
+
+const eventsOf = (spy: LogSpy): unknown[] =>
+	loggedFields(spy).map((fields) => fields.event);
+
 describe("injection router", () => {
 	let upstream: UpstreamRecorder;
 	let fetchMock: ReturnType<typeof vi.fn>;
@@ -105,6 +119,7 @@ describe("injection router", () => {
 	afterEach(async () => {
 		vi.useRealTimers();
 		vi.unstubAllGlobals();
+		vi.restoreAllMocks();
 		await upstream.close();
 	});
 
@@ -235,7 +250,25 @@ describe("injection router", () => {
 		expect(headers.Cookie).toBe("sid=s1");
 	});
 
-	it("treats empty-value session cookie as absent", async () => {
+	it("logs injection.no_cookie at debug when the session cookie is absent (#73)", async () => {
+		const debugSpy = vi.spyOn(logger, "debug");
+		const warnSpy = vi.spyOn(logger, "warn");
+		const app = mountApp(makeConfig(upstream.baseURL));
+
+		const res = await request(app)
+			.get("/any")
+			.set("Cookie", "other=foo")
+			.set("X-Request-Id", "req-absent");
+
+		expect(res.status).toBe(204);
+		expect(loggedFields(debugSpy)).toContainEqual(
+			expect.objectContaining({ event: "injection.no_cookie", requestId: "req-absent" }),
+		);
+		expect(eventsOf(warnSpy)).not.toContain("injection.cookie_rejected");
+	});
+
+	it("forwards an empty session cookie value anonymously and logs injection.cookie_rejected with reason empty (#73)", async () => {
+		const warnSpy = vi.spyOn(logger, "warn");
 		const app = mountApp(makeConfig(upstream.baseURL));
 
 		const res = await request(app).get("/any").set("Cookie", "sid=");
@@ -243,16 +276,33 @@ describe("injection router", () => {
 		expect(res.status).toBe(204);
 		expect(upstream.received[0].headers.authorization).toBeUndefined();
 		expect(fetchMock).not.toHaveBeenCalled();
+		expect(loggedFields(warnSpy)).toContainEqual(
+			expect.objectContaining({ event: "injection.cookie_rejected", reason: "empty" }),
+		);
 	});
 
-	it("treats a session cookie value outside the RFC 6265 cookie-octet grammar as absent (#23)", async () => {
+	it("forwards a grammar-rejected session cookie anonymously and logs injection.cookie_rejected at warn (#23, #73)", async () => {
+		const debugSpy = vi.spyOn(logger, "debug");
+		const warnSpy = vi.spyOn(logger, "warn");
 		const app = mountApp(makeConfig(upstream.baseURL));
 
-		const res = await request(app).get("/any").set("Cookie", "sid=abc,def");
+		const res = await request(app)
+			.get("/any")
+			.set("Cookie", "sid=abc,def")
+			.set("X-Request-Id", "req-rejected");
 
 		expect(res.status).toBe(204);
 		expect(upstream.received[0].headers.authorization).toBeUndefined();
 		expect(fetchMock).not.toHaveBeenCalled();
+
+		const rejected = loggedFields(warnSpy).filter(
+			(fields) => fields.event === "injection.cookie_rejected",
+		);
+		expect(rejected).toHaveLength(1);
+		expect(rejected[0]).toMatchObject({ reason: "grammar", requestId: "req-rejected" });
+		// The reason is a bounded class; the offending value never reaches the log.
+		expect(JSON.stringify(warnSpy.mock.calls)).not.toContain("abc,def");
+		expect(eventsOf(debugSpy)).not.toContain("injection.no_cookie");
 	});
 
 	it("passes through upstream 5xx unchanged after Bearer injection", async () => {
