@@ -34,6 +34,38 @@ describe("buildAuthHeader", () => {
 		const header = buildAuthHeader(null, "my-bearer-token");
 		expect(header).toBe("Bearer my-bearer-token");
 	});
+
+	// RFC 6749 section 2.3.1: both halves are form-urlencoded BEFORE they are
+	// joined with ":" and base64'd. Without that, a ":" in the client_id
+	// re-splits the credential at the wrong place and the provider reads a
+	// different client_id / secret pair than the operator configured.
+	it("percent-encodes a ':' in either half so the credential cannot re-split", () => {
+		const header = buildAuthHeader(
+			{ clientId: "https://api.example.com/orders", clientSecret: "a:b" },
+			"unused",
+		);
+		const decoded = Buffer.from(header.slice("Basic ".length), "base64").toString("utf8");
+
+		expect(decoded).toBe("https%3A%2F%2Fapi.example.com%2Forders:a%3Ab");
+		// Exactly one ":" survives — the userid/password separator itself.
+		expect(decoded.split(":")).toHaveLength(2);
+	});
+
+	// The provider decodes with `decodeURIComponent(s.replace(/\+/g, " "))`, the
+	// matching form-urlencoded decoder, so every encoded byte round-trips. A
+	// space becomes %20 rather than "+" (encodeURIComponent), which that decoder
+	// reads back as a space just the same.
+	it("round-trips reserved characters through the provider's form-urlencoded decoder", () => {
+		const clientId = "cl ient+id%20&x=1";
+		const clientSecret = "s3:cret/with?reserved#chars";
+		const header = buildAuthHeader({ clientId, clientSecret }, "unused");
+		const decoded = Buffer.from(header.slice("Basic ".length), "base64").toString("utf8");
+		const [encodedId, encodedSecret] = decoded.split(":");
+		const formUrlDecode = (v: string): string => decodeURIComponent(v.replace(/\+/g, " "));
+
+		expect(formUrlDecode(encodedId)).toBe(clientId);
+		expect(formUrlDecode(encodedSecret)).toBe(clientSecret);
+	});
 });
 
 describe("introspect", () => {
