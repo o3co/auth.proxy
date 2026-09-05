@@ -226,6 +226,15 @@ describe("createSessionGrantClient.exchange", () => {
 		});
 	});
 
+	it("maps a revoked session's invalid_grant to session_unauthorized", async () => {
+		fetchMock.mockResolvedValueOnce(jsonResponse(400, {
+			error: "invalid_grant", error_description: "session_invalid",
+		}, { "Retry-After": "30" }));
+		const client = createSessionGrantClient(baseCfg);
+		await expect(client.exchange({ sessionCookieValue: "stale-cookie", requestId: "r" }))
+			.rejects.toMatchObject({ code: "session_unauthorized", status: 401, retryAfter: "30" });
+	});
+
 	it("throws provider_config_error on provider 400", async () => {
 		fetchMock.mockResolvedValueOnce(
 			jsonResponse(400, {

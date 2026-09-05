@@ -169,6 +169,59 @@ describe("introspect", () => {
 		expect(result1).toEqual(result2);
 	});
 
+	it("stops accepting a warm cache entry at the token's exp", async () => {
+		const start = 1_700_000_000_000;
+		const clock = vi.spyOn(Date, "now").mockReturnValue(start);
+		fetchMock.mockImplementation(async () => jsonResponse(200, {
+			active: true, exp: start / 1000 + 1,
+		}));
+		expect((await introspect("t", "http://auth/introspect", 30, "r", "Bearer t")).active).toBe(true);
+		clock.mockReturnValue(start + 1000);
+		expect((await introspect("t", "http://auth/introspect", 30, "r", "Bearer t")).active).toBe(false);
+		expect(fetchMock).toHaveBeenCalledTimes(2);
+	});
+
+	it("refuses a positive response that expires during the provider call", async () => {
+		const start = 1_700_000_000_000;
+		const clock = vi.spyOn(Date, "now").mockReturnValue(start);
+		fetchMock.mockImplementation(async () => {
+			clock.mockReturnValue(start + 2000);
+			return jsonResponse(200, { active: true, exp: start / 1000 + 1 });
+		});
+		expect((await introspect("t", "http://auth/introspect", 30, "r", "Bearer t")).active).toBe(false);
+	});
+
+	it("does not reuse a cached result when caching is disabled", async () => {
+		fetchMock.mockResolvedValueOnce(jsonResponse(200, { active: true }))
+			.mockResolvedValueOnce(jsonResponse(200, { active: false }));
+		await introspect("t", "http://auth/introspect", 30, "r", "Bearer t");
+		expect((await introspect("t", "http://auth/introspect", 0, "r", "Bearer t")).active).toBe(false);
+		expect(fetchMock).toHaveBeenCalledTimes(2);
+	});
+
+	it.each(["soon", null, {}, []].map((exp) => ({ exp })))("refuses malformed exp $exp", async ({ exp }) => {
+		fetchMock.mockResolvedValueOnce(jsonResponse(200, { active: true, exp }));
+		await expect(introspect("t", "http://auth/introspect", 30, "r", "Bearer t"))
+			.rejects.toMatchObject({ status: 502 });
+	});
+
+	it("accepts a case-insensitive Bearer token type", async () => {
+		fetchMock.mockResolvedValueOnce(jsonResponse(200, { active: true, token_type: "bearer" }));
+		expect((await introspect("t", "http://auth/introspect", 30, "r", "Bearer t")).active).toBe(true);
+	});
+
+	it.each([
+		{ cnf: { jkt: "proof-key" }, token_type: "DPoP" },
+		{ cnf: { jkt: "proof-key" }, token_type: "Bearer" },
+		{ cnf: { "x5t#S256": "certificate" }, token_type: "Bearer" },
+		{ cnf: {} },
+		{ cnf: null },
+		{ token_type: "DPoP" },
+	])("refuses unsupported possession evidence on the Bearer path: %j", async (claims) => {
+		fetchMock.mockResolvedValueOnce(jsonResponse(200, { active: true, ...claims }));
+		expect((await introspect("t", "http://auth/introspect", 30, "r", "Bearer t")).active).toBe(false);
+	});
+
 	it.each([
 		["string active value (truthy, would bypass)", { active: "false" }],
 		["numeric active value", { active: 1 }],

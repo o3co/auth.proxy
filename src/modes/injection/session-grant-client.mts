@@ -144,6 +144,14 @@ export const createSessionGrantClient = (
 			}
 			if (resp.status === 400) {
 				const data = await parseJsonBody(resp);
+				// A revoked/expired session is a rejected grant, not a proxy
+				// configuration error. Preserve the existing session_required
+				// response so the caller can recover by authenticating again.
+				if (data?.error === "invalid_grant") {
+					throw new SessionGrantError(
+						"session_unauthorized", 401, "provider rejected the session grant", retryAfter,
+					);
+				}
 				const provided =
 					data !== null && typeof data.error_description === "string"
 						? data.error_description

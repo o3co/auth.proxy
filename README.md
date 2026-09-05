@@ -29,6 +29,13 @@ Benefits over JWT-only local validation:
 - Introspection results are cached (default 30s TTL), reducing provider load.
 - Downstream services receive pre-validated requests without implementing auth logic.
 
+Validation supports unbound Bearer tokens. A response carrying any `cnf` or a
+non-Bearer `token_type` is refused with 401; introspection alone does not verify
+possession of a DPoP key or client certificate for the incoming request.
+Cache entries never outlive a supplied numeric `exp`, and a token that expires
+during introspection is refused immediately. An absent `exp` uses the configured
+TTL; a malformed `exp` is treated as a provider response error. TTL zero disables caching.
+
 #### Introspection client identity
 
 `CLIENT_ID` / `CLIENT_SECRET` are optional, and the choice between setting them and leaving them unset changes which tokens the provider will call `active`.
@@ -93,6 +100,10 @@ A companion change in `auth.provider` stamps `sid` on session-grant tokens, so t
 #### Scope boundary
 
 One proxy instance serves one OAuth scope domain. `auth.injection.clientId` and `auth.injection.scope` are fixed at deploy time. Serve multiple scope domains with multiple proxy instances.
+
+A provider response of `400 invalid_grant` is mapped to `401 session_required`,
+so a revoked session prompts authentication rather than appearing as a proxy
+configuration failure. Other provider 400 responses retain their configuration-error mapping.
 
 #### CSRF responsibility boundary
 
