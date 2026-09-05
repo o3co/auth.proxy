@@ -83,19 +83,19 @@ Flow:
 
 #### Revocation and the access-token lifetime
 
-What bounds the exposure after a logout at the provider is the **access token's own lifetime**, not the proxy's cache TTL.
+For a downstream service that validates JWTs offline, the **access token's own lifetime** bounds replay exposure after logout at the provider. A downstream service that introspects tokens can observe tracked-session invalidation sooner.
 
-The `session` grant mints a plain access token: the provider stamps no `sid` and no refresh-token `family_id` on it, and `POST /session/logout` destroys the browser session and nothing else. A token the proxy injected before that logout therefore stays valid at every downstream resource server until its `exp` — the provider's `oauth.accessToken.expiresIn`, `3600` by default. The proxy's cache does not enter into it: the copies the upstream service already holds were handed over before the logout and cannot be recalled, and neither can the ones it forwarded on.
+With UserSession tracking configured, the provider's `session` grant requires a live tracked session whose subject matches the browser user, and stamps its `sid` on the access token. It issues no refresh token and therefore no refresh-token `family_id`. `POST /session/logout` invalidates the tracked UserSession and associated federation state before destroying the browser session. Successful tracked-session invalidation makes introspection return `active: false` and userinfo refuse the token; store failures are logged as described in the provider's operator runbook.
 
-What `tokenCache.ttlSeconds` bounds is narrower: how long this proxy keeps re-injecting a token it already holds without asking the provider again. Lowering it makes a *new* request on a logged-out session reach the provider — and get a `401` from the grant — sooner. It does not shorten, invalidate or recall the token already in flight, and it multiplies the calls this proxy makes to `/oauth/token` (see [Provider rate limiting](#provider-rate-limiting)).
+`tokenCache.ttlSeconds` bounds how long this proxy keeps re-injecting a token it already holds without asking the provider again. Lowering it makes a *new* request on a logged-out session reach the provider sooner. An unauthenticated browser session returns `401`; a retained browser session with a missing, revoked or inconsistent tracked record returns `400 invalid_grant`. The injection proxy maps either rejection to its existing `401 session_required` response. A shorter cache TTL does not recall tokens already forwarded, and it multiplies the calls this proxy makes to `/oauth/token` (see [Provider rate limiting](#provider-rate-limiting)).
 
 So, for an operator:
 
-- **Keep the provider's access-token lifetime short in a BFF topology.** `oauth.accessToken.expiresIn` is the real revocation window. The proxy owns the cookie-to-token exchange, so a short lifetime costs a grant call — not a user-visible re-login.
+- **Keep the provider's access-token lifetime short in a BFF topology.** `oauth.accessToken.expiresIn` bounds replay exposure at offline validators. The proxy owns the cookie-to-token exchange, so a short lifetime costs a grant call while the browser session remains valid.
 - **A downstream service that validates the JWT offline cannot learn about a logout at all.** Signature, `iss`, `aud` and `exp` are everything an offline validator checks, and none of them changes when a session ends. For such a service the revocation window *is* the token lifetime, with nothing available to shorten it.
 - **Introspection-based validation is the only mode that can observe a revocation.** A resource server — or an `auth.mode = "validation"` proxy in front of one — calling `POST /oauth/introspect` asks the provider on every cache miss, so a token the provider has stopped vouching for comes back `active: false` within that introspection cache TTL.
 
-A companion change in `auth.provider` stamps `sid` on session-grant tokens, so that the provider's own introspection and userinfo endpoints refuse a token whose session has been destroyed. That sharpens the split between the last two bullets — after it lands an introspecting validator sees the logout, and an offline JWT validator still does not. It does not change the first: the access-token lifetime remains what bounds an offline validator's exposure either way.
+The validation proxy also caps each introspection cache entry at the token's `exp`. A zero introspection TTL bypasses the cache so each request asks the provider about the tracked session. This setting belongs to validation mode; it does not change the injection proxy's token cache or an offline validator's behavior.
 
 #### Scope boundary
 
@@ -155,7 +155,7 @@ Raise the budget on the provider side rather than working around it here:
 
 Two things that make it worse:
 
-- **Lowering `tokenCache.ttlSeconds` / `INTROSPECT_CACHE_TTL_SEC` multiplies the misses.** The shorter the TTL, the more of the same 60/60s bucket the same traffic spends. It is also not what bounds revocation — see [Revocation and the access-token lifetime](#revocation-and-the-access-token-lifetime).
+- **Lowering `tokenCache.ttlSeconds` / `INTROSPECT_CACHE_TTL_SEC` multiplies the misses.** The shorter the TTL, the more of the same 60/60s bucket the same traffic spends. Their effects on revocation differ between injection and validation — see [Revocation and the access-token lifetime](#revocation-and-the-access-token-lifetime).
 - **Scaling out gives each instance its own bucket and its own cold cache.** A rollout therefore costs `instance count × active sessions` provider calls at exactly the moment the buckets are being spent fastest. If several instances sit behind one NAT or egress gateway they present a single source IP and share one bucket instead.
 
 ## Setup
