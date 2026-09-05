@@ -5,6 +5,14 @@ All notable changes to this project are documented in this file.
 The format is based on [Keep a Changelog](https://keepachangelog.com/en/1.1.0/),
 and this project adheres to [Semantic Versioning](https://semver.org/spec/v2.0.0.html).
 
+## [Unreleased]
+
+### Security
+
+- Introspection cache entries and positive responses respect the token expiration, including expiration during the provider call. TTL zero bypasses caching.
+- Validation rejects sender-constrained tokens on its Bearer-only path.
+- Injection maps a rejected session grant (`400 invalid_grant`) to `401 session_required` instead of a proxy configuration error.
+
 ## [0.4.0] — 2026-09-04
 
 ### Security

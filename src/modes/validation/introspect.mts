@@ -69,7 +69,7 @@ export const introspect = async (
 	const now = Date.now();
 
 	const cached = cache.get(key);
-	if (cached && cached.expiresAt > now) {
+	if (cacheTtlSec > 0 && cached && cached.expiresAt > now) {
 		return cached.result;
 	}
 
@@ -111,8 +111,29 @@ export const introspect = async (
 	}
 	const data = parsed as IntrospectionResult;
 
+	// This path authenticates Bearer tokens only; introspection does not prove
+	// possession of a DPoP key or a client certificate for the inbound request.
+	if (Object.hasOwn(data, "cnf") || (data.token_type !== undefined &&
+		(typeof data.token_type !== "string" || data.token_type.toLowerCase() !== "bearer"))) {
+		return { active: false };
+	}
+	if (Object.hasOwn(data, "exp") && (typeof data.exp !== "number" || !Number.isFinite(data.exp))) {
+		throw new IntrospectHttpError(502, "introspect returned an invalid exp");
+	}
+	const tokenExpiresAt = typeof data.exp === "number" ? data.exp * 1000 : Infinity;
+	const receivedAt = Date.now();
+	// A token can expire while fetch/body parsing is in flight. Refuse it on
+	// this request too, even if the provider returned active: true.
+	if (tokenExpiresAt <= receivedAt) {
+		return { active: false };
+	}
+	const expiresAt = Math.min(now + cacheTtlSec * 1000, tokenExpiresAt);
+	if (cacheTtlSec <= 0 || expiresAt <= receivedAt) {
+		return data;
+	}
+
 	for (const [k, entry] of cache) {
-		if (entry.expiresAt <= now) {
+		if (entry.expiresAt <= receivedAt) {
 			cache.delete(k);
 		}
 	}
@@ -122,6 +143,6 @@ export const introspect = async (
 			cache.delete(oldestKey);
 		}
 	}
-	cache.set(key, { result: data, expiresAt: now + cacheTtlSec * 1000 });
+	cache.set(key, { result: data, expiresAt });
 	return data;
 };
