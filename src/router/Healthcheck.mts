@@ -1,5 +1,5 @@
 /*
- * Copyright 2026 1o1 Inc.
+ * Copyright 2026 1o1 Co. Ltd.
  *
  * Licensed under the Apache License, Version 2.0 (the "License");
  * you may not use this file except in compliance with the License.
@@ -13,8 +13,22 @@
  * See the License for the specific language governing permissions and
  * limitations under the License.
  */
-import { createHealthcheckRouter } from "@o3co/auth.utils/express";
+import express from "express";
 
-export const createRouter = (): ReturnType<typeof createHealthcheckRouter> => {
-  return createHealthcheckRouter("/_healthcheck");
+/** Liveness only: the process is up and the event loop is turning. */
+const HEALTHCHECK_PATH = "/_healthcheck";
+
+/**
+ * Liveness probe.
+ *
+ * This says nothing about the provider being reachable — a proxy that answers
+ * here can still fail every introspection. Readiness against upstreams would
+ * be a separate route with a separate contract.
+ */
+export const createRouter = (): express.Router => {
+	const router = express.Router();
+	router.get(HEALTHCHECK_PATH, (_req, res) => {
+		res.status(200).json({ status: "ok" });
+	});
+	return router;
 };

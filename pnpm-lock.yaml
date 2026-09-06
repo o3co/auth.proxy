@@ -8,9 +8,6 @@ importers:
 
   .:
     dependencies:
-      '@o3co/auth.utils':
-        specifier: ^0.0.4
-        version: 0.0.4(express@5.2.1)(pino@10.3.1)
       '@o3co/ts.hocon':
         specifier: ^1.13.0
         version: 1.13.0(zod@4.5.2)
@@ -29,6 +26,9 @@ importers:
       jsonwebtoken:
         specifier: 9.0.x
         version: 9.0.3
+      pino:
+        specifier: ^10.3.1
+        version: 10.3.1
       zod:
         specifier: ^4.5.2
         version: 4.5.2
@@ -57,9 +57,6 @@ importers:
       debug:
         specifier: 4.4.3
         version: 4.4.3
-      pino:
-        specifier: ^10.3.1
-        version: 10.3.1
       supertest:
         specifier: ^7.2.2
         version: 7.2.2
@@ -313,16 +310,6 @@ packages:
   '@noble/hashes@1.8.0':
     resolution: {integrity: sha512-jCs9ldd7NwzpgXDIf6P3+NrHh9/sD6CQdxHyjQI+h/6rDNo88ypBxxz45UDuZHz9r3tNz7N/VInSVoVdtXEI4A==}
     engines: {node: ^14.21.3 || >=16}
-
-  '@o3co/auth.utils@0.0.4':
-    resolution: {integrity: sha512-PGhKQaeCwHYOVF/K5Ff+u1iOrjvBax01cT3ofKDFUyUNBBdLA42L8EsEyi0yX+iWDycyavlmhT45tY8FNNHMdQ==}
-    engines: {node: '>=18.19.0'}
-    peerDependencies:
-      express: ^5.0.0
-      pino: ^10.0.0
-    peerDependenciesMeta:
-      pino:
-        optional: true
 
   '@o3co/ts.hocon@1.13.0':
     resolution: {integrity: sha512-CefBHGrQbA90m7enlyTyMs/sAaERI57rRKIZ06i9DvDeFt7nAj1eyZNzL7sZLvpBzd7nncKqxE95aErdlQWeUw==}
@@ -1445,12 +1432,6 @@ snapshots:
     optional: true
 
   '@noble/hashes@1.8.0': {}
-
-  '@o3co/auth.utils@0.0.4(express@5.2.1)(pino@10.3.1)':
-    dependencies:
-      express: 5.2.1
-    optionalDependencies:
-      pino: 10.3.1
 
   '@o3co/ts.hocon@1.13.0(zod@4.5.2)':
     optionalDependencies:

@@ -14,11 +14,11 @@
  * limitations under the License.
  */
 import crypto from "node:crypto";
-import { createRequestIdMiddleware } from "@o3co/auth.utils/express";
 import type { NextFunction, Request, Response } from "express";
 import express from "express";
 import proxy from "express-http-proxy";
 import type { AppConfig } from "../../../config/application.schema.mjs";
+import { createRequestIdMiddleware } from "../../express/requestId.mjs";
 import logger from "../../logger.mjs";
 import { type CookieRejectReason, extractCookie } from "./cookie-extractor.mjs";
 import {

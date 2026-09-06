@@ -13,6 +13,48 @@ and this project adheres to [Semantic Versioning](https://semver.org/spec/v2.0.0
 - Validation rejects sender-constrained tokens on its Bearer-only path.
 - Injection maps a rejected session grant (`400 invalid_grant`) to `401 session_required` instead of a proxy configuration error.
 
+### Fixed
+
+- **Graceful shutdown had no drain deadline, so SIGTERM could never complete on
+  its own.** `gracefulShutdown` came from `@o3co/auth.utils@0.0.4`, which called
+  `server.close()` with no timeout: one stuck in-flight request meant the
+  process waited forever and the orchestrator's SIGKILL cut it down mid-flight —
+  the opposite of a graceful shutdown, arriving precisely under the load that
+  produces a stuck request. Shutdown now drains for `drainTimeoutMs` (default
+  10s, size it below the orchestrator's kill grace period), then force-closes
+  the remaining connections and exits non-zero so a truncated drain is
+  distinguishable from a clean one. A `close` that reports a failure is no
+  longer reported as a clean drain, and a cleanup failure is logged through the
+  app logger rather than `console.error` — one bare line in a service whose
+  every other line is NDJSON. `auth.provider` reached the same conclusion for
+  the same code in its issue #290.
+
+- **The deployed proxy emitted console lines, not NDJSON.** `auth.utils` took
+  `pino` as an *optional* peer and silently fell back to `console` when the
+  import failed; this repo satisfied that peer from **devDependencies**, and the
+  Dockerfile runs `pnpm prune --prod` before copying `node_modules` into the
+  runtime stage. Every production log line was therefore a `[proxy] ...` console
+  write that no aggregator parses — and no local run showed it, because dev
+  installs kept pino present. `pino` is a direct runtime dependency now.
+
+### Changed
+
+- **`@o3co/auth.utils` is no longer a dependency.** Its five helpers
+  (`createLogger`, `gracefulShutdown`, `createHealthcheckRouter`,
+  `extractBearerToken`, `createRequestIdMiddleware`) now live in this
+  repository, each with its own tests. This proxy was the package's only
+  full-surface consumer: `auth.provider` had already moved its shutdown out
+  (#290) and the verifier its logger (#107), both after finding defects that a
+  shared pre-1.0 utility made hard to see from the code they deploy.
+
+  The liveness path is the clearest case for the move. `auth.utils` defaulted to
+  `/healthcheck` while this proxy, the provider and (since its 0.7.0) the
+  verifier all answer on `/_healthcheck` — the shared default was itself the
+  source of the divergence it was meant to prevent. Behaviour is otherwise
+  unchanged: the Bearer grammar, the request-id reuse rule and the healthcheck
+  path and body are the ones the proxy already shipped, now pinned by tests
+  here.
+
 ## [0.4.0] — 2026-09-04
 
 ### Security
