@@ -1,11 +1,11 @@
 import type { IncomingMessage, Server, ServerResponse } from "node:http";
 import http from "node:http";
 import type { AddressInfo } from "node:net";
-import type { Logger } from "@o3co/auth.utils";
 import express from "express";
 import request from "supertest";
 import { afterEach, beforeEach, describe, expect, it, type MockInstance, vi } from "vitest";
 import type { AppConfig } from "../../../../config/application.schema.mjs";
+import type { Logger } from "../../../logger.mjs";
 import logger from "../../../logger.mjs";
 import { createRouter } from "../router.mjs";
 

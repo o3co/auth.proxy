@@ -13,16 +13,16 @@
  * See the License for the specific language governing permissions and
  * limitations under the License.
  */
-import { gracefulShutdown } from "@o3co/auth.utils";
+
 import { parseFile } from "@o3co/ts.hocon";
 import { validate } from "@o3co/ts.hocon/zod";
 import cors from "cors";
 import express from "express";
-
 import { type AppConfig, AppConfigSchema } from "../config/application.schema.mjs";
 import { resolveRouter } from "./app-internal.mjs";
 import logger from "./logger.mjs";
 import * as routers from "./router/index.mjs";
+import { installGracefulShutdown } from "./shutdown.mjs";
 
 const config: AppConfig = validate(
 	parseFile(new URL("../config/application.conf", import.meta.url).pathname),
@@ -48,4 +48,4 @@ const server = app
 		logger.info(`Server ready at http://${config.http.hostname}:${config.http.port}`);
 	});
 
-gracefulShutdown(server);
+installGracefulShutdown(server, { logger });

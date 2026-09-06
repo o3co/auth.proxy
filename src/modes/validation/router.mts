@@ -13,11 +13,13 @@
  * See the License for the specific language governing permissions and
  * limitations under the License.
  */
-import { createRequestIdMiddleware, extractBearerToken } from "@o3co/auth.utils/express";
+
 import type { Request, Response } from "express";
 import express from "express";
 import proxy from "express-http-proxy";
 import type { AppConfig } from "../../../config/application.schema.mjs";
+import { extractBearerToken } from "../../express/bearer.mjs";
+import { createRequestIdMiddleware } from "../../express/requestId.mjs";
 import logger from "../../logger.mjs";
 import {
 	buildAuthHeader,
