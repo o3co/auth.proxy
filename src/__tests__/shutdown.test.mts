@@ -250,6 +250,34 @@ describe("installGracefulShutdown", () => {
 		expect(exitProcess).toHaveBeenCalledWith(3);
 	});
 
+	it("reports the cleanup outcome as the reason, not the drain that preceded it", async () => {
+		// `exitCode` became 1 while `reason` still said "drained", so the one line
+		// an operator alerts on contradicted itself. The drain outcome is still
+		// carried, under its own key, so neither fact is lost.
+		const { signals, finishDraining, logger, exit } = install({
+			cleanup: () => Promise.reject(new Error("teardown failed")),
+		});
+		signals.get("SIGTERM")?.();
+		finishDraining();
+		await settle();
+		expect(logger.info).toHaveBeenCalledWith(
+			{ reason: "cleanup-failed", drain: "drained", exitCode: 1 },
+			"graceful shutdown: complete",
+		);
+		expect(exit).toHaveBeenCalledWith(1);
+	});
+
+	it("keeps reason and drain identical when cleanup succeeds", async () => {
+		const { signals, finishDraining, logger } = install({ cleanup: () => Promise.resolve() });
+		signals.get("SIGTERM")?.();
+		finishDraining();
+		await settle();
+		expect(logger.info).toHaveBeenCalledWith(
+			{ reason: "drained", drain: "drained", exitCode: 0 },
+			"graceful shutdown: complete",
+		);
+	});
+
 	it("removes its own signal listeners once shutting down", () => {
 		const { signals } = install();
 		signals.get("SIGTERM")?.();
