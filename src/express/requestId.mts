@@ -34,7 +34,14 @@ export function createRequestIdMiddleware(options?: RequestIdOptions): RequestHa
 	const generate = options?.generator ?? defaultGenerator;
 
 	return (req, res, next) => {
-		const requestId = (req.headers[headerKey] as string | undefined) ?? generate();
+		// Node types an inbound header `string | string[]`: a caller that sets
+		// this one twice produces the array. Casting it to `string` let an array
+		// reach `res.setHeader` and every log field derived from it, so take the
+		// first value. An empty string is treated as absent — echoing one back
+		// gives the caller nothing to correlate on.
+		const inbound = req.headers[headerKey];
+		const supplied = Array.isArray(inbound) ? inbound[0] : inbound;
+		const requestId = supplied !== undefined && supplied !== "" ? supplied : generate();
 		req.headers[headerKey] = requestId;
 		res.setHeader(headerKey, requestId);
 		next();

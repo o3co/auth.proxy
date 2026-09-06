@@ -20,7 +20,7 @@
 import type { Server } from "node:http";
 import { describe, expect, it, vi } from "vitest";
 import type { Logger } from "../logger.mjs";
-import { installGracefulShutdown } from "../shutdown.mjs";
+import { deferExit, installGracefulShutdown } from "../shutdown.mjs";
 
 /** A `Server` double whose `close` callback fires only when we say so. */
 function makeServer() {
@@ -198,6 +198,56 @@ describe("installGracefulShutdown", () => {
 		failClose(new Error("nope"));
 		await settle();
 		expect(cleanup).toHaveBeenCalledOnce();
+	});
+
+	it("bounds cleanup so a hanging dispose cannot wedge the process (#81 review)", async () => {
+		// The docstring promised cleanup "never wedges the process", but `finish`
+		// awaited it with no deadline: a dispose that never settles meant `exit`
+		// was never reached and the drain deadline had already been cleared.
+		vi.useFakeTimers();
+		try {
+			const { signals, finishDraining, exit, logger } = install({
+				cleanup: () => new Promise<void>(() => {}),
+				drainTimeoutMs: 5_000,
+			});
+			signals.get("SIGTERM")?.();
+			finishDraining();
+			await vi.advanceTimersByTimeAsync(5_000);
+			expect(logger.error).toHaveBeenCalledWith(
+				expect.objectContaining({ cleanupTimeoutMs: 5_000 }),
+				expect.stringContaining("cleanup timed out"),
+			);
+			expect(exit).toHaveBeenCalledWith(1);
+		} finally {
+			vi.useRealTimers();
+		}
+	});
+
+	it("does not penalise a cleanup that finishes inside its budget", async () => {
+		vi.useFakeTimers();
+		try {
+			const { signals, finishDraining, exit } = install({
+				cleanup: () => Promise.resolve(),
+				drainTimeoutMs: 5_000,
+			});
+			signals.get("SIGTERM")?.();
+			finishDraining();
+			await vi.advanceTimersByTimeAsync(10_000);
+			expect(exit).toHaveBeenCalledExactlyOnceWith(0);
+		} finally {
+			vi.useRealTimers();
+		}
+	});
+
+	it("defers the real exit a turn so a buffered log destination can flush (#81 review)", async () => {
+		// pino's default destination is not synchronous, so calling
+		// `process.exit` in the same tick can drop the very lines that say why
+		// the shutdown failed.
+		const exitProcess = vi.fn();
+		deferExit(3, exitProcess);
+		expect(exitProcess).not.toHaveBeenCalled();
+		await new Promise((resolve) => setImmediate(resolve));
+		expect(exitProcess).toHaveBeenCalledWith(3);
 	});
 
 	it("removes its own signal listeners once shutting down", () => {
