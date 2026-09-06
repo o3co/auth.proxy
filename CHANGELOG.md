@@ -14,7 +14,7 @@ and this project adheres to [Semantic Versioning](https://semver.org/spec/v2.0.0
   code but not the reason, so the one line an operator alerts on contradicted
   itself. `reason` now names whatever decided the exit code
   (`cleanup-timeout` / `cleanup-failed`) and the drain outcome keeps its own
-  `drain` key, so the shape stays stable and neither fact is lost. Shipped in
+  `drain` key, so the shape stays stable and neither fact is lost. Introduced in
   0.5.0; found reviewing the same code in
   [auth.provider#511](https://github.com/o3co/auth.provider/pull/511).
 
