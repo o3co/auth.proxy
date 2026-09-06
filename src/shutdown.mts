@@ -49,7 +49,9 @@ import type { Logger } from "./logger.mjs";
  *    orchestrator that only ever sees `0` cannot tell a clean drain from one
  *    that ran out of time.
  * 5. **`cleanup` runs after draining, before exit**, logged through the app
- *    logger and reflected in the exit code. It never wedges the process.
+ *    logger and reflected in the exit code. It is bounded by
+ *    `cleanupTimeoutMs`, so a dispose that never settles cannot wedge the
+ *    process the way an unbounded `await` did.
  * 6. **A `close` that fails is not reported as a clean drain.**
  *
  * Size `drainTimeoutMs` **below** the orchestrator's own kill grace period
@@ -63,6 +65,12 @@ export interface GracefulShutdownOptions {
 	readonly cleanup?: () => void | Promise<void>;
 	/** How long in-flight requests get before connections are cut. Default 10s. */
 	readonly drainTimeoutMs?: number;
+	/**
+	 * How long `cleanup` gets before the shutdown gives up on it. Defaults to
+	 * `drainTimeoutMs`, so the worst-case shutdown is the two budgets in
+	 * sequence — size both against the orchestrator's grace period, not one.
+	 */
+	readonly cleanupTimeoutMs?: number;
 	/** Injected in tests; defaults to `process.exit`. */
 	readonly exit?: (code: number) => void;
 	/** Injected in tests; defaults to `process.on`. */
@@ -74,14 +82,25 @@ export interface GracefulShutdownOptions {
 const DEFAULT_DRAIN_TIMEOUT_MS = 10_000;
 const SIGNALS: readonly NodeJS.Signals[] = ["SIGTERM", "SIGINT"];
 
+/**
+ * Exit after yielding the loop once.
+ *
+ * pino's default destination is not synchronous, so calling `process.exit` in
+ * the same tick as the last `logger.error` can drop exactly the lines that say
+ * why the shutdown failed. One turn is a flush window, not a guarantee: a
+ * deployment that needs certainty should pass an `exit` that flushes its own
+ * transport first.
+ */
+export function deferExit(code: number, exitProcess: (code: number) => void = process.exit): void {
+	setImmediate(() => exitProcess(code));
+}
+
 export function installGracefulShutdown(server: Server, options: GracefulShutdownOptions): void {
 	const {
 		logger,
 		cleanup,
 		drainTimeoutMs = DEFAULT_DRAIN_TIMEOUT_MS,
-		exit = (code: number): void => {
-			process.exit(code);
-		},
+		exit = deferExit,
 		onSignal = (signal, handler): void => {
 			process.on(signal, handler);
 		},
@@ -90,8 +109,37 @@ export function installGracefulShutdown(server: Server, options: GracefulShutdow
 		},
 	} = options;
 
+	const cleanupTimeoutMs = options.cleanupTimeoutMs ?? drainTimeoutMs;
+
 	let shuttingDown = false;
 	let finished = false;
+
+	/** Sentinel so a timed-out cleanup is reported as that, not as a throw. */
+	const CLEANUP_TIMED_OUT = Symbol("cleanup-timed-out");
+
+	/**
+	 * Await `cleanup`, but not forever. `cleanup()` is invoked inside the async
+	 * wrapper so a synchronous throw lands in the same rejection path as an
+	 * async one.
+	 */
+	const runCleanup = async (): Promise<typeof CLEANUP_TIMED_OUT | undefined> => {
+		if (!cleanup) return;
+		let timer: ReturnType<typeof setTimeout> | undefined;
+		try {
+			return await Promise.race([
+				(async (): Promise<undefined> => {
+					await cleanup();
+					return undefined;
+				})(),
+				new Promise<typeof CLEANUP_TIMED_OUT>((resolve) => {
+					timer = setTimeout(() => resolve(CLEANUP_TIMED_OUT), cleanupTimeoutMs);
+					timer.unref?.();
+				}),
+			]);
+		} finally {
+			if (timer) clearTimeout(timer);
+		}
+	};
 
 	/** Run `cleanup` and exit. Called by whichever of drain / deadline wins. */
 	const finish = async (code: number, reason: string): Promise<void> => {
@@ -99,7 +147,10 @@ export function installGracefulShutdown(server: Server, options: GracefulShutdow
 		finished = true;
 		let exitCode = code;
 		try {
-			await cleanup?.();
+			if ((await runCleanup()) === CLEANUP_TIMED_OUT) {
+				logger.error({ cleanupTimeoutMs }, "graceful shutdown: cleanup timed out");
+				exitCode = 1;
+			}
 		} catch (err) {
 			// Through the app logger, not `console.error`: a shutdown that
 			// failed to release what it held is exactly the line an operator

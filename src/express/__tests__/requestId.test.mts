@@ -63,6 +63,26 @@ describe("createRequestIdMiddleware", () => {
 		expect(req.headers["x-request-id"]).toMatch(/^\d{14}_[0-9a-f]{32}$/);
 	});
 
+	it("takes the first value when the header arrives duplicated (#81 review)", () => {
+		// Node types this `string | string[]`, and an upstream that sets the
+		// header twice produces the array. Casting it to `string` let an array
+		// reach `res.setHeader` and every log field built from it.
+		const req = { headers: { "x-request-id": ["first-id", "second-id"] } } as unknown as Request;
+		const setHeader = vi.fn();
+		createRequestIdMiddleware()(req, { setHeader } as unknown as Response, vi.fn());
+		expect(req.headers["x-request-id"]).toBe("first-id");
+		expect(setHeader).toHaveBeenCalledWith("x-request-id", "first-id");
+	});
+
+	it("generates an id when the inbound header is present but empty", () => {
+		// An empty correlation id is indistinguishable from none, and echoing it
+		// back gives the caller nothing to correlate on.
+		const { req } = run(createRequestIdMiddleware({ generator: () => "generated-id" }), {
+			"x-request-id": "",
+		});
+		expect(req.headers["x-request-id"]).toBe("generated-id");
+	});
+
 	it("does not repeat a generated id across requests", () => {
 		const middleware = createRequestIdMiddleware();
 		const first = run(middleware).req.headers["x-request-id"];

@@ -26,7 +26,11 @@ and this project adheres to [Semantic Versioning](https://semver.org/spec/v2.0.0
   distinguishable from a clean one. A `close` that reports a failure is no
   longer reported as a clean drain, and a cleanup failure is logged through the
   app logger rather than `console.error` — one bare line in a service whose
-  every other line is NDJSON. `auth.provider` reached the same conclusion for
+  every other line is NDJSON. `cleanup` is itself bounded by `cleanupTimeoutMs`
+  (defaulting to `drainTimeoutMs`), so a dispose that never settles cannot
+  replace the wedge it was meant to remove, and the process yields the loop
+  once before exiting so a buffered log destination can flush the lines that
+  say why. `auth.provider` reached the same conclusion for
   the same code in its issue #290.
 
 - **The deployed proxy emitted console lines, not NDJSON.** `auth.utils` took
