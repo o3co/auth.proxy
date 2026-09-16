@@ -52,12 +52,12 @@ export interface SessionGrantClient {
 	}): Promise<SessionGrantResult>;
 }
 
-const buildTokenUrl = (providerOrigin: string): string => {
+export const buildTokenUrl = (providerOrigin: string): string => {
 	// providerOrigin is validated as origin-only by the Zod schema.
 	return new URL("/oauth/token", providerOrigin).toString();
 };
 
-const parseJsonBody = async (resp: Response): Promise<Record<string, unknown> | null> => {
+export const parseJsonBody = async (resp: Response): Promise<Record<string, unknown> | null> => {
 	try {
 		const text = await resp.text();
 		if (text.length === 0) return null;
