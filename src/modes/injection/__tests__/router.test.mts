@@ -70,6 +70,7 @@ const makeConfig = (
 			stripInboundAuthorization: false,
 			tokenCache: { ttlSeconds: 60, maxEntries: 100, safetyMarginSeconds: 5 },
 			timeoutMs: 5000,
+			exchange: { enabled: false },
 			...injectionOverrides,
 		},
 	},
