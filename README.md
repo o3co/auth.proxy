@@ -75,6 +75,8 @@ Flow:
 4. On cache miss, exchanges the cookie for an access token via the provider's `POST /oauth/token` with `grant_type=session`. Concurrent misses on the same cookie coalesce into a single provider call (single-flight).
 5. Injects `Authorization: Bearer <token>` and forwards upstream.
 
+Opt-in, injection mode can also exchange an external credential presented as `Authorization: Bearer <JWT>` for a first-party token — see [External credential exchange](#external-credential-exchange-authinjectionexchange).
+
 #### Cache behavior
 
 - In-memory, per-instance. Restart and horizontal scale-out produce cold caches. Peak provider load during rollout ≈ `instance count × active sessions`.
@@ -91,7 +93,7 @@ With UserSession tracking configured, the provider's `session` grant requires a 
 
 So, for an operator:
 
-- **Keep the provider's access-token lifetime short in a BFF topology.** `oauth.accessToken.expiresIn` bounds replay exposure at offline validators. The proxy owns the cookie-to-token exchange, so a short lifetime costs a grant call while the browser session remains valid.
+- **Keep the provider's access-token lifetime short in a BFF topology.** `oauth.accessToken.defaultExpiresIn` (formerly `expiresIn`, still accepted as a deprecated alias) bounds replay exposure at offline validators. The proxy owns the cookie-to-token exchange, so a short lifetime costs a grant call while the browser session remains valid.
 - **A downstream service that validates the JWT offline cannot learn about a logout at all.** Signature, `iss`, `aud` and `exp` are everything an offline validator checks, and none of them changes when a session ends. For such a service the revocation window *is* the token lifetime, with nothing available to shorten it.
 - **Introspection-based validation is the only mode that can observe a revocation.** A resource server — or an `auth.mode = "validation"` proxy in front of one — calling `POST /oauth/introspect` asks the provider on every cache miss, so a token the provider has stopped vouching for comes back `active: false` within that introspection cache TTL.
 
@@ -99,7 +101,7 @@ The validation proxy also caps each introspection cache entry at the token's `ex
 
 #### Scope boundary
 
-One proxy instance serves one OAuth scope domain. `auth.injection.clientId` and `auth.injection.scope` are fixed at deploy time. Serve multiple scope domains with multiple proxy instances.
+One proxy instance serves one OAuth scope domain. `auth.injection.clientId` and `auth.injection.scope` are fixed at deploy time, as are the exchange's `clientId`, `scope`, `audience` and `resource`. Serve multiple scope domains with multiple proxy instances.
 
 A provider response of `400 invalid_grant` is mapped to `401 session_required`,
 so a revoked session prompts authentication rather than appearing as a proxy
@@ -119,6 +121,8 @@ The proxy overrides an inbound `Authorization` header only on the requests where
 
 It defaults to `false` — the pass-through behaviour every deployment before the flag ran on — because that behaviour is load-bearing wherever a non-browser client (a service account, a mobile app) deliberately presents its own token through the same proxy. Turn it on when this proxy fronts browser sessions only, and especially when the upstream's authorization has any dependence on where the header came from. It is defence in depth, not a substitute for the paragraph above: nothing stops a client reaching the upstream by another route.
 
+With `auth.injection.exchange.enabled` the pass-through is gone altogether: an inbound `Authorization` header is either exchanged for a first-party token or the request is refused, so `stripInboundAuthorization` has nothing left to strip — see [External credential exchange](#external-credential-exchange-authinjectionexchange).
+
 #### Cookie forwarding
 
 Only the cookie named in `auth.injection.sessionCookieName` is forwarded to the provider on the session grant call. Other cookies (analytics, CSRF tokens, third-party) do not reach the provider.
@@ -131,13 +135,76 @@ When the header carries the same name more than once (RFC 6265 section 5.4 lets 
 
 The cookie name itself is checked at startup: `auth.injection.sessionCookieName` must be an RFC 6265 `cookie-name` (an RFC 9110 `token`: one or more of `` !#$%&'*+-.^_`|~ ``, digits and letters). A name containing whitespace, `=` or another separator is a configuration error naming the key, because the name is interpolated into the same outbound `Cookie` header.
 
+#### External credential exchange (`auth.injection.exchange`)
+
+Opt-in. With `auth.injection.exchange.enabled = true`, a request that presents `Authorization: Bearer <JWT>` instead of a session cookie is exchanged at the provider for a first-party access token, and only that token reaches the upstream. Session-based clients and clients holding a supported external credential then meet the same backend token validation and authorization. Disabled (the default), nothing in this section applies and injection mode behaves exactly as described above.
+
+**Responsibility boundary.** The proxy is a token-endpoint client. It extracts the credential, submits it to its configured provider, caches a successful result within its validity bounds, and replaces the inbound `Authorization` header with the issued token. Token validation, issuer trust, identity mapping, exchange authorization and token issuance belong to [auth.provider](https://github.com/o3co/auth.provider). Its `AssertionIssuerRegistry` is the source of truth for which external issuers are trusted and on what terms — per-issuer keys, algorithms and `allowedSubjects` / `allowedScopes` / `allowedAudiences` / `allowedClients`. Adding a tenant's IdP is a provider registration; the proxy does not duplicate that trust configuration and imposes no single-issuer restriction. The unverified `iss` never selects a token endpoint, a key URL or a client: the proxy always calls its configured `providerOrigin`.
+
+**Grant: RFC 7523, not RFC 8693.** The exchange is the [RFC 7523](https://www.rfc-editor.org/rfc/rfc7523.html) JWT-bearer authorization grant:
+
+```http
+POST /oauth/token
+Authorization: Basic <client_secret_basic credentials>
+Content-Type: application/x-www-form-urlencoded
+
+grant_type=urn:ietf:params:oauth:grant-type:jwt-bearer&assertion=<JWT>[&scope=…][&audience=…][&resource=…]
+```
+
+It is not [RFC 8693](https://www.rfc-editor.org/rfc/rfc8693.html) token exchange (`grant_type=urn:ietf:params:oauth:grant-type:token-exchange` with `subject_token` / `subject_token_type`), and the two are not interchangeable. The provider accepts only assertions that satisfy the registered issuer's profile, including an audience naming the provider itself: a JWT access token an external IdP issued for some unrelated API is not a valid assertion merely because its issuer is registered. Exchanging general external access tokens needs a separately defined provider validation and exchange contract (RFC 8693) and is not what this path does. Delegation is out of scope as well: the jwt-bearer grant issues no `act` claim, and no forwarding header stands in for one.
+
+**Supported profiles.** Whatever the provider's registry admits for the assertion's issuer — plain RFC 7523 assertions, and the Identity Assertion JWT Authorization Grant (ID-JAG) profile. The proxy submits the `assertion` unchanged; the registry entry decides which profile applies. For ID-JAG the provider enforces two rules the proxy's behaviour is built around:
+
+- **Client binding.** The ID-JAG's `client_id` claim must equal the client that authenticated at the token endpoint — the proxy's `auth.injection.exchange.clientId`. The IdP must mint ID-JAGs for that client; one minted for any other client is refused (`401 credential_rejected`).
+- **One-time use.** Each `jti` is accepted once. The proxy never resubmits an assertion on its own: it does not retry, it does not cache failures, and concurrent identical requests share one submission. A successful result is reused from the cache until the cache entry expires. After that — or at another proxy instance, whose cache is its own — the same ID-JAG is a replay the provider refuses (`401 credential_rejected`), and the client must obtain a fresh assertion.
+
+**Client authentication.** When the exchange is enabled, `clientId` and `clientSecret` are both required and boot fails without either: a `client_id` alone is not client authentication. The proxy authenticates with `client_secret_basic`, using the RFC 6749 §2.3.1 encoding described under [Introspection client identity](#introspection-client-identity). Register it at the provider as a confidential client whose `allowedGrantTypes` names `urn:ietf:params:oauth:grant-type:jwt-bearer`, and list it in `allowedClients` of every issuer entry that names such a list. The requested `scope`, `audience` and `resource` are fixed by deployment configuration and sent only when set; the provider enforces what they may be, and decides which of them it reads (auth.provider's jwt-bearer grant reads `scope`, and `resource` under `oauth.resourceIndicator.enabled`).
+
+**Request shape.** With the exchange enabled:
+
+| Session cookie | `Authorization` | Result |
+| --- | --- | --- |
+| absent | absent | Forwarded without `Authorization`, as without the exchange. |
+| present | absent | Session grant, as without the exchange. |
+| absent | `Bearer <JWT>` | Exchanged; the issued token replaces the header. |
+| absent | anything else — another scheme, an opaque token, a malformed JWT, an empty value | `401 credential_unsupported`. No provider call, nothing forwarded. |
+| present | any | `400 credential_ambiguous`. No provider call, nothing forwarded. |
+
+"Present" means the `Cookie` header carries `auth.injection.sessionCookieName`, whether or not the value passes the [cookie grammar check](#cookie-forwarding); other cookies do not count. The proxy never chooses between two credentials and never switches to the other one after one fails. The `Bearer` scheme is matched case-insensitively, and the token must be a JWS compact JWT whose header and payload decode to JSON objects.
+
+**Errors.** The session path's shape — `{ "error", "error_description" }`, no `WWW-Authenticate`. None of these forwards the original credential or falls back to a session.
+
+| Status | `error` | When |
+| --- | --- | --- |
+| 400 | `credential_ambiguous` | Session cookie and `Authorization` on the same request. |
+| 401 | `credential_unsupported` | `Authorization` is not `Bearer <JWT>`. |
+| 401 | `credential_rejected` | The `iss` is not in `allowedIssuers` (no provider call), or the provider answered `invalid_grant`: bad signature, expired, wrong audience, unregistered issuer, client not admitted by the issuer, replayed ID-JAG, unresolvable subject. |
+| 403 | `exchange_not_permitted` | The provider answered `invalid_scope`, `invalid_target` or `unauthorized_client`. |
+| 502 | `provider_config_error` | The provider answered `401` (the proxy's own client authentication), any other `400`, or a redirect (redirects are not followed). |
+| 502 | `provider_unavailable` | Provider `5xx` or `429`, network error, timeout, or an unexpected status. The provider's `Retry-After` is passed through. |
+| 502 | `provider_invalid_response` | A `200` without an `access_token`, or with a `token_type` other than `Bearer` (e.g. `DPoP`). |
+
+Each outcome is logged as an `injection.exchange_*` event (`exchange_fetch`, `exchange_success`, `exchange_cache_hit`, `exchange_credential_ambiguous` at warn, `exchange_credential_unsupported` with a `reason` of `scheme` or `format`, `exchange_issuer_refused`, `exchange_rejected`, `exchange_not_permitted` at warn, `exchange_provider_config_error` / `exchange_provider_unavailable` / `exchange_provider_invalid_response` at error, with the provider's `error` code where there is one). The assertion, the issued token, the client secret and the unverified `iss` are never logged.
+
+**Issuer prefilter.** `allowedIssuers` (default empty = off) refuses an assertion whose unverified `iss` is not listed, before any provider call — a way to shed traffic from issuers the deployment never expects. It is not required for the security of the exchange and never replaces provider validation: a listed issuer is still verified by the provider in full, and an unlisted one gets the same `credential_rejected` a provider refusal does. From the environment the list is whitespace-separated, like `INJECTION_SCOPE`.
+
+**Cache.** A successful exchange is cached in memory, per instance, in a cache separate from the session cache but sized and timed by the same `auth.injection.tokenCache` settings. Its key is SHA-256 over the grant type, the token endpoint, the client, `scope`, `audience`, `resource` and the assertion, so a result is never reused for a different assertion or exchange context. An entry expires at
+
+`min(tokenCache.ttlSeconds, provider expires_in, assertion exp − now) − tokenCache.safetyMarginSeconds`
+
+and an assertion without `exp`, or one leaving nothing after the margin, is not cached. The assertion's `exp` is read unverified, which is safe because it can only shorten the lifetime. The provider also caps a jwt-bearer token's lifetime at the assertion's remaining validity; the proxy's cache bound holds independently of that.
+
+**Revocation delay.** Expiry bounds do not propagate revocation. Revoking the external credential, its issuer's registration or the proxy's client does not reach a token already issued, which stays valid at offline validators until its own `exp` (see [Revocation and the access-token lifetime](#revocation-and-the-access-token-lifetime)), nor a cached result, which this proxy keeps injecting for up to the cache lifetime above without asking the provider again. A deployment that needs immediate revocation needs an explicit mechanism — short issued-token lifetimes and introspection-based validation upstream.
+
+**Backends and CSRF.** The upstream still verifies every token it is handed — signature, `iss`, `aud` and `exp` against the provider's keys, or introspection — and enforces authorization; a header arriving from this proxy proves nothing on its own. Which internal issuer and audience the issued token carries follows from the provider's configuration, not from the proxy. The session path still needs CSRF protection exactly as described under [CSRF responsibility boundary](#csrf-responsibility-boundary). Every exchange cache miss spends from the same per-instance `/oauth/token` rate-limit bucket as the session grant (see [Provider rate limiting](#provider-rate-limiting)).
+
 #### Threat model — process memory
 
 Active access tokens reside in process memory. An attacker with read access to proxy process memory can extract all cached tokens. Standard host-security practices apply (container isolation, minimal image, no unnecessary `ptrace` capabilities).
 
 ### Provider rate limiting
 
-The provider rate-limits its OAuth endpoints on the **caller's IP address** — the bucket key is `<endpoint>:ip:<ip>`. Every call this proxy makes shares one bucket per proxy instance: `POST /oauth/token` in injection mode, `POST /oauth/introspect` in validation mode. Not per user, not per session, not per token.
+The provider rate-limits its OAuth endpoints on the **caller's IP address** — the bucket key is `<endpoint>:ip:<ip>`. Every call this proxy makes shares one bucket per proxy instance: `POST /oauth/token` in injection mode (session grants and exchanges alike), `POST /oauth/introspect` in validation mode. Not per user, not per session, not per token.
 
 With the provider's default budget of 60 requests per 60s, one proxy instance is capped at roughly **60 cache-missing requests a minute**, however many end users sit behind it. Cache hits are free; every miss spends from the shared bucket.
 
@@ -212,10 +279,17 @@ Injection mode:
 | `INJECTION_SCOPE` | **Required.** OAuth `scope` string (space-separated). |
 | `INJECTION_SESSION_COOKIE_NAME` | Session cookie name (default: `connect.sid`). Must be an RFC 6265 `cookie-name` (RFC 9110 token) — whitespace, `=` or other separators fail at startup. |
 | `INJECTION_STRIP_INBOUND_AUTHORIZATION` | `"true"` / `"false"` (default: `false`). Drop an inbound `Authorization` header on a request the proxy did not mint a token for. Any other value fails at startup. See [Inbound Authorization headers](#inbound-authorization-headers). |
-| `INJECTION_TOKEN_CACHE_TTL_SEC` | Token cache TTL in seconds (default: 60). |
-| `INJECTION_TOKEN_CACHE_MAX_ENTRIES` | Token cache max entries (default: 10000). |
-| `INJECTION_TOKEN_CACHE_SAFETY_MARGIN_SEC` | Clock-drift safety margin in seconds (default: 5). |
-| `INJECTION_TIMEOUT_MS` | Provider HTTP timeout (default: 5000). |
+| `INJECTION_TOKEN_CACHE_TTL_SEC` | Token cache TTL in seconds (default: 60). Applies to the session and exchange caches alike. |
+| `INJECTION_TOKEN_CACHE_MAX_ENTRIES` | Token cache max entries (default: 10000), for each of the session and exchange caches. |
+| `INJECTION_TOKEN_CACHE_SAFETY_MARGIN_SEC` | Clock-drift safety margin in seconds (default: 5). Applies to both caches. |
+| `INJECTION_TIMEOUT_MS` | Provider HTTP timeout (default: 5000), for session grants and exchanges. |
+| `INJECTION_EXCHANGE_ENABLED` | `"true"` / `"false"` (default: `false`). Exchange an inbound `Authorization: Bearer <JWT>` at the provider (RFC 7523 jwt-bearer). Any other value fails at startup. See [External credential exchange](#external-credential-exchange-authinjectionexchange). |
+| `INJECTION_EXCHANGE_CLIENT_ID` | `client_id` the proxy authenticates as for the exchange. **Required** when the exchange is enabled. |
+| `INJECTION_EXCHANGE_CLIENT_SECRET` | Its client secret (`client_secret_basic`). **Required** when the exchange is enabled. |
+| `INJECTION_EXCHANGE_SCOPE` | `scope` sent with the exchange (space-separated; optional). |
+| `INJECTION_EXCHANGE_AUDIENCE` | `audience` sent with the exchange (optional). |
+| `INJECTION_EXCHANGE_RESOURCE` | RFC 8707 `resource` sent with the exchange (optional). |
+| `INJECTION_EXCHANGE_ALLOWED_ISSUERS` | Optional prefilter on the unverified `iss`: a whitespace-separated list (default: empty = off). |
 
 ## Related Projects
 
