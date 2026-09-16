@@ -3,6 +3,7 @@ import {
 	INVALID_ERROR_CODE,
 	readBoundedJsonObject,
 	sanitizeErrorCode,
+	sanitizeErrorDescription,
 } from "../provider-error.mjs";
 
 const SECRET = "s3cret-value";
@@ -110,5 +111,54 @@ describe("readBoundedJsonObject", () => {
 			},
 		});
 		await expect(readBoundedJsonObject(new Response(stream, { status: 503 }))).resolves.toBeNull();
+	});
+});
+
+describe("sanitizeErrorDescription", () => {
+	const sanitize = (value: unknown) => sanitizeErrorDescription(value, [ASSERTION, SECRET]);
+
+	it("keeps an RFC 6749 section 5.2 error_description, spaces included", () => {
+		for (const text of ["unknown scope", "client is not authorized for grant_type session"]) {
+			expect(sanitize(text), text).toBe(text);
+		}
+	});
+
+	it("returns null for an absent, non-string or empty value", () => {
+		for (const value of [undefined, null, 42, ""]) {
+			expect(sanitize(value), String(value)).toBeNull();
+		}
+	});
+
+	it("returns null for a value outside the charset", () => {
+		for (const value of ["line\nbreak", "tab\there", 'quote"d', "back\\slash", "ünïcode"]) {
+			expect(sanitize(value), JSON.stringify(value)).toBeNull();
+		}
+	});
+
+	it("bounds the length at 256", () => {
+		expect(sanitize("a".repeat(256))).toBe("a".repeat(256));
+		expect(sanitize("a".repeat(257))).toBeNull();
+	});
+
+	it("returns null for a value carrying a JWT or a credential", () => {
+		expect(sanitize("token aaa.bbb.ccc was refused")).toBeNull();
+		expect(sanitize(`session ${SECRET} is invalid`)).toBeNull();
+		expect(sanitize(ASSERTION)).toBeNull();
+	});
+});
+
+describe("credential matching", () => {
+	// A substring test on a very short value would refuse ordinary text for
+	// no gain; below 8 characters only an exact echo is refused.
+	it("refuses an exact echo of a short credential but not text that merely contains it", () => {
+		expect(sanitizeErrorCode("abc", ["abc"])).toBe(INVALID_ERROR_CODE);
+		expect(sanitizeErrorCode("invalid_scope", ["c"])).toBe("invalid_scope");
+		expect(sanitizeErrorDescription("c", ["c"])).toBeNull();
+		expect(sanitizeErrorDescription("unknown scope", ["c"])).toBe("unknown scope");
+	});
+
+	it("refuses text containing a credential of 8 characters or more", () => {
+		expect(sanitizeErrorCode("x_12345678_x", ["12345678"])).toBe(INVALID_ERROR_CODE);
+		expect(sanitizeErrorDescription("bad 12345678 here", ["12345678"])).toBeNull();
 	});
 });

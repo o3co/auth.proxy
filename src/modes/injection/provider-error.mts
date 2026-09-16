@@ -28,6 +28,19 @@ const MAX_ERROR_CODE_LENGTH = 64;
 const JWT_SHAPE_RE = /[A-Za-z0-9_-]+\.[A-Za-z0-9_-]+\.[A-Za-z0-9_-]*/;
 
 /**
+ * Below this length a credential is only matched exactly: a substring test on
+ * a one- or two-character value would refuse ordinary text for no gain.
+ */
+const MIN_CONTAINED_CREDENTIAL_LENGTH = 8;
+
+const echoesCredential = (value: string, credentials: readonly string[]): boolean =>
+	credentials.some((credential) =>
+		credential.length >= MIN_CONTAINED_CREDENTIAL_LENGTH
+			? value.includes(credential)
+			: credential.length > 0 && value === credential,
+	);
+
+/**
  * The provider's `error` value, reduced to something safe to log.
  *
  * The value is provider-controlled. A malformed or compromised provider that
@@ -35,7 +48,8 @@ const JWT_SHAPE_RE = /[A-Za-z0-9_-]+\.[A-Za-z0-9_-]+\.[A-Za-z0-9_-]*/;
  * would otherwise put a credential into the proxy's logs. Only a value that is
  * shaped like an OAuth error code survives: the RFC 6749 charset without
  * whitespace, at most 64 characters, nothing shaped like a JWT, and none of
- * `credentials` inside it. Anything else is recorded as
+ * `credentials` inside it (a credential shorter than 8 characters only as an
+ * exact match). Anything else is recorded as
  * {@link INVALID_ERROR_CODE}; an absent `error` is `null`.
  *
  * Classifying a response still compares the raw value against known codes —
@@ -54,12 +68,35 @@ export const sanitizeErrorCode = (
 		value.length > MAX_ERROR_CODE_LENGTH ||
 		!ERROR_CODE_RE.test(value) ||
 		JWT_SHAPE_RE.test(value) ||
-		credentials.some((credential) => credential.length > 0 && value.includes(credential))
+		echoesCredential(value, credentials)
 	) {
 		return INVALID_ERROR_CODE;
 	}
 	return value;
 };
+
+/** RFC 6749 section 5.2 `error_description = 1*( %x20-21 / %x23-5B / %x5D-7E )`. */
+const ERROR_DESCRIPTION_RE = /^[\x20-\x21\x23-\x5B\x5D-\x7E]+$/;
+const MAX_ERROR_DESCRIPTION_LENGTH = 256;
+
+/**
+ * The provider's `error_description`, or `null` when it is not safe to log or
+ * relay. The same reasoning as {@link sanitizeErrorCode}, for free text: only
+ * the RFC 6749 charset (spaces allowed, no other whitespace, DQUOTE or
+ * backslash), at most 256 characters, nothing shaped like a JWT, and none of
+ * `credentials` inside it. The caller substitutes its own wording for `null`.
+ */
+export const sanitizeErrorDescription = (
+	value: unknown,
+	credentials: readonly string[],
+): string | null =>
+	typeof value === "string" &&
+	value.length <= MAX_ERROR_DESCRIPTION_LENGTH &&
+	ERROR_DESCRIPTION_RE.test(value) &&
+	!JWT_SHAPE_RE.test(value) &&
+	!echoesCredential(value, credentials)
+		? value
+		: null;
 
 /** How much of a provider error body is read before giving up on it. */
 export const MAX_ERROR_BODY_BYTES = 16 * 1024;

@@ -14,6 +14,8 @@
  * limitations under the License.
  */
 
+import { readBoundedJsonObject, sanitizeErrorDescription } from "./provider-error.mjs";
+
 export type SessionGrantErrorCode =
 	| "session_unauthorized"
 	| "provider_config_error"
@@ -143,7 +145,7 @@ export const createSessionGrantClient = (
 				);
 			}
 			if (resp.status === 400) {
-				const data = await parseJsonBody(resp);
+				const data = await readBoundedJsonObject(resp);
 				// A revoked/expired session is a rejected grant, not a proxy
 				// configuration error. Preserve the existing session_required
 				// response so the caller can recover by authenticating again.
@@ -152,10 +154,12 @@ export const createSessionGrantClient = (
 						"session_unauthorized", 401, "provider rejected the session grant", retryAfter,
 					);
 				}
-				const provided =
-					data !== null && typeof data.error_description === "string"
-						? data.error_description
-						: null;
+				// The description becomes the error message, which the router logs
+				// and returns to the client: only a validated one is relayed, so a
+				// provider echoing the session cookie cannot put it in either.
+				const provided = sanitizeErrorDescription(data?.error_description, [
+					sessionCookieValue,
+				]);
 				throw new SessionGrantError(
 					"provider_config_error",
 					502,

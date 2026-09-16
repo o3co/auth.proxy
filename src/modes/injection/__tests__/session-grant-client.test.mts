@@ -40,6 +40,7 @@ const getFetchCallHeaders = (
 
 describe("createSessionGrantClient.exchange", () => {
 	let fetchMock: ReturnType<typeof vi.fn>;
+	const client = () => createSessionGrantClient(baseCfg);
 
 	beforeEach(() => {
 		fetchMock = vi.fn();
@@ -264,6 +265,45 @@ describe("createSessionGrantClient.exchange", () => {
 			code: "provider_config_error",
 			status: 502,
 			retryAfter: null,
+			message: "provider rejected proxy configuration (client_id or scope)",
+		});
+	});
+
+	// The description becomes the error message, which the router logs and
+	// returns. A provider echoing the session cookie (or anything else
+	// credential-shaped) there must not get it logged or reflected.
+	it("drops a provider error_description that is not a safe RFC 6749 description", async () => {
+		const unsafe = [
+			"session cookie-abc is not valid",
+			"token aaa.bbb.ccc refused",
+			"multi\nline",
+			'quote"d',
+			"x".repeat(257),
+			42,
+		];
+		for (const error_description of unsafe) {
+			fetchMock.mockResolvedValueOnce(
+				jsonResponse(400, { error: "invalid_scope", error_description }),
+			);
+			await expect(
+				client().exchange({ sessionCookieValue: "cookie-abc", requestId: "r" }),
+				String(error_description),
+			).rejects.toMatchObject({
+				code: "provider_config_error",
+				status: 502,
+				message: "provider rejected proxy configuration (client_id or scope)",
+			});
+		}
+	});
+
+	it("does not read an oversized 400 body", async () => {
+		fetchMock.mockResolvedValueOnce(
+			jsonResponse(400, { error: "invalid_grant", pad: "a".repeat(20_000) }),
+		);
+		await expect(
+			client().exchange({ sessionCookieValue: "c", requestId: "r" }),
+		).rejects.toMatchObject({
+			code: "provider_config_error",
 			message: "provider rejected proxy configuration (client_id or scope)",
 		});
 	});

@@ -221,6 +221,28 @@ describe("injection router", () => {
 		expect(upstream.received).toHaveLength(0);
 	});
 
+	it("neither logs nor returns a session cookie the provider echoes in error_description", async () => {
+		const spies = (["debug", "info", "warn", "error"] as const).map((level) =>
+			vi.spyOn(logger, level),
+		);
+		fetchMock.mockResolvedValueOnce(
+			jsonResponse(400, {
+				error: "invalid_scope",
+				error_description: "session secret-session-value rejected",
+			}),
+		);
+		const app = mountApp(makeConfig(upstream.baseURL));
+
+		const res = await request(app).get("/any").set("Cookie", "sid=secret-session-value");
+
+		expect(res.status).toBe(502);
+		expect(res.body.error).toBe("provider_config_error");
+		expect(JSON.stringify(res.body)).not.toContain("secret-session-value");
+		expect(JSON.stringify(spies.map((spy) => spy.mock.calls))).not.toContain(
+			"secret-session-value",
+		);
+	});
+
 	it("returns 502 provider_unavailable with Retry-After passthrough on provider 503", async () => {
 		fetchMock.mockResolvedValueOnce(jsonResponse(503, {}, { "retry-after": "30" }));
 		const app = mountApp(makeConfig(upstream.baseURL));
