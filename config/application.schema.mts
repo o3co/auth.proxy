@@ -120,7 +120,7 @@ export type ExchangeConfig =
  * `jwt-bearer` assertion and the issued token replaces it.
  *
  * Disabled (the default) parses to `{ enabled: false }` and nothing else is
- * read, so injection mode behaves exactly as it does without the block. Enabled,
+ * used, so injection mode behaves exactly as it does without the block. Enabled,
  * the proxy authenticates to the token endpoint with `client_secret_basic`: a
  * `client_id` alone is not client authentication, so both credentials are
  * required and a missing one fails at boot naming the key.
