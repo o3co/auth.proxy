@@ -1,4 +1,5 @@
-import { parseFile } from "@o3co/ts.hocon";
+import { readFileSync } from "node:fs";
+import { parseFile, parseString } from "@o3co/ts.hocon";
 import { validate } from "@o3co/ts.hocon/zod";
 import { describe, expect, it } from "vitest";
 import { AppConfigSchema } from "../../config/application.schema.mjs";
@@ -298,6 +299,160 @@ describe("proxy config — injection mode", () => {
 					/auth\.injection\.stripInboundAuthorization/,
 				);
 			}
+		});
+	});
+
+	// The external credential exchange (#90) is opt-in inside injection mode.
+	// Disabled, nothing about it is read; enabled, the proxy authenticates to
+	// the token endpoint as a confidential client, so a client_id alone is a
+	// boot failure rather than an unauthenticated exchange.
+	describe("exchange (#90)", () => {
+		const injectionEnv = (extra: Record<string, string> = {}) => ({
+			AUTH_MODE: "injection",
+			INJECTION_CLIENT_ID: "my-spa",
+			INJECTION_SCOPE: "api",
+			...extra,
+		});
+		const enabledEnv = (extra: Record<string, string> = {}) =>
+			injectionEnv({
+				INJECTION_EXCHANGE_ENABLED: "true",
+				INJECTION_EXCHANGE_CLIENT_ID: "proxy-exchange",
+				INJECTION_EXCHANGE_CLIENT_SECRET: "s3cret",
+				...extra,
+			});
+		const load = (env: Record<string, string>) => {
+			const config = validate(parseFile(confPath, { env }), AppConfigSchema);
+			if (config.auth.mode !== "injection") throw new Error("narrow");
+			return config.auth.injection.exchange;
+		};
+
+		it("defaults to disabled, carrying nothing else", () => {
+			expect(load(injectionEnv())).toEqual({ enabled: false });
+		});
+
+		it("ignores exchange credentials while disabled", () => {
+			expect(
+				load(injectionEnv({ INJECTION_EXCHANGE_CLIENT_ID: "proxy-exchange" })),
+			).toEqual({ enabled: false });
+		});
+
+		it("parses an enabled exchange with credentials and unset optional parameters", () => {
+			expect(load(enabledEnv())).toEqual({
+				enabled: true,
+				clientId: "proxy-exchange",
+				clientSecret: "s3cret",
+				scope: null,
+				audience: null,
+				resource: null,
+				allowedIssuers: [],
+			});
+		});
+
+		it("reads scope, audience, resource and a whitespace-separated issuer list from the environment", () => {
+			expect(
+				load(
+					enabledEnv({
+						INJECTION_EXCHANGE_SCOPE: "orders.read orders.write",
+						INJECTION_EXCHANGE_AUDIENCE: "https://api.example.com",
+						INJECTION_EXCHANGE_RESOURCE: "https://api.example.com/orders",
+						INJECTION_EXCHANGE_ALLOWED_ISSUERS:
+							"https://idp-a.example  https://idp-b.example\turn:issuer:c",
+					}),
+				),
+			).toEqual({
+				enabled: true,
+				clientId: "proxy-exchange",
+				clientSecret: "s3cret",
+				scope: "orders.read orders.write",
+				audience: "https://api.example.com",
+				resource: "https://api.example.com/orders",
+				allowedIssuers: ["https://idp-a.example", "https://idp-b.example", "urn:issuer:c"],
+			});
+		});
+
+		it("treats empty optional parameters as unset", () => {
+			const exchange = load(
+				enabledEnv({
+					INJECTION_EXCHANGE_SCOPE: "",
+					INJECTION_EXCHANGE_AUDIENCE: "",
+					INJECTION_EXCHANGE_RESOURCE: "",
+					INJECTION_EXCHANGE_ALLOWED_ISSUERS: "",
+				}),
+			);
+			expect(exchange).toMatchObject({
+				scope: null,
+				audience: null,
+				resource: null,
+				allowedIssuers: [],
+			});
+		});
+
+		it("reads allowedIssuers as a HOCON list", () => {
+			const text = `${readFileSync(confPath, "utf8")}
+auth.injection.exchange.allowedIssuers = ["https://idp-a.example", "urn:issuer:b"]
+`;
+			const config = validate(parseString(text, { env: enabledEnv() }), AppConfigSchema);
+			if (config.auth.mode !== "injection") throw new Error("narrow");
+			expect(config.auth.injection.exchange).toMatchObject({
+				allowedIssuers: ["https://idp-a.example", "urn:issuer:b"],
+			});
+		});
+
+		it("rejects a HOCON list entry that is empty or contains whitespace, naming the key", () => {
+			for (const entry of ['""', '"https://idp.example other"']) {
+				const text = `${readFileSync(confPath, "utf8")}
+auth.injection.exchange.allowedIssuers = [${entry}]
+`;
+				expect(
+					() => validate(parseString(text, { env: enabledEnv() }), AppConfigSchema),
+					entry,
+				).toThrow(/auth\.injection\.exchange\.allowedIssuers/);
+			}
+		});
+
+		it("rejects enabled without clientId, naming the key", () => {
+			expect(() => load(enabledEnv({ INJECTION_EXCHANGE_CLIENT_ID: "" }))).toThrow(
+				/auth\.injection\.exchange\.clientId/,
+			);
+		});
+
+		it("rejects enabled without clientSecret — a client_id alone is not client authentication", () => {
+			expect(() => load(enabledEnv({ INJECTION_EXCHANGE_CLIENT_SECRET: "" }))).toThrow(
+				/auth\.injection\.exchange\.clientSecret/,
+			);
+		});
+
+		it('reads "false" from the environment as disabled', () => {
+			expect(load(enabledEnv({ INJECTION_EXCHANGE_ENABLED: "false" }))).toEqual({
+				enabled: false,
+			});
+		});
+
+		it("rejects an enabled value that is neither true nor false, naming the key", () => {
+			for (const value of ["yes", "1", "TRUE", ""]) {
+				expect(() => load(injectionEnv({ INJECTION_EXCHANGE_ENABLED: value })), value).toThrow(
+					/auth\.injection\.exchange\.enabled/,
+				);
+			}
+		});
+
+		it("defaults to disabled when the exchange block is absent altogether", () => {
+			const config = AppConfigSchema.parse({
+				http: { cors: { origin: { pattern: null } } },
+				auth: {
+					mode: "injection",
+					injection: {
+						providerOrigin: "http://provider.example",
+						clientId: "my-spa",
+						scope: "api",
+						sessionCookieName: "sid",
+						tokenCache: {},
+					},
+				},
+				upstream: { baseURL: "http://u" },
+			});
+			if (config.auth.mode !== "injection") throw new Error("narrow");
+			expect(config.auth.injection.exchange).toEqual({ enabled: false });
 		});
 	});
 

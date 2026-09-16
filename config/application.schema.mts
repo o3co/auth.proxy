@@ -64,6 +64,112 @@ const strictBoolean = (key: string) =>
 			return z.NEVER;
 		});
 
+/** An optional string where the environment's empty value means unset. */
+const optionalString = () =>
+	z
+		.string()
+		.nullable()
+		.default(null)
+		.transform((v) => (v === "" ? null : v));
+
+/**
+ * A list that has to survive the HOCON -> environment round trip, like
+ * `strictBoolean`. In application.conf it is a HOCON list; an environment
+ * override arrives as one string, which is split on whitespace — the encoding
+ * `INJECTION_SCOPE` already uses for its space-separated scope list. An empty
+ * string is the empty list. Because whitespace is the separator, a HOCON entry
+ * that is empty or contains whitespace could never be expressed from the
+ * environment, and is refused at boot naming the key.
+ */
+const whitespaceSeparatedList = (key: string) =>
+	z
+		.union([z.array(z.string()), z.string()])
+		.default([])
+		.transform((value, ctx): string[] => {
+			if (typeof value === "string") {
+				return value.split(/\s+/).filter((entry) => entry.length > 0);
+			}
+			const invalid = value.find((entry) => entry.length === 0 || /\s/.test(entry));
+			if (invalid !== undefined) {
+				ctx.addIssue({
+					code: "custom",
+					message: `${key} entries must be non-empty and contain no whitespace (got ${JSON.stringify(invalid)})`,
+				});
+				return z.NEVER;
+			}
+			return value;
+		});
+
+const EXCHANGE_KEY = "auth.injection.exchange";
+
+export type ExchangeConfig =
+	| { enabled: false }
+	| {
+			enabled: true;
+			clientId: string;
+			clientSecret: string;
+			scope: string | null;
+			audience: string | null;
+			resource: string | null;
+			allowedIssuers: string[];
+	  };
+
+/**
+ * The external credential exchange (#90): an inbound `Authorization: Bearer
+ * <JWT>` is submitted to the provider's token endpoint as an RFC 7523
+ * `jwt-bearer` assertion and the issued token replaces it.
+ *
+ * Disabled (the default) parses to `{ enabled: false }` and nothing else is
+ * used, so injection mode behaves exactly as it does without the block. Enabled,
+ * the proxy authenticates to the token endpoint with `client_secret_basic`: a
+ * `client_id` alone is not client authentication, so both credentials are
+ * required and a missing one fails at boot naming the key.
+ *
+ * `scope`, `audience` and `resource` are sent only when set. `allowedIssuers`
+ * is an optional prefilter on the unverified `iss` — empty means off; trust in
+ * an issuer is the provider's decision, never the proxy's.
+ */
+const exchangeSchema = z
+	.object({
+		enabled: strictBoolean(`${EXCHANGE_KEY}.enabled`),
+		clientId: optionalString(),
+		clientSecret: optionalString(),
+		scope: optionalString(),
+		audience: optionalString(),
+		resource: optionalString(),
+		allowedIssuers: whitespaceSeparatedList(`${EXCHANGE_KEY}.allowedIssuers`),
+	})
+	.transform((exchange, ctx): ExchangeConfig => {
+		if (!exchange.enabled) {
+			return { enabled: false as const };
+		}
+		const { clientId, clientSecret } = exchange;
+		if (clientId === null || clientSecret === null) {
+			for (const [name, value] of [
+				["clientId", clientId],
+				["clientSecret", clientSecret],
+			] as const) {
+				if (value === null) {
+					ctx.addIssue({
+						code: "custom",
+						message: `${EXCHANGE_KEY}.${name} is required when ${EXCHANGE_KEY}.enabled is true (the proxy authenticates to the token endpoint with client_secret_basic)`,
+					});
+				}
+			}
+			return z.NEVER;
+		}
+		return {
+			enabled: true as const,
+			clientId,
+			clientSecret,
+			scope: exchange.scope,
+			audience: exchange.audience,
+			resource: exchange.resource,
+			allowedIssuers: exchange.allowedIssuers,
+		};
+	})
+	.prefault({});
+
 export const AppConfigSchema = z.object({
 	http: z.object({
 		hostname: z.string().default("0.0.0.0"),
@@ -169,6 +275,7 @@ export const AppConfigSchema = z.object({
 						},
 					),
 				timeoutMs: z.coerce.number().int().positive().default(5000),
+				exchange: exchangeSchema,
 			}),
 		}),
 	]),

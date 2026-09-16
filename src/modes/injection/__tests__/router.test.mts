@@ -70,6 +70,7 @@ const makeConfig = (
 			stripInboundAuthorization: false,
 			tokenCache: { ttlSeconds: 60, maxEntries: 100, safetyMarginSeconds: 5 },
 			timeoutMs: 5000,
+			exchange: { enabled: false },
 			...injectionOverrides,
 		},
 	},
@@ -220,6 +221,28 @@ describe("injection router", () => {
 		expect(upstream.received).toHaveLength(0);
 	});
 
+	it("neither logs nor returns a session cookie the provider echoes in error_description", async () => {
+		const spies = (["debug", "info", "warn", "error"] as const).map((level) =>
+			vi.spyOn(logger, level),
+		);
+		fetchMock.mockResolvedValueOnce(
+			jsonResponse(400, {
+				error: "invalid_scope",
+				error_description: "session secret-session-value rejected",
+			}),
+		);
+		const app = mountApp(makeConfig(upstream.baseURL));
+
+		const res = await request(app).get("/any").set("Cookie", "sid=secret-session-value");
+
+		expect(res.status).toBe(502);
+		expect(res.body.error).toBe("provider_config_error");
+		expect(JSON.stringify(res.body)).not.toContain("secret-session-value");
+		expect(JSON.stringify(spies.map((spy) => spy.mock.calls))).not.toContain(
+			"secret-session-value",
+		);
+	});
+
 	it("returns 502 provider_unavailable with Retry-After passthrough on provider 503", async () => {
 		fetchMock.mockResolvedValueOnce(jsonResponse(503, {}, { "retry-after": "30" }));
 		const app = mountApp(makeConfig(upstream.baseURL));
@@ -363,7 +386,7 @@ describe("injection router", () => {
 
 	it("re-fetches after cache expiry", async () => {
 		// Fake only Date: cache expiry is decided from Date.now() (token-cache.mts,
-		// router.mts computeExpiresAt), while supertest and the upstream recorder
+		// cache-expiry.mts computeCacheExpiresAt), while supertest and the upstream recorder
 		// need real timers and real IO for their HTTP round trips. Faking
 		// setTimeout & co. would stall those, and a real 1.1 s sleep was slow and
 		// CI-flaky (#24). With the default ttlSeconds=60 / safetyMarginSeconds=5
@@ -387,6 +410,51 @@ describe("injection router", () => {
 		expect(upstream.received[2].headers.authorization).toBe("Bearer tok-2");
 		expect(fetchMock).toHaveBeenCalledTimes(2);
 	});
+	// expires_in counts from issuance. Anchoring the cache entry at the
+	// response instead of the request would let a slow provider push it past
+	// the token's real expiry, and inject an expired token.
+	it("counts the grant's expires_in from the request, not from a slow response", async () => {
+		vi.useFakeTimers({ toFake: ["Date"] });
+		const requestedAt = Date.now();
+		// issued with expires_in 20; the answer takes 10 s to arrive.
+		// Entry must expire at requestedAt + 20 - margin 5 = requestedAt + 15 s.
+		fetchMock
+			.mockImplementationOnce(async () => {
+				vi.setSystemTime(requestedAt + 10_000);
+				return okGrantResponse("tok-1", 20);
+			})
+			.mockResolvedValueOnce(okGrantResponse("tok-2", 20));
+		const app = mountApp(makeConfig(upstream.baseURL));
+
+		await request(app).get("/any").set("Cookie", "sid=s1");
+		vi.setSystemTime(requestedAt + 14_000);
+		await request(app).get("/any").set("Cookie", "sid=s1");
+		expect(fetchMock).toHaveBeenCalledTimes(1);
+
+		vi.setSystemTime(requestedAt + 16_000);
+		await request(app).get("/any").set("Cookie", "sid=s1");
+		expect(fetchMock).toHaveBeenCalledTimes(2);
+		expect(upstream.received[2].headers.authorization).toBe("Bearer tok-2");
+	});
+
+	it("does not cache a grant whose response arrives after expires_in minus the margin", async () => {
+		vi.useFakeTimers({ toFake: ["Date"] });
+		const requestedAt = Date.now();
+		fetchMock
+			.mockImplementationOnce(async () => {
+				vi.setSystemTime(requestedAt + 16_000);
+				return okGrantResponse("tok-1", 20);
+			})
+			.mockResolvedValueOnce(okGrantResponse("tok-2", 20));
+		const app = mountApp(makeConfig(upstream.baseURL));
+
+		await request(app).get("/any").set("Cookie", "sid=s1");
+		await request(app).get("/any").set("Cookie", "sid=s1");
+
+		expect(fetchMock).toHaveBeenCalledTimes(2);
+		expect(upstream.received[1].headers.authorization).toBe("Bearer tok-2");
+	});
+
 	// The proxy overrides an inbound Authorization only on the paths where a
 	// session cookie actually produced a token. On the two paths where it did
 	// not mint one — no cookie, or a cookie refused by the grammar check — the
