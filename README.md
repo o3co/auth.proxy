@@ -61,7 +61,7 @@ What that trades away:
 
 Rate limiting is unaffected by the choice — it is keyed on the proxy's IP either way (see [Provider rate limiting](#provider-rate-limiting)).
 
-**Credentials containing reserved characters.** RFC 6749 §2.3.1 requires both halves to be `application/x-www-form-urlencoded`-encoded *before* they are joined with `:` and base64'd into the Basic header; otherwise a `:` inside either half re-splits the credential in the wrong place and the provider reads a different pair than the one configured. `buildAuthHeader` does this (`pctEncode`, `src/modes/validation/introspect.mts`), and the provider decodes with the matching form-urlencoded decoder, so a credential containing reserved characters round-trips byte for byte. Set the raw value in the environment variable — do not pre-encode it yourself.
+**Credentials containing reserved characters.** RFC 6749 §2.3.1 requires both halves to be `application/x-www-form-urlencoded`-encoded *before* they are joined with `:` and base64'd into the Basic header; otherwise a `:` inside either half re-splits the credential in the wrong place and the provider reads a different pair than the one configured. `buildAuthHeader` does this (`clientSecretBasic`, `src/oauth/client-secret-basic.mts`), and the provider decodes with the matching form-urlencoded decoder, so a credential containing reserved characters round-trips byte for byte. Set the raw value in the environment variable — do not pre-encode it yourself.
 
 ### Injection mode (`auth.mode = "injection"`)
 

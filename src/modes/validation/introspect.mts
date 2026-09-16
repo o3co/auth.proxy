@@ -14,6 +14,9 @@
  * limitations under the License.
  */
 import crypto from "node:crypto";
+import { type ClientCredentials, clientSecretBasic } from "../../oauth/client-secret-basic.mjs";
+
+export type { ClientCredentials };
 
 export interface IntrospectionResult {
 	active: boolean;
@@ -41,17 +44,8 @@ export const clearCache = (): void => {
 	cache.clear();
 };
 
-export interface ClientCredentials {
-	clientId: string;
-	clientSecret: string;
-}
-
-const pctEncode = (s: string): string => encodeURIComponent(s);
-
 export const buildAuthHeader = (credentials: ClientCredentials | null, token: string): string =>
-	credentials !== null
-		? `Basic ${Buffer.from(`${pctEncode(credentials.clientId)}:${pctEncode(credentials.clientSecret)}`).toString("base64")}`
-		: `Bearer ${token}`;
+	credentials !== null ? clientSecretBasic(credentials) : `Bearer ${token}`;
 
 const getCacheKey = (token: string): string =>
 	crypto.createHash("sha256").update(token).digest("hex");
