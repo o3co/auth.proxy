@@ -191,9 +191,9 @@ Each outcome is logged as an `injection.exchange_*` event (`exchange_fetch`, `ex
 
 **Cache.** A successful exchange is cached in memory, per instance, in a cache separate from the session cache but sized and timed by the same `auth.injection.tokenCache` settings. Its key is SHA-256 over the grant type, the token endpoint, the client, `scope`, `audience`, `resource` and the assertion, so a result is never reused for a different assertion or exchange context. An entry expires at
 
-`min(tokenCache.ttlSeconds, provider expires_in, assertion exp − now) − tokenCache.safetyMarginSeconds`
+`min(sent + tokenCache.ttlSeconds, sent + provider expires_in, assertion exp) − tokenCache.safetyMarginSeconds`
 
-and an assertion without `exp`, or one leaving nothing after the margin, is not cached. The assertion's `exp` is read unverified, which is safe because it can only shorten the lifetime. The provider also caps a jwt-bearer token's lifetime at the assertion's remaining validity; the proxy's cache bound holds independently of that.
+where `sent` is the instant the token request went out. `ttlSeconds` and `expires_in` are counted from the request, not from the response, so a slow provider cannot push an entry past the issued token's expiry. An assertion without `exp`, or an entry that would already have expired by the time the response arrives, is not cached. The assertion's `exp` is read unverified, which is safe because it can only shorten the lifetime. The provider also caps a jwt-bearer token's lifetime at the assertion's remaining validity; the proxy's cache bound holds independently of that.
 
 **Revocation delay.** Expiry bounds do not propagate revocation. Revoking the external credential, its issuer's registration or the proxy's client does not reach a token already issued, which stays valid at offline validators until its own `exp` (see [Revocation and the access-token lifetime](#revocation-and-the-access-token-lifetime)), nor a cached result, which this proxy keeps injecting for up to the cache lifetime above without asking the provider again. A deployment that needs immediate revocation needs an explicit mechanism — short issued-token lifetimes and introspection-based validation upstream.
 

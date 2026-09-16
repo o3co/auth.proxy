@@ -55,6 +55,7 @@ describe("exchangeCacheKey", () => {
 describe("computeExchangeExpiresAt", () => {
 	const now = 1_800_000_000_000;
 	const base = {
+		requestedAt: now,
 		now,
 		ttlSeconds: 60,
 		safetyMarginSeconds: 5,
@@ -82,6 +83,19 @@ describe("computeExchangeExpiresAt", () => {
 
 	it("returns null (do not cache) when the assertion has no exp", () => {
 		expect(computeExchangeExpiresAt({ ...base, assertionExpiresAt: null })).toBeNull();
+	});
+
+	it("counts ttl and expires_in from the request, and exp as the absolute instant it is", () => {
+		const requestedAt = now - 10_000;
+		expect(computeExchangeExpiresAt({ ...base, requestedAt, expiresIn: 20 })).toBe(
+			requestedAt + 15_000,
+		);
+		expect(
+			computeExchangeExpiresAt({ ...base, requestedAt, assertionExpiresAt: now / 1000 + 30 }),
+		).toBe(now + 25_000);
+		expect(
+			computeExchangeExpiresAt({ ...base, requestedAt: now - 16_000, expiresIn: 20 }),
+		).toBeNull();
 	});
 
 	it("returns null when a bound leaves nothing after the safety margin", () => {

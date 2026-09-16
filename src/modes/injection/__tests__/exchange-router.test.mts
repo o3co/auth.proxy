@@ -433,6 +433,56 @@ describe("injection router — external credential exchange (#90)", () => {
 			expect(upstream.received[2].headers.authorization).toBe("Bearer issued-2");
 		});
 
+		// expires_in counts from issuance. Anchoring it at the response instead
+		// of the request would let a slow provider push the entry past the
+		// issued token's real expiry, and inject an expired token.
+		it("counts expires_in from the request, not from a slow response", async () => {
+			vi.useFakeTimers({ toFake: ["Date"] });
+			const requestedAt = Date.now();
+			const assertion = makeAssertion({ exp: Math.floor(requestedAt / 1000) + 3600 });
+			// issued with expires_in 20; the answer takes 10 s to arrive.
+			// Entry must expire at requestedAt + 20 - margin 5 = requestedAt + 15 s.
+			fetchMock
+				.mockImplementationOnce(async () => {
+					vi.setSystemTime(requestedAt + 10_000);
+					return okToken("issued-1", 20);
+				})
+				.mockResolvedValueOnce(okToken("issued-2", 20));
+			const app = mountApp(makeConfig(upstream.baseURL));
+
+			await request(app).get("/").set("Authorization", `Bearer ${assertion}`);
+			vi.setSystemTime(requestedAt + 14_000);
+			await request(app).get("/").set("Authorization", `Bearer ${assertion}`);
+			expect(fetchMock).toHaveBeenCalledTimes(1);
+
+			vi.setSystemTime(requestedAt + 16_000);
+			await request(app).get("/").set("Authorization", `Bearer ${assertion}`);
+			expect(fetchMock).toHaveBeenCalledTimes(2);
+			expect(upstream.received[2].headers.authorization).toBe("Bearer issued-2");
+		});
+
+		it("does not cache at all when the response arrives after expires_in minus the margin", async () => {
+			vi.useFakeTimers({ toFake: ["Date"] });
+			const requestedAt = Date.now();
+			const assertion = makeAssertion({ exp: Math.floor(requestedAt / 1000) + 3600 });
+			fetchMock
+				.mockImplementationOnce(async () => {
+					vi.setSystemTime(requestedAt + 16_000);
+					return okToken("issued-1", 20);
+				})
+				.mockResolvedValueOnce(okToken("issued-2", 20));
+			const app = mountApp(makeConfig(upstream.baseURL));
+
+			await request(app).get("/").set("Authorization", `Bearer ${assertion}`);
+			await request(app).get("/").set("Authorization", `Bearer ${assertion}`);
+
+			expect(fetchMock).toHaveBeenCalledTimes(2);
+			expect(upstream.received.map((r) => r.headers.authorization)).toEqual([
+				"Bearer issued-1",
+				"Bearer issued-2",
+			]);
+		});
+
 		it("never outlives the assertion's exp", async () => {
 			vi.useFakeTimers({ toFake: ["Date"] });
 			const assertion = makeAssertion({ exp: Math.floor(Date.now() / 1000) + 30 });

@@ -18,6 +18,7 @@ import type { NextFunction, Request, Response } from "express";
 import type { ExchangeConfig } from "../../../config/application.schema.mjs";
 import logger from "../../logger.mjs";
 import { parseBearerAssertion } from "./bearer-assertion.mjs";
+import { computeCacheExpiresAt } from "./cache-expiry.mjs";
 import {
 	createJwtBearerClient,
 	JWT_BEARER_GRANT_TYPE,
@@ -62,39 +63,29 @@ export const exchangeCacheKey = (context: ExchangeContext, assertion: string): s
 
 /**
  * When a cached exchange result stops being injected, or `null` for "do not
- * cache": the smallest of the configured TTL, the provider's `expires_in` and
- * the assertion's remaining validity (its unverified `exp`), minus the safety
- * margin.
+ * cache": `computeCacheExpiresAt` with the assertion's unverified `exp` as the
+ * absolute bound —
+ *
+ *   min(requestedAt + ttl, requestedAt + expires_in, exp) - safety margin
  *
  * The unverified `exp` is safe to use here because it can only shorten the
  * lifetime. An assertion without one is not cached at all — there is no
  * validity to bound the result by.
  */
 export const computeExchangeExpiresAt = ({
-	now,
-	ttlSeconds,
-	safetyMarginSeconds,
-	expiresIn,
 	assertionExpiresAt,
+	...rest
 }: {
+	requestedAt: number;
 	now: number;
 	ttlSeconds: number;
 	safetyMarginSeconds: number;
 	expiresIn: number | null;
 	assertionExpiresAt: number | null;
-}): number | null => {
-	if (assertionExpiresAt === null) {
-		return null;
-	}
-	const lifetimeMs =
-		Math.min(
-			ttlSeconds * 1000,
-			expiresIn === null ? Number.POSITIVE_INFINITY : expiresIn * 1000,
-			assertionExpiresAt * 1000 - now,
-		) -
-		safetyMarginSeconds * 1000;
-	return lifetimeMs > 0 ? now + lifetimeMs : null;
-};
+}): number | null =>
+	assertionExpiresAt === null
+		? null
+		: computeCacheExpiresAt({ ...rest, notAfter: assertionExpiresAt * 1000 });
 
 export interface ExchangeHandlerConfig {
 	providerOrigin: string;
@@ -273,8 +264,12 @@ export const createExchangeHandler = (cfg: ExchangeHandlerConfig): ExchangeHandl
 		try {
 			const { value: token, wasWaiter } = await singleFlight.run(cacheKey, async () => {
 				logger.info({ requestId, event: "injection.exchange_fetch" }, "exchanging assertion");
+				// Captured before the request goes out: expires_in is measured
+				// from here, not from however late the response arrives.
+				const requestedAt = Date.now();
 				const result = await client.exchange({ assertion: parsed.assertion, requestId });
 				const expiresAt = computeExchangeExpiresAt({
+					requestedAt,
 					now: Date.now(),
 					ttlSeconds: cfg.tokenCache.ttlSeconds,
 					safetyMarginSeconds: cfg.tokenCache.safetyMarginSeconds,
