@@ -21,6 +21,7 @@ import type { AppConfig } from "../../../config/application.schema.mjs";
 import { createRequestIdMiddleware } from "../../express/requestId.mjs";
 import logger from "../../logger.mjs";
 import { type CookieRejectReason, extractCookie } from "./cookie-extractor.mjs";
+import { createExchangeHandler, type ExchangeHandler } from "./exchange.mjs";
 import {
 	createSessionGrantClient,
 	type SessionGrantClient,
@@ -39,6 +40,8 @@ interface Deps {
 	singleFlight: SingleFlight<string>;
 	grantClient: SessionGrantClient;
 	cfg: InjectionConfig["injection"];
+	/** `null` when `auth.injection.exchange.enabled` is off. */
+	exchange: ExchangeHandler | null;
 }
 
 const computeExpiresAt = (
@@ -84,10 +87,27 @@ const logCookieRejected = (
 const injectionMiddleware =
 	(deps: Deps) =>
 	async (req: Request, res: Response, next: NextFunction): Promise<void> => {
-		const { tokenCache, singleFlight, grantClient, cfg } = deps;
+		const { tokenCache, singleFlight, grantClient, cfg, exchange } = deps;
 		const requestId = (req.headers["x-request-id"] as string | undefined) ?? "";
 		const cookieHeader = req.headers.cookie;
 		const extraction = extractCookie(cookieHeader, cfg.sessionCookieName);
+
+		/**
+		 * With the exchange enabled, an inbound `Authorization` header — any
+		 * scheme, even empty — is never forwarded as received: it is exchanged
+		 * for a first-party token or the request is refused (#90). That also
+		 * leaves `stripInboundAuthorization` nothing to strip. A request without
+		 * the header takes the paths below exactly as it would with the exchange
+		 * disabled.
+		 */
+		if (exchange !== null && req.headers.authorization !== undefined) {
+			await exchange(req, res, next, {
+				requestId,
+				authorization: req.headers.authorization,
+				sessionCookie: extraction.kind,
+			});
+			return;
+		}
 
 		/**
 		 * The two paths that forward without the proxy having minted anything.
@@ -251,6 +271,9 @@ export const createRouter = ({
 	const tokenCache = createTokenCache({ maxEntries: cfg.tokenCache.maxEntries });
 	const singleFlight = createSingleFlight<string>();
 	const grantClient = createSessionGrantClient(cfg);
+	const exchange = cfg.exchange.enabled
+		? createExchangeHandler({ ...cfg, exchange: cfg.exchange })
+		: null;
 
 	router
 		.use(createRequestIdMiddleware())
@@ -265,7 +288,7 @@ export const createRouter = ({
 			);
 			next();
 		})
-		.use(injectionMiddleware({ tokenCache, singleFlight, grantClient, cfg }))
+		.use(injectionMiddleware({ tokenCache, singleFlight, grantClient, cfg, exchange }))
 		.use(
 			proxy(config.upstream.baseURL, {
 				limit: config.http.bodyLimitSize,
