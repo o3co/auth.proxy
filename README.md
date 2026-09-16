@@ -80,7 +80,7 @@ Opt-in, injection mode can also exchange an external credential presented as `Au
 #### Cache behavior
 
 - In-memory, per-instance. Restart and horizontal scale-out produce cold caches. Peak provider load during rollout ≈ `instance count × active sessions`.
-- TTL: `min(auth.injection.tokenCache.ttlSeconds, provider.expires_in) - safetyMarginSeconds`. Default 60s minus 5s safety margin.
+- TTL: `min(auth.injection.tokenCache.ttlSeconds, provider.expires_in) - safetyMarginSeconds`, counted from the instant the grant request was sent — not from the response, so a slow provider cannot push an entry past the token's expiry. Default 60s minus 5s safety margin. A grant whose response arrives after that point is not cached.
 - Every cache miss spends from a rate-limit bucket the whole instance shares — see [Provider rate limiting](#provider-rate-limiting) before lowering the TTL.
 
 #### Revocation and the access-token lifetime

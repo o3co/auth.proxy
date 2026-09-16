@@ -20,6 +20,7 @@ import proxy from "express-http-proxy";
 import type { AppConfig } from "../../../config/application.schema.mjs";
 import { createRequestIdMiddleware } from "../../express/requestId.mjs";
 import logger from "../../logger.mjs";
+import { computeCacheExpiresAt } from "./cache-expiry.mjs";
 import { type CookieRejectReason, extractCookie } from "./cookie-extractor.mjs";
 import { createExchangeHandler, type ExchangeHandler } from "./exchange.mjs";
 import {
@@ -43,19 +44,6 @@ interface Deps {
 	/** `null` when `auth.injection.exchange.enabled` is off. */
 	exchange: ExchangeHandler | null;
 }
-
-const computeExpiresAt = (
-	providerExpiresIn: number | null,
-	cfg: InjectionConfig["injection"],
-): number => {
-	const ttlMs =
-		Math.min(
-			cfg.tokenCache.ttlSeconds * 1000,
-			(providerExpiresIn ?? cfg.tokenCache.ttlSeconds) * 1000,
-		) -
-		cfg.tokenCache.safetyMarginSeconds * 1000;
-	return Date.now() + ttlMs;
-};
 
 /**
  * A session cookie pair the proxy refuses to forward (#23). Unlike the absent
@@ -191,12 +179,21 @@ const injectionMiddleware =
 		try {
 			const { value: token, wasWaiter } = await singleFlight.run(cacheKey, async () => {
 				logger.info({ requestId, event: "injection.grant_fetch" }, "fetching grant");
+				// Captured before the request goes out: expires_in is measured
+				// from here, not from however late the response arrives.
+				const requestedAt = Date.now();
 				const result = await grantClient.exchange({
 					sessionCookieValue,
 					requestId,
 				});
-				const expiresAt = computeExpiresAt(result.expiresIn, cfg);
-				if (expiresAt > Date.now()) {
+				const expiresAt = computeCacheExpiresAt({
+					requestedAt,
+					now: Date.now(),
+					ttlSeconds: cfg.tokenCache.ttlSeconds,
+					safetyMarginSeconds: cfg.tokenCache.safetyMarginSeconds,
+					expiresIn: result.expiresIn,
+				});
+				if (expiresAt !== null) {
 					tokenCache.set(cacheKey, result.accessToken, expiresAt);
 				}
 				logger.info(
