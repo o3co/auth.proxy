@@ -703,6 +703,27 @@ describe("injection router — external credential exchange (#90)", () => {
 	});
 
 	describe("logging", () => {
+		it("does not log a credential a provider echoes back as its error code", async () => {
+			const spies = (["debug", "info", "warn", "error"] as const).map((level) =>
+				vi.spyOn(logger, level),
+			);
+			const app = mountApp(makeConfig(upstream.baseURL));
+			const assertion = makeAssertion();
+			fetchMock
+				.mockResolvedValueOnce(jsonResponse(400, { error: assertion, error_description: assertion }))
+				.mockResolvedValueOnce(jsonResponse(401, { error: "s3cret", error_description: "s3cret" }));
+
+			const first = await request(app).get("/").set("Authorization", `Bearer ${assertion}`);
+			const second = await request(app).get("/").set("Authorization", `Bearer ${assertion}`);
+
+			expect([first.status, second.status]).toEqual([502, 502]);
+			const logged = JSON.stringify(spies.map((spy) => spy.mock.calls));
+			expect(logged).toContain("invalid_error_code");
+			expect(logged).not.toContain(assertion);
+			expect(logged).not.toContain("s3cret");
+			expect(JSON.stringify([first.body, second.body])).not.toContain(assertion);
+		});
+
 		it("never logs the assertion, the issued token or the client secret", async () => {
 			const spies = (["debug", "info", "warn", "error"] as const).map((level) =>
 				vi.spyOn(logger, level),

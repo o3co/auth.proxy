@@ -260,6 +260,27 @@ describe("createJwtBearerClient.exchange", () => {
 			});
 		});
 
+		// The provider's `error` ends up in logs. A malformed or compromised
+		// provider echoing a credential there must not get it logged.
+		it("records only a validated error code, never an echoed credential", async () => {
+			const echoes = [
+				[400, ASSERTION],
+				[400, "s3cret"],
+				[401, "s3cret"],
+				[400, "aaa.bbb.ccc"],
+				[400, "invalid grant"],
+				[400, "x".repeat(65)],
+				[400, 42],
+			] as const;
+			for (const [status, error] of echoes) {
+				fetchMock.mockResolvedValueOnce(jsonResponse(status, { error }));
+				const err = (await exchange().catch((e: unknown) => e)) as JwtBearerError;
+				expect(err, String(error)).toBeInstanceOf(JwtBearerError);
+				expect(err.code, String(error)).toBe("provider_config_error");
+				expect(err.providerError, String(error)).toBe("invalid_error_code");
+			}
+		});
+
 		it("maps a redirect to provider_config_error", async () => {
 			fetchMock.mockResolvedValueOnce(
 				new Response(null, { status: 302, headers: { Location: "https://elsewhere.example" } }),

@@ -14,6 +14,7 @@
  * limitations under the License.
  */
 import { clientSecretBasic } from "../../oauth/client-secret-basic.mjs";
+import { sanitizeErrorCode } from "./provider-error.mjs";
 import { buildTokenUrl, parseJsonBody } from "./session-grant-client.mjs";
 
 /** RFC 7523 section 2.1. */
@@ -49,7 +50,10 @@ export class JwtBearerError extends Error {
 		public readonly status: number,
 		message: string,
 		public readonly retryAfter: string | null = null,
-		/** The provider's RFC 6749 section 5.2 `error`, for logs; never the assertion. */
+		/**
+		 * The provider's RFC 6749 section 5.2 `error`, for logs — validated by
+		 * `sanitizeErrorCode`, so never a credential the provider echoed back.
+		 */
 		public readonly providerError: string | null = null,
 	) {
 		super(message);
@@ -177,8 +181,9 @@ export const createJwtBearerClient = (cfg: JwtBearerClientConfig): JwtBearerClie
 
 			if (resp.status === 400 || resp.status === 401) {
 				const data = await parseJsonBody(resp);
-				const providerError = typeof data?.error === "string" ? data.error : null;
-				if (resp.status === 400 && providerError === "invalid_grant") {
+				const rawError = data?.error;
+				const providerError = sanitizeErrorCode(rawError, [assertion, cfg.clientSecret]);
+				if (resp.status === 400 && rawError === "invalid_grant") {
 					throw new JwtBearerError(
 						"credential_rejected",
 						401,
@@ -187,7 +192,7 @@ export const createJwtBearerClient = (cfg: JwtBearerClientConfig): JwtBearerClie
 						providerError,
 					);
 				}
-				if (resp.status === 400 && providerError !== null && NOT_PERMITTED.has(providerError)) {
+				if (resp.status === 400 && typeof rawError === "string" && NOT_PERMITTED.has(rawError)) {
 					throw new JwtBearerError(
 						"exchange_not_permitted",
 						403,
