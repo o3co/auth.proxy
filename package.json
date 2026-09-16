@@ -31,7 +31,7 @@
     "supertest": "^7.2.2",
     "tsx": "^4.23.13",
     "typescript": "5.9.x",
-    "vitest": "^4.1.11"
+    "vitest": "^5.0.0"
   },
   "scripts": {
     "build": "tsc --build",
