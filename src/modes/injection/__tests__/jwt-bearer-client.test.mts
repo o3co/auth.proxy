@@ -304,6 +304,53 @@ describe("createJwtBearerClient.exchange", () => {
 			});
 		}
 
+		// The mapping is unchanged; the provider's error code is now kept for
+		// the log line, validated like every other one.
+		for (const [status, error] of [
+			[503, "temporarily_unavailable"],
+			[500, "server_error"],
+			[429, "slow_down"],
+			[418, "teapot"],
+		] as const) {
+			it(`keeps the validated error code of a ${status} response`, async () => {
+				fetchMock.mockResolvedValueOnce(
+					jsonResponse(status, { error, error_description: "busy" }, { "Retry-After": "30" }),
+				);
+				await expect(exchange()).rejects.toMatchObject({
+					code: "provider_unavailable",
+					status: 502,
+					retryAfter: "30",
+					providerError: error,
+				});
+			});
+		}
+
+		it("records no code for a non-JSON or oversized error body, and never an echoed credential", async () => {
+			fetchMock
+				.mockResolvedValueOnce(new Response("<html>bad gateway</html>", { status: 502 }))
+				.mockResolvedValueOnce(
+					jsonResponse(503, { error: "temporarily_unavailable", pad: "a".repeat(20_000) }),
+				)
+				.mockResolvedValueOnce(jsonResponse(503, { error: ASSERTION }))
+				.mockResolvedValueOnce(
+					jsonResponse(400, { error: "invalid_grant", pad: "a".repeat(20_000) }),
+				);
+
+			for (const expected of [null, null, "invalid_error_code"]) {
+				await expect(exchange()).rejects.toMatchObject({
+					code: "provider_unavailable",
+					status: 502,
+					providerError: expected,
+				});
+			}
+			// an oversized 400 body is not read, so it is a configuration error
+			// with no code rather than a credential rejection
+			await expect(exchange()).rejects.toMatchObject({
+				code: "provider_config_error",
+				providerError: null,
+			});
+		});
+
 		it("maps an unexpected 4xx to provider_unavailable", async () => {
 			fetchMock.mockResolvedValueOnce(jsonResponse(418, {}));
 			await expect(exchange()).rejects.toMatchObject({

@@ -60,3 +60,53 @@ export const sanitizeErrorCode = (
 	}
 	return value;
 };
+
+/** How much of a provider error body is read before giving up on it. */
+export const MAX_ERROR_BODY_BYTES = 16 * 1024;
+
+/**
+ * A provider error response's body as a JSON object, or `null` — read at most
+ * `maxBytes` of it.
+ *
+ * An error body is only ever consulted for its diagnostic `error` code, so
+ * there is no reason to buffer an unbounded one: a body over the limit is
+ * abandoned (the stream is cancelled) rather than read to the end. An empty,
+ * non-JSON or non-object body, or a stream that fails mid-read, is `null` —
+ * a missing diagnostic, never an exception that would change how the response
+ * is answered.
+ */
+export const readBoundedJsonObject = async (
+	resp: Response,
+	maxBytes: number = MAX_ERROR_BODY_BYTES,
+): Promise<Record<string, unknown> | null> => {
+	if (resp.body === null) {
+		return null;
+	}
+	const reader = resp.body.getReader();
+	const chunks: Uint8Array[] = [];
+	let total = 0;
+	try {
+		for (;;) {
+			const { done, value } = await reader.read();
+			if (done) {
+				break;
+			}
+			total += value.byteLength;
+			if (total > maxBytes) {
+				await reader.cancel().catch(() => undefined);
+				return null;
+			}
+			chunks.push(value);
+		}
+	} catch {
+		return null;
+	}
+	try {
+		const parsed: unknown = JSON.parse(Buffer.concat(chunks).toString("utf8"));
+		return typeof parsed === "object" && parsed !== null && !Array.isArray(parsed)
+			? (parsed as Record<string, unknown>)
+			: null;
+	} catch {
+		return null;
+	}
+};
