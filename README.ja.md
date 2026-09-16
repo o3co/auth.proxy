@@ -162,7 +162,7 @@ grant_type=urn:ietf:params:oauth:grant-type:jwt-bearer&assertion=<JWT>[&scope=�
 | 502 | `provider_unavailable` | プロバイダーの `5xx` または `429`、ネットワークエラー、タイムアウト、想定外のステータス。プロバイダーの `Retry-After` はそのまま透過する。 |
 | 502 | `provider_invalid_response` | `access_token` の無い `200`、または `token_type` が `Bearer` 以外（例: `DPoP`）の `200`。 |
 
-各結果は `injection.exchange_*` イベントとしてログされる（`exchange_fetch`、`exchange_success`、`exchange_cache_hit`、warn の `exchange_credential_ambiguous`、`reason` が `scheme` / `format` の `exchange_credential_unsupported`、`exchange_issuer_refused`、`exchange_rejected`、warn の `exchange_not_permitted`、error の `exchange_provider_config_error` / `exchange_provider_unavailable` / `exchange_provider_invalid_response`。プロバイダーの `error` コードがあれば付く）。アサーション、発行されたトークン、クライアントシークレット、未検証の `iss` はログに出ない。
+各結果は `injection.exchange_*` イベントとしてログされる（`exchange_fetch`、`exchange_success`、`exchange_cache_hit`、warn の `exchange_credential_ambiguous`、`reason` が `scheme` / `format` の `exchange_credential_unsupported`、`exchange_issuer_refused`、`exchange_rejected`、warn の `exchange_not_permitted`、error の `exchange_provider_config_error` / `exchange_provider_unavailable` / `exchange_provider_invalid_response`。プロバイダーの `error` コードがあれば付く）。アサーション、発行されたトークン、クライアントシークレット、未検証の `iss` はログに出ない。プロバイダーの `error` は RFC 6749 のエラーコードの形 — 空白なし、64 文字以内、JWT の形でない、アサーションやシークレットを含まない — のときだけそのままログされ、それ以外は `invalid_error_code` としてログされる。`error_description` はログに出ない。
 
 **発行者プレフィルター。** `allowedIssuers`（デフォルトは空 = 無効）は、未検証の `iss` が一覧に無いアサーションを、プロバイダーを呼ぶ前に拒否する — デプロイが想定しない発行者からのトラフィックを落とすための手段である。交換の安全性に必須ではなく、プロバイダーの検証を置き換えることもない。一覧にある発行者もプロバイダーが完全に検証し、一覧に無いものはプロバイダーの拒否と同じ `credential_rejected` を受け取る。環境変数では `INJECTION_SCOPE` と同様に空白区切りで指定する。
 
