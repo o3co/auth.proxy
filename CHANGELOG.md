@@ -80,9 +80,12 @@ and this project adheres to [Semantic Versioning](https://semver.org/spec/v2.0.0
   `maxEntries` applies to each cache separately. An entry expires at
   `min(sent + ttlSeconds, sent + expires_in, assertion exp) - safetyMarginSeconds`,
   where `sent` is the instant the token request went out. An assertion
-  without `exp` is not cached, and failures are never cached. Every exchange
-  cache miss spends from the same per-instance `/oauth/token` rate-limit
-  bucket as a session grant.
+  without `exp` is not cached, and failures are never cached. The proxy keeps
+  no rate-limit budget of its own: each token request the exchange sends — one
+  per cache miss, after concurrent identical requests are coalesced — reaches
+  the provider's `/oauth/token` and counts against the provider's `token`
+  rate limit, as a session grant does, so size that budget for the proxy's
+  traffic.
 
 - **An ID-JAG is not replay-checked while its exchange is cached.** The
   provider accepts each ID-JAG `jti` once, when the assertion is submitted,
