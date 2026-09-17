@@ -93,7 +93,7 @@ With UserSession tracking configured, the provider's `session` grant requires a 
 
 So, for an operator:
 
-- **Keep the provider's access-token lifetime short in a BFF topology.** `oauth.accessToken.defaultExpiresIn` (formerly `expiresIn`, still accepted as a deprecated alias) bounds replay exposure at offline validators. The proxy owns the cookie-to-token exchange, so a short lifetime costs a grant call while the browser session remains valid.
+- **Keep the provider's access-token lifetime short in a BFF topology.** `oauth.accessToken.expiresIn` bounds replay exposure at offline validators. The proxy owns the cookie-to-token exchange, so a short lifetime costs a grant call while the browser session remains valid.
 - **A downstream service that validates the JWT offline cannot learn about a logout at all.** Signature, `iss`, `aud` and `exp` are everything an offline validator checks, and none of them changes when a session ends. For such a service the revocation window *is* the token lifetime, with nothing available to shorten it.
 - **Introspection-based validation is the only mode that can observe a revocation.** A resource server — or an `auth.mode = "validation"` proxy in front of one — calling `POST /oauth/introspect` asks the provider on every cache miss, so a token the provider has stopped vouching for comes back `active: false` within that introspection cache TTL.
 
@@ -193,7 +193,7 @@ Each outcome is logged as an `injection.exchange_*` event (`exchange_fetch`, `ex
 
 `min(sent + tokenCache.ttlSeconds, sent + provider expires_in, assertion exp) − tokenCache.safetyMarginSeconds`
 
-where `sent` is the instant the token request went out. `ttlSeconds` and `expires_in` are counted from the request, not from the response, so a slow provider cannot push an entry past the issued token's expiry. An assertion without `exp`, or an entry that would already have expired by the time the response arrives, is not cached. The assertion's `exp` is read unverified, which is safe because it can only shorten the lifetime. The provider also caps a jwt-bearer token's lifetime at the assertion's remaining validity; the proxy's cache bound holds independently of that.
+where `sent` is the instant the token request went out. `ttlSeconds` and `expires_in` are counted from the request, not from the response, so a slow provider cannot push an entry past the issued token's expiry. An assertion without `exp`, or an entry that would already have expired by the time the response arrives, is not cached. The assertion's `exp` is read unverified, which is safe because it can only shorten the lifetime. A provider that includes [auth.provider#588](https://github.com/o3co/auth.provider/pull/588) also caps a jwt-bearer token's lifetime at the assertion's remaining validity; the proxy's cache bound holds independently of that.
 
 **Revocation delay.** Expiry bounds do not propagate revocation. Revoking the external credential, its issuer's registration or the proxy's client does not reach a token already issued, which stays valid at offline validators until its own `exp` (see [Revocation and the access-token lifetime](#revocation-and-the-access-token-lifetime)), nor a cached result, which this proxy keeps injecting for up to the cache lifetime above without asking the provider again. A deployment that needs immediate revocation needs an explicit mechanism — short issued-token lifetimes and introspection-based validation upstream.
 

@@ -5,6 +5,141 @@ All notable changes to this project are documented in this file.
 The format is based on [Keep a Changelog](https://keepachangelog.com/en/1.1.0/),
 and this project adheres to [Semantic Versioning](https://semver.org/spec/v2.0.0.html).
 
+## [0.6.0] — 2026-09-17
+
+### Added
+
+- **Injection mode can exchange an external credential for a first-party
+  token (#90).** Opt-in with `auth.injection.exchange.enabled`
+  (`INJECTION_EXCHANGE_ENABLED`, `"true"` / `"false"`, default `false`). A
+  request that presents `Authorization: Bearer <JWT>` instead of a session
+  cookie is submitted to the provider's `POST /oauth/token` as an RFC 7523
+  jwt-bearer assertion, and the issued token replaces the header, so only a
+  first-party token reaches the upstream. The original credential is never
+  forwarded — not on success, refusal, outage or a malformed header — and no
+  failure falls back to the session path. The proxy submits the assertion
+  unchanged and does not decide trust: whatever auth.provider's
+  `AssertionIssuerRegistry` admits for the issuer applies, which covers plain
+  RFC 7523 assertions and the ID-JAG profile. It is not RFC 8693 token
+  exchange, and it produces no `act` delegation.
+
+  Disabled, injection mode behaves exactly as before, and a configuration
+  without the `exchange` block parses as disabled, so upgrading needs no
+  action. Turning it on needs:
+
+  - `INJECTION_EXCHANGE_CLIENT_ID` and `INJECTION_EXCHANGE_CLIENT_SECRET`
+    (`auth.injection.exchange.clientId` / `clientSecret`). The proxy
+    authenticates with `client_secret_basic`, with the RFC 6749 §2.3.1 encoding
+    validation mode already uses, and boot fails naming whichever key is
+    missing. `INJECTION_EXCHANGE_SCOPE`, `INJECTION_EXCHANGE_AUDIENCE` and
+    `INJECTION_EXCHANGE_RESOURCE` are sent only when set.
+    `INJECTION_EXCHANGE_ALLOWED_ISSUERS` (whitespace-separated, like
+    `INJECTION_SCOPE`; empty = off) is an optional prefilter that refuses an
+    unlisted, unverified `iss` before any provider call; in HOCON a list entry
+    that is empty or contains whitespace fails boot.
+  - The proxy registered at the provider as a confidential client whose
+    `allowedGrantTypes` names `urn:ietf:params:oauth:grant-type:jwt-bearer`,
+    and listed in `allowedClients` of every issuer entry that names such a
+    list. An ID-JAG must carry the proxy's client as its `client_id`.
+  - For an issued token that never outlives its assertion, a provider that
+    includes [auth.provider#588](https://github.com/o3co/auth.provider/pull/588),
+    which caps a jwt-bearer token at the assertion's expiry. Without it the
+    token can outlive the assertion at offline validators. The proxy's own
+    cache is bounded by the assertion's `exp` either way.
+
+  With the exchange enabled, an inbound `Authorization` is never passed
+  through, so `stripInboundAuthorization` has nothing left to strip. The
+  request shape decides the path, and neither refusal calls the provider:
+
+  - A session cookie together with any `Authorization` is
+    `400 credential_ambiguous`. The cookie counts as present whenever the
+    header carries `auth.injection.sessionCookieName`, even in a form the
+    cookie grammar check refuses.
+  - An `Authorization` that is not `Bearer <JWS compact JWT>` — another
+    scheme, an opaque token, a malformed JWT, an empty value — is
+    `401 credential_unsupported`.
+
+  A cookie alone, or no credential, takes the existing path. Exchange
+  refusals use the session path's `{ error, error_description }` shape:
+  `401 credential_rejected` (an `iss` outside `allowedIssuers`, or provider
+  `invalid_grant`), `403 exchange_not_permitted` (`invalid_scope`,
+  `invalid_target`, `unauthorized_client`), and `502` with
+  `provider_config_error` (provider `401`, any other `400`, or a redirect),
+  `provider_unavailable` (`5xx` / `429` with `Retry-After` passed through,
+  network error, timeout) or `provider_invalid_response` (no `access_token`,
+  or a `token_type` other than `Bearer`, such as `DPoP`). Each outcome is
+  logged as an `injection.exchange_*` event; `exchange_credential_ambiguous`
+  and `exchange_not_permitted` are at warn, and the ambiguous case carries
+  `metric: auth_proxy_injection_exchange_credential_ambiguous`. The assertion,
+  the issued token, the client secret and the unverified `iss` are never
+  logged.
+
+  A successful exchange is cached per instance in its own cache and
+  single-flight, never shared with the session cache, but sized and timed by
+  the same `auth.injection.tokenCache` settings and `timeoutMs`:
+  `maxEntries` applies to each cache separately. An entry expires at
+  `min(sent + ttlSeconds, sent + expires_in, assertion exp) - safetyMarginSeconds`,
+  where `sent` is the instant the token request went out. An assertion
+  without `exp` is not cached, and failures are never cached. The proxy keeps
+  no rate-limit budget of its own: each token request the exchange sends — one
+  per cache miss, after concurrent identical requests are coalesced — reaches
+  the provider's `/oauth/token` and counts against the provider's `token`
+  rate limit, as a session grant does, so size that budget for the proxy's
+  traffic.
+
+- **An ID-JAG is not replay-checked while its exchange is cached.** The
+  provider accepts each ID-JAG `jti` once, when the assertion is submitted,
+  and a cache hit submits nothing. Within the cache lifetime, whoever
+  presents the same assertion is served the cached token. Treat the
+  assertion as a bearer credential for that window, which
+  `tokenCache.ttlSeconds` bounds. After the entry expires, or at another
+  proxy instance, the same ID-JAG is a replay the provider refuses
+  (`401 credential_rejected`), and the client must obtain a fresh one.
+  Expiry bounds do not propagate revocation either: revoking the external
+  credential, its issuer's registration or the proxy's client reaches
+  neither a token already issued nor a result cached within that lifetime.
+
+### Security
+
+- **The exchange client does not follow redirects.** A token endpoint that
+  answers with a redirect gets `502 provider_config_error`, so the
+  assertion and the client secret are never re-sent to another location.
+
+- **Provider-controlled error text is validated before it is logged or
+  returned.** On the session path, a provider `400` other than
+  `invalid_grant` had its `error_description` relayed verbatim as the
+  `provider_config_error` description, in the response and in the log, so a
+  provider that echoed the session cookie put it in both. The description is
+  now used only when it is a well-formed RFC 6749 `error_description`: the
+  RFC charset, at most 256 characters, nothing JWT-shaped, and not containing
+  the session cookie value. Otherwise the existing generic
+  `provider rejected proxy configuration (client_id or scope)` is returned. A
+  client or alert that matched on a provider's own wording there may now see
+  the generic one. The exchange logs the provider's `error` code only when
+  it has that shape (no whitespace, at most 64 characters, nothing
+  JWT-shaped, not echoing the assertion or client secret), records
+  `invalid_error_code` otherwise, and never logs `error_description`.
+  Provider error bodies are read up to 16 KiB on both paths; a longer body
+  is abandoned and treated as having no diagnostic.
+
+### Fixed
+
+- **A slow provider could make a cached session token outlive the token
+  itself.** The session cache lifetime,
+  `min(ttlSeconds, expires_in) - safetyMarginSeconds`, was counted from when
+  the grant response arrived. `expires_in` runs from issuance, so a slow
+  response pushed the entry past the token's real expiry by the whole
+  response time, and the proxy went on injecting an expired token. The
+  lifetime is now counted from the instant the grant request was sent, and a
+  grant whose response arrives after that point is not cached. Behaviour at
+  normal latency is unchanged. The exchange cache uses the same anchor.
+
+### Changed
+
+- Runtime dependency: `zod` 4.5 → 4.6 (#87). Development-only, with no effect
+  on the built proxy: `vitest` 4 → 5 (#88), `@biomejs/biome` 2.5.11 → 2.5.13
+  and `@types/node` 26.4 → 26.5 (#86).
+
 ## [0.5.1] — 2026-09-06
 
 ### Fixed
