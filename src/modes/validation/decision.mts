@@ -16,7 +16,7 @@
 
 import { extractBearerToken } from "../../express/bearer.mjs";
 import type { Logger } from "../../logger.mjs";
-import { IntrospectHttpError, type IntrospectionResult } from "./introspect.mjs";
+import { IntrospectHttpError, type IntrospectionResult } from "./introspection-client.mjs";
 
 /** The two header values the decision reads — plain strings, no request object. */
 export interface ValidationInputs {
