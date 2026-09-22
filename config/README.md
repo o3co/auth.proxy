@@ -27,7 +27,7 @@ In: `application.conf` plus the process environment — every `${?NAME}` substit
 | `auth.injection.timeoutMs` | `auth.injection` | `.default()` |
 | `auth.injection.exchange.*` | `auth.injection.exchange` | `strictBoolean`, `optionalString`, `whitespaceSeparatedList`; an absent block is `{}` via `.prefault` on [`exchangeSchema`](application.schema.mts) |
 
-A third copy of `cacheMaxEntries` / `timeoutMs` exists as parameter defaults of [`introspect`](../src/modes/validation/introspect.mts); #95 tracks removing it. Keys whose default lives **only** in the conf (the schema validates but has no `.default()`): `auth.validation.introspect.url`, `auth.injection.providerOrigin`, `auth.injection.sessionCookieName`, `upstream.baseURL`. Keys the conf sets to a placeholder the schema refuses, so they are effectively required: `auth.mode` (`null` in the conf; the `discriminatedUnion` has no default), `auth.injection.clientId` (`""` in the conf; `.min(1)`), `auth.injection.scope` (`""` in the conf; `.min(1)`).
+Those two had a third copy as parameter defaults of the old fused `introspect`; #95 F23 removed it, and the schema is now the only place they are declared. Keys whose default lives **only** in the conf (the schema validates but has no `.default()`): `auth.validation.introspect.url`, `auth.injection.providerOrigin`, `auth.injection.sessionCookieName`, `upstream.baseURL`. Keys the conf sets to a placeholder the schema refuses, so they are effectively required: `auth.mode` (`null` in the conf; the `discriminatedUnion` has no default), `auth.injection.clientId` (`""` in the conf; `.min(1)`), `auth.injection.scope` (`""` in the conf; `.min(1)`).
 
 ## Dependencies
 
@@ -59,7 +59,7 @@ A violation is a `validate` error at boot; the process does not start. The offen
 | `http.pathPrefix` | the mode-router mount in [`app.mts`](../src/app.mts) |
 | `http.bodyLimitSize`, `upstream.baseURL` | [`createUpstreamProxy`](../src/router/upstream.mts) via `UpstreamStageConfig`, which both mode routers mount |
 | `auth.mode` | [`resolveRouter`](../src/app-internal.mts), and the guard at the top of each mode router |
-| `auth.validation.*` | [validation `createRouter`](../src/modes/validation/router.mts), whose [`bindIntrospect`](../src/modes/validation/router.mts) closes the concrete `introspect` over the URL, cache bounds, timeout and client credentials |
+| `auth.validation.*` | [validation `createRouter`](../src/modes/validation/router.mts), which builds the introspector from it ([`buildIntrospector`](../src/modes/validation/router.mts)): the client from `introspect.url`, `introspect.timeoutMs` and the resolved `client` credentials, the cache from `introspect.cacheMaxEntries`, and `introspect.cacheTtlSec` between them |
 | `auth.injection.*` | [injection `createRouter`](../src/modes/injection/router.mts), which hands the whole object to `createSessionGrantClient` (reads the five fields of [`SessionGrantClientConfig`](../src/modes/injection/session-grant-client.mts)) and, with the exchange on, builds the exchange's deps from it ([`buildExchangeDeps`](../src/modes/injection/router.mts): the jwt-bearer client from `providerOrigin`, `timeoutMs` and the `exchange` block, the key's context by [`exchangeContext`](../src/modes/injection/exchange.mts), the cache policy from `tokenCache`) |
 | `auth.injection.exchange` | [`buildExchangeDeps`](../src/modes/injection/router.mts), which builds the jwt-bearer client from it and hands `allowedIssuers` to [`decideExchange`](../src/modes/injection/exchange.mts) |
 
