@@ -19,14 +19,18 @@ describe("buildTokenUrl", () => {
 		expect(buildTokenUrl(origin)).toBe(expected);
 	});
 
-	it("replaces a path rather than appending to it, which is why the schema validates origin-only", () => {
-		// The leading slash makes the path absolute against the origin. A
-		// provider mounted under a prefix would need a different builder, and
-		// the config schema is what keeps that case from arriving here.
-		expect(buildTokenUrl("http://provider.example/base")).toBe(
-			"http://provider.example/oauth/token",
-		);
-	});
+	it.each(["http://provider.example/base", "http://provider.example/base/"])(
+		"replaces the path of %s rather than appending to it, which is why the schema validates origin-only",
+		(origin) => {
+			// The leading slash makes the path absolute against the origin. The
+			// trailing-slash case is the one that tells that apart: a relative
+			// specifier would resolve to /base/oauth/token there and to
+			// /oauth/token without the slash. A provider mounted under a prefix
+			// would need a different builder, and the config schema is what keeps
+			// that case from arriving here.
+			expect(buildTokenUrl(origin)).toBe("http://provider.example/oauth/token");
+		},
+	);
 });
 
 describe("parseJsonBody", () => {

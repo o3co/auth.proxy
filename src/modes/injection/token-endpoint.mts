@@ -41,6 +41,8 @@ export const buildTokenUrl = (providerOrigin: string): string => {
 export const parseJsonBody = async (resp: Response): Promise<Record<string, unknown> | null> => {
 	try {
 		const text = await resp.text();
+		// A fast path, not what makes this total: `JSON.parse("")` throws and the
+		// `catch` below answers `null` for it just the same.
 		if (text.length === 0) return null;
 		const parsed = JSON.parse(text);
 		return typeof parsed === "object" && parsed !== null
