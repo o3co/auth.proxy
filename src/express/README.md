@@ -16,7 +16,7 @@ Transport helpers for the Express layer. They read and normalise inbound headers
 
 ## Inputs and outputs
 
-- `bearer.mts` — in: the header string; out: `{ token, raw }`. `raw` ("for forwarding it on unchanged") is not read anywhere in `src/` outside tests (F15; #95 tracks using it or dropping it).
+- `bearer.mts` — in: the header string; out: `{ token }`. Validation is its only caller; what that path forwards is `req.headers`, which it does not touch, so the header as received was never worth carrying alongside the token (F15).
 - `requestId.mts` — in: `req.headers[<header>]` (`string | string[]`); out: the same key normalised to one non-empty string, and the response header. Default header `x-request-id`, compared lowercased as Node stores it (`headerKey` in [`createRequestIdMiddleware`](requestId.mts)).
 
 ## Dependencies
@@ -52,4 +52,4 @@ Nothing to fail and nothing to release: no I/O, no timers, no state. The `header
 | [`__tests__/bearer.test.mts`](__tests__/bearer.test.mts) | well-formed extraction, absent and empty headers, case-sensitive scheme (``is case-sensitive on the scheme (RFC 6750 spells it `Bearer`)``), other schemes, no token, double space, trailing content. |
 | [`__tests__/requestId.test.mts`](__tests__/requestId.test.mts) | generation, reuse, echo on the response, custom header name, single `next`, id shape, duplicated header, empty header, uniqueness. |
 
-Not tested: the mount order (F17); `BearerToken.raw` is unused (F15); that the forwarded `Authorization` equals the inbound bytes (F14) is documented, not tested.
+Not tested: the mount order (F17). That the forwarded `Authorization` equals the inbound bytes (F14) is pinned on the validation path since #101; on the injection path what goes upstream is whatever the outcome left in `req.headers` — the minted token, nothing, or the inbound bytes — which [`src/modes/injection`](../modes/injection/README.md) documents as the three-way it is.

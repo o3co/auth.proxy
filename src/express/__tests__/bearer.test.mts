@@ -15,7 +15,6 @@ describe("extractBearerToken", () => {
 	it("extracts the token from a well-formed header", () => {
 		expect(extractBearerToken("Bearer abc123")).toEqual({
 			token: "abc123",
-			raw: "Bearer abc123",
 		});
 	});
 
@@ -48,7 +47,6 @@ describe("extractBearerToken", () => {
 	it("keeps only the first token when the header carries trailing content", () => {
 		expect(extractBearerToken("Bearer abc123 extra")).toEqual({
 			token: "abc123",
-			raw: "Bearer abc123 extra",
 		});
 	});
 });
