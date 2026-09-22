@@ -1,3 +1,4 @@
+import { createHash } from "node:crypto";
 import type { IncomingMessage, Server, ServerResponse } from "node:http";
 import http from "node:http";
 import type { AddressInfo } from "node:net";
@@ -8,6 +9,8 @@ import type { AppConfig } from "../../../../config/application.schema.mjs";
 import type { Logger } from "../../../logger.mjs";
 import logger from "../../../logger.mjs";
 import { createRouter } from "../router.mjs";
+import { createSingleFlight, type SingleFlight } from "../single-flight.mjs";
+import { createTokenCache } from "../token-cache.mjs";
 
 type UpstreamRecorder = {
 	server: Server;
@@ -567,5 +570,71 @@ describe("injection router", () => {
 			expect(eventsOf(warnSpy)).toContain("injection.authorization_override");
 			expect(eventsOf(warnSpy)).not.toContain("injection.inbound_authorization_stripped");
 		});
+	});
+
+	it("accepts injected deps: a supplied grant client and logger replace fetch and the singleton (#95 F4)", async () => {
+		const grantClient = {
+			exchange: vi.fn(async () => ({ accessToken: "tok-injected-dep", expiresIn: 120 })),
+		};
+		const injected = {
+			debug: vi.fn<Logger["debug"]>(),
+			info: vi.fn<Logger["info"]>(),
+			warn: vi.fn<Logger["warn"]>(),
+			error: vi.fn<Logger["error"]>(),
+		};
+		const singletonInfo = vi.spyOn(logger, "info");
+		const singletonWarn = vi.spyOn(logger, "warn");
+		const app = express();
+		app.use(createRouter({ config: makeConfig(upstream.baseURL), deps: { grantClient, logger: injected } }));
+
+		const res = await request(app).get("/any").set("Cookie", "sid=s1");
+
+		expect(res.status).toBe(204);
+		expect(upstream.received[0].headers.authorization).toBe("Bearer tok-injected-dep");
+		expect(fetchMock).not.toHaveBeenCalled();
+		expect(grantClient.exchange).toHaveBeenCalledWith({
+			sessionCookieValue: "s1",
+			requestId: expect.any(String),
+		});
+		expect(eventsOf(injected.info)).toContain("injection.grant_success");
+		expect(injected.info.mock.calls.map((call) => call[1])).toContain("incoming request");
+		expect(singletonInfo).not.toHaveBeenCalled();
+		expect(singletonWarn).not.toHaveBeenCalled();
+	});
+
+	it("accepts an injected tokenCache: a pre-seeded entry is a hit with no grant client call (#95 F4)", async () => {
+		const tokenCache = createTokenCache({ maxEntries: 10 });
+		tokenCache.set(createHash("sha256").update("s1").digest("hex"), "tok-seeded", Date.now() + 60_000);
+		const grantClient = { exchange: vi.fn() };
+		const app = express();
+		app.use(createRouter({ config: makeConfig(upstream.baseURL), deps: { tokenCache, grantClient } }));
+
+		const res = await request(app).get("/any").set("Cookie", "sid=s1");
+
+		expect(res.status).toBe(204);
+		expect(upstream.received[0].headers.authorization).toBe("Bearer tok-seeded");
+		expect(grantClient.exchange).not.toHaveBeenCalled();
+		expect(fetchMock).not.toHaveBeenCalled();
+	});
+
+	it("accepts an injected single flight: the supplied run is what coalesces the grant call (#95 F4)", async () => {
+		const real = createSingleFlight<string>();
+		const singleFlight: SingleFlight<string> = {
+			run: vi.fn(real.run),
+			_sizeForTesting: real._sizeForTesting,
+		};
+		fetchMock.mockResolvedValueOnce(okGrantResponse("tok-flight"));
+		const app = express();
+		app.use(createRouter({ config: makeConfig(upstream.baseURL), deps: { singleFlight } }));
+
+		const res = await request(app).get("/any").set("Cookie", "sid=s1");
+
+		expect(res.status).toBe(204);
+		expect(upstream.received[0].headers.authorization).toBe("Bearer tok-flight");
+		expect(singleFlight.run).toHaveBeenCalledTimes(1);
+		expect(singleFlight.run).toHaveBeenCalledWith(
+			createHash("sha256").update("s1").digest("hex"),
+			expect.any(Function),
+		);
 	});
 });
