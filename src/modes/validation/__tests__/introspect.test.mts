@@ -122,6 +122,25 @@ describe("createIntrospector", () => {
 			expect(introspect).toHaveBeenCalledTimes(4);
 		});
 
+		it("evicts once, not twice, when two concurrent misses on one token both write (#95 F5)", async () => {
+			// There is no single-flight here (invariant 7), so both requests call
+			// the provider and both write. The second write is for a key the cache
+			// already holds and takes no room, where the fused function this
+			// replaced would have dropped a second live entry for it.
+			const { introspector, cache, introspect } = build({ maxEntries: 2 });
+			introspect.mockResolvedValue({ active: true });
+			await introspector("older", "r1");
+			await introspector("newer", "r2");
+			expect(cache.size()).toBe(2);
+
+			await Promise.all([introspector("fresh", "r3"), introspector("fresh", "r4")]);
+
+			expect(cache.size()).toBe(2);
+			expect(cache.get(sha256("older"))).toBeNull();
+			expect(cache.get(sha256("newer"))).not.toBeNull();
+			expect(cache.get(sha256("fresh"))).not.toBeNull();
+		});
+
 		it("caches a plain active: false, which is the provider's answer about the token", async () => {
 			const { introspector, cache, introspect } = build();
 			introspect.mockResolvedValueOnce({ active: false });

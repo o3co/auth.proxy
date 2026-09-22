@@ -31,11 +31,12 @@ import type { IntrospectionResult } from "./introspection-client.mjs";
  * rather than by use.
  *
  * Writing a key the map already holds evicts nothing: it cannot push the map
- * past its bound, and the fused function this replaced would have dropped an
- * unrelated live entry for it. That was unreachable there — a write only ever
- * followed a miss, and a stale duplicate is swept first — and it stays
- * unreachable through `createIntrospector`, but this interface is a caller's
- * to use directly now.
+ * past its bound, and the fused function this replaced dropped an unrelated
+ * live entry for it. That is a deliberate difference, and it is reachable —
+ * with no single-flight on this path, two requests for one token can both
+ * miss, both call the provider and both write, and the second write is the
+ * duplicate. Where the old function evicted a second live entry for it, this
+ * one evicts none.
  */
 export interface IntrospectionCache {
 	get(key: string): IntrospectionResult | null;
