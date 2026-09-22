@@ -15,7 +15,6 @@
     "cross-env": "10.1.x",
     "express": "^5.2.1",
     "express-http-proxy": "^2.1.2",
-    "jsonwebtoken": "9.0.x",
     "pino": "^10.3.1",
     "zod": "^4.6.2"
   },
@@ -24,7 +23,6 @@
     "@types/cors": "^2.8.19",
     "@types/express": "^5.0.6",
     "@types/express-http-proxy": "^1.6.7",
-    "@types/jsonwebtoken": "^9.0.10",
     "@types/node": "26.5.x",
     "@types/supertest": "^7.2.1",
     "debug": "4.4.3",

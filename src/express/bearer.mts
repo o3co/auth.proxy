@@ -5,8 +5,6 @@
 export interface BearerToken {
 	/** The credential itself, with the scheme stripped. */
 	token: string;
-	/** The header as received, for forwarding it on unchanged. */
-	raw: string;
 }
 
 /**
@@ -24,5 +22,5 @@ export function extractBearerToken(header: string | undefined): BearerToken | nu
 	if (!header) return null;
 	const [type, token] = header.split(" ");
 	if (type !== "Bearer" || !token) return null;
-	return { token, raw: header };
+	return { token };
 }
