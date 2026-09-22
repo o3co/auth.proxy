@@ -14,129 +14,90 @@
  * limitations under the License.
  */
 import crypto from "node:crypto";
-import { type ClientCredentials, clientSecretBasic } from "../../oauth/client-secret-basic.mjs";
+import type { Introspector } from "./decision.mjs";
+import type { IntrospectionCache } from "./introspection-cache.mjs";
+import {
+	IntrospectHttpError,
+	type IntrospectionClient,
+	type IntrospectionResult,
+} from "./introspection-client.mjs";
 
-export type { ClientCredentials };
-
-export interface IntrospectionResult {
-	active: boolean;
-	[key: string]: unknown;
-}
-
-export class IntrospectHttpError extends Error {
-	constructor(
-		public readonly status: number,
-		message: string,
-	) {
-		super(message);
-		this.name = "IntrospectHttpError";
-	}
-}
-
-interface CacheEntry {
-	result: IntrospectionResult;
-	expiresAt: number;
-}
-
-const cache = new Map<string, CacheEntry>();
-
-export const clearCache = (): void => {
-	cache.clear();
-};
-
-export const buildAuthHeader = (credentials: ClientCredentials | null, token: string): string =>
-	credentials !== null ? clientSecretBasic(credentials) : `Bearer ${token}`;
-
-const getCacheKey = (token: string): string =>
+/**
+ * The cache key: SHA-256 of the token, so the map never holds a live
+ * credential — the same reason the injection path hashes the cookie value.
+ */
+const cacheKey = (token: string): string =>
 	crypto.createHash("sha256").update(token).digest("hex");
 
-export const introspect = async (
-	token: string,
-	introspectUrl: string,
-	cacheTtlSec: number,
-	requestId: string,
-	authHeader: string,
-	cacheMaxEntries = 10000,
-	timeoutMs = 5000,
-): Promise<IntrospectionResult> => {
-	const key = getCacheKey(token);
-	const now = Date.now();
+export interface IntrospectorConfig {
+	client: IntrospectionClient;
+	cache: IntrospectionCache;
+	/** `auth.validation.introspect.cacheTtlSec`; `0` or less disables the cache on both sides. */
+	cacheTtlSec: number;
+}
 
-	const cached = cache.get(key);
-	if (cacheTtlSec > 0 && cached && cached.expiresAt > now) {
-		return cached.result;
-	}
+/**
+ * What this proxy accepts as a live token, on top of what RFC 7662 makes the
+ * provider say (#95 F5) — and what may be cached.
+ *
+ * The client answers what the provider said, validated as a response. This is
+ * the reading of it: a response carrying possession evidence this path cannot
+ * check is refused, a token that expired while the call was in flight is
+ * refused, and a malformed `exp` is the provider's bug rather than an answer.
+ * None of those refusals is cached: a plain `active: false` from the provider
+ * is a statement about the token and is held for the same bound as a positive
+ * one, but "we refused to read this response" is not.
+ *
+ * `cacheTtlSec` is the one knob: at `0` or less nothing is read from the cache
+ * and nothing is written to it.
+ */
+export const createIntrospector = ({
+	client,
+	cache,
+	cacheTtlSec,
+}: IntrospectorConfig): Introspector => {
+	const caching = cacheTtlSec > 0;
 
-	const resp = await fetch(introspectUrl, {
-		method: "POST",
-		headers: {
-			"Content-Type": "application/x-www-form-urlencoded",
-			Authorization: authHeader,
-			"x-request-id": requestId,
-		},
-		body: new URLSearchParams({ token }).toString(),
-		signal: AbortSignal.timeout(timeoutMs),
-	});
+	return async (token: string, requestId: string): Promise<IntrospectionResult> => {
+		const key = cacheKey(token);
+		// Captured before the call goes out: the entry's lifetime is measured
+		// from when this request asked, not from when the provider answered.
+		const now = Date.now();
 
-	if (!resp.ok) {
-		throw new IntrospectHttpError(resp.status, `introspect returned ${resp.status}`);
-	}
+		if (caching) {
+			const cached = cache.get(key);
+			if (cached !== null) {
+				return cached;
+			}
+		}
 
-	let parsed: unknown;
-	try {
-		parsed = await resp.json();
-	} catch {
-		// Provider returned 200 with a non-JSON body — treat as provider bug, not auth decision.
-		throw new IntrospectHttpError(502, "introspect returned 200 with a non-JSON body");
-	}
+		const data = await client.introspect(token, requestId);
 
-	// RFC 7662 §2.2: `active` MUST be a boolean. Reject anything else so a provider
-	// returning {"active":"false"} or a non-object cannot bypass auth via truthy coercion.
-	if (
-		parsed === null ||
-		typeof parsed !== "object" ||
-		Array.isArray(parsed) ||
-		typeof (parsed as { active?: unknown }).active !== "boolean"
-	) {
-		throw new IntrospectHttpError(
-			502,
-			"introspect returned 200 but the body is not a valid introspection response (RFC 7662)",
-		);
-	}
-	const data = parsed as IntrospectionResult;
+		// This path authenticates Bearer tokens only; introspection does not prove
+		// possession of a DPoP key or a client certificate for the inbound request.
+		if (
+			Object.hasOwn(data, "cnf") ||
+			(data.token_type !== undefined &&
+				(typeof data.token_type !== "string" || data.token_type.toLowerCase() !== "bearer"))
+		) {
+			return { active: false };
+		}
+		if (Object.hasOwn(data, "exp") && (typeof data.exp !== "number" || !Number.isFinite(data.exp))) {
+			throw new IntrospectHttpError(502, "introspect returned an invalid exp");
+		}
+		const tokenExpiresAt = typeof data.exp === "number" ? data.exp * 1000 : Infinity;
+		const receivedAt = Date.now();
+		// A token can expire while fetch/body parsing is in flight. Refuse it on
+		// this request too, even if the provider returned active: true.
+		if (tokenExpiresAt <= receivedAt) {
+			return { active: false };
+		}
 
-	// This path authenticates Bearer tokens only; introspection does not prove
-	// possession of a DPoP key or a client certificate for the inbound request.
-	if (Object.hasOwn(data, "cnf") || (data.token_type !== undefined &&
-		(typeof data.token_type !== "string" || data.token_type.toLowerCase() !== "bearer"))) {
-		return { active: false };
-	}
-	if (Object.hasOwn(data, "exp") && (typeof data.exp !== "number" || !Number.isFinite(data.exp))) {
-		throw new IntrospectHttpError(502, "introspect returned an invalid exp");
-	}
-	const tokenExpiresAt = typeof data.exp === "number" ? data.exp * 1000 : Infinity;
-	const receivedAt = Date.now();
-	// A token can expire while fetch/body parsing is in flight. Refuse it on
-	// this request too, even if the provider returned active: true.
-	if (tokenExpiresAt <= receivedAt) {
-		return { active: false };
-	}
-	const expiresAt = Math.min(now + cacheTtlSec * 1000, tokenExpiresAt);
-	if (cacheTtlSec <= 0 || expiresAt <= receivedAt) {
+		const expiresAt = Math.min(now + cacheTtlSec * 1000, tokenExpiresAt);
+		if (!caching || expiresAt <= receivedAt) {
+			return data;
+		}
+		cache.set(key, data, expiresAt);
 		return data;
-	}
-
-	for (const [k, entry] of cache) {
-		if (entry.expiresAt <= receivedAt) {
-			cache.delete(k);
-		}
-	}
-	if (cache.size >= cacheMaxEntries) {
-		const oldestKey = cache.keys().next().value;
-		if (oldestKey !== undefined) {
-			cache.delete(oldestKey);
-		}
-	}
-	cache.set(key, { result: data, expiresAt });
-	return data;
+	};
 };

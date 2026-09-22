@@ -16,7 +16,7 @@ import {
 	type ValidationInputs,
 	type ValidationOutcome,
 } from "../decision.mjs";
-import { IntrospectHttpError, type IntrospectionResult } from "../introspect.mjs";
+import { IntrospectHttpError, type IntrospectionResult } from "../introspection-client.mjs";
 
 const fakeLogger = () => ({ debug: vi.fn(), info: vi.fn(), warn: vi.fn(), error: vi.fn() });
 type FakeLogger = ReturnType<typeof fakeLogger>;

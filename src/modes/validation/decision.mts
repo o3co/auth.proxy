@@ -16,7 +16,7 @@
 
 import { extractBearerToken } from "../../express/bearer.mjs";
 import type { Logger } from "../../logger.mjs";
-import { IntrospectHttpError, type IntrospectionResult } from "./introspect.mjs";
+import { IntrospectHttpError, type IntrospectionResult } from "./introspection-client.mjs";
 
 /** The two header values the decision reads — plain strings, no request object. */
 export interface ValidationInputs {
@@ -29,13 +29,13 @@ export interface ValidationInputs {
  * What the decision asks of the provider: the introspection result for one
  * token, from the cache or the endpoint. `createRouter` binds the concrete
  * `introspect` with its URL, bounds and credential choice; a caller may supply
- * its own — and then owns what `introspect` guarantees and the decision does
- * not: the RFC 7662 section 2.2 check that `active` is a boolean (the decision
+ * its own — and then owns what the bundled one guarantees and the decision
+ * does not: the RFC 7662 section 2.2 check that `active` is a boolean (the decision
  * forwards only on `true`, so a non-boolean is a refusal, never a bypass), the
  * refusals for a `cnf`, a non-Bearer `token_type` and expiry during the call,
- * and its own timeout, since the decision has none. The client interface and
- * a router-owned cache are F5 on #95, which replaces this seam without moving
- * the decision.
+ * and its own timeout, since the decision has none. What `createRouter`
+ * builds behind this seam is `createIntrospector` over an
+ * `IntrospectionClient` and an `IntrospectionCache` (#95 F5).
  */
 export type Introspector = (token: string, requestId: string) => Promise<IntrospectionResult>;
 

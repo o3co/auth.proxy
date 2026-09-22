@@ -21,7 +21,9 @@ import { createRequestIdMiddleware } from "../../express/requestId.mjs";
 import defaultLogger from "../../logger.mjs";
 import { createUpstreamProxy } from "../../router/upstream.mjs";
 import { decideValidation, type Introspector, type ValidationDeps } from "./decision.mjs";
-import { buildAuthHeader, type ClientCredentials, introspect } from "./introspect.mjs";
+import { createIntrospector } from "./introspect.mjs";
+import { createIntrospectionCache } from "./introspection-cache.mjs";
+import { type ClientCredentials, createIntrospectionClient } from "./introspection-client.mjs";
 
 type ValidationConfig = Extract<AppConfig["auth"], { mode: "validation" }>;
 
@@ -60,29 +62,25 @@ const validationMiddleware =
 	};
 
 /**
- * The concrete `introspect` bound to this router's config: URL, cache bounds,
- * timeout, and the credential choice per token (`buildAuthHeader`).
+ * The bundled introspector for this router: the provider's endpoint behind
+ * `IntrospectionClient`, a cache this router owns, and the reading of the
+ * response between them (#95 F5). Each router builds its own — the cache was
+ * module state shared by every router in the process until then.
  */
-const bindIntrospect = (validation: ValidationConfig["validation"]): Introspector => {
-	const introspectUrl: string = validation.introspect.url;
-	const cacheTtlSec: number = validation.introspect.cacheTtlSec;
-	const cacheMaxEntries: number = validation.introspect.cacheMaxEntries;
-	const introspectTimeoutMs: number = validation.introspect.timeoutMs;
-
+const buildIntrospector = (validation: ValidationConfig["validation"]): Introspector => {
 	const { clientId, clientSecret } = validation.client;
 	const credentials: ClientCredentials | null =
 		clientId !== null && clientSecret !== null ? { clientId, clientSecret } : null;
 
-	return (token, requestId) =>
-		introspect(
-			token,
-			introspectUrl,
-			cacheTtlSec,
-			requestId,
-			buildAuthHeader(credentials, token),
-			cacheMaxEntries,
-			introspectTimeoutMs,
-		);
+	return createIntrospector({
+		client: createIntrospectionClient({
+			url: validation.introspect.url,
+			timeoutMs: validation.introspect.timeoutMs,
+			credentials,
+		}),
+		cache: createIntrospectionCache({ maxEntries: validation.introspect.cacheMaxEntries }),
+		cacheTtlSec: validation.introspect.cacheTtlSec,
+	});
 };
 
 export const createRouter = ({
@@ -102,7 +100,7 @@ export const createRouter = ({
 	const router = express.Router();
 	const logger = overrides.logger ?? defaultLogger;
 	const deps: ValidationDeps = {
-		introspect: overrides.introspect ?? bindIntrospect(validation),
+		introspect: overrides.introspect ?? buildIntrospector(validation),
 		logger,
 	};
 
