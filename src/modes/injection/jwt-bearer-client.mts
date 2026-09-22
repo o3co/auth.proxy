@@ -15,7 +15,7 @@
  */
 import { clientSecretBasic } from "../../oauth/client-secret-basic.mjs";
 import { readBoundedJsonObject, sanitizeErrorCode } from "./provider-error.mjs";
-import { buildTokenUrl, parseJsonBody } from "./session-grant-client.mjs";
+import { buildTokenUrl, parseJsonBody } from "./token-endpoint.mjs";
 
 /** RFC 7523 section 2.1. */
 export const JWT_BEARER_GRANT_TYPE = "urn:ietf:params:oauth:grant-type:jwt-bearer";

@@ -15,6 +15,7 @@
  */
 
 import { readBoundedJsonObject, sanitizeErrorDescription } from "./provider-error.mjs";
+import { buildTokenUrl, parseJsonBody } from "./token-endpoint.mjs";
 
 export type SessionGrantErrorCode =
 	| "session_unauthorized"
@@ -53,24 +54,6 @@ export interface SessionGrantClient {
 		requestId: string;
 	}): Promise<SessionGrantResult>;
 }
-
-export const buildTokenUrl = (providerOrigin: string): string => {
-	// providerOrigin is validated as origin-only by the Zod schema.
-	return new URL("/oauth/token", providerOrigin).toString();
-};
-
-export const parseJsonBody = async (resp: Response): Promise<Record<string, unknown> | null> => {
-	try {
-		const text = await resp.text();
-		if (text.length === 0) return null;
-		const parsed = JSON.parse(text);
-		return typeof parsed === "object" && parsed !== null
-			? (parsed as Record<string, unknown>)
-			: null;
-	} catch {
-		return null;
-	}
-};
 
 export const createSessionGrantClient = (
 	cfg: SessionGrantClientConfig,

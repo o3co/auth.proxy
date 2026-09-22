@@ -24,9 +24,9 @@ import {
 	type JwtBearerClient,
 	JwtBearerError,
 } from "./jwt-bearer-client.mjs";
-import { buildTokenUrl } from "./session-grant-client.mjs";
 import type { SingleFlight } from "./single-flight.mjs";
 import type { TokenCache } from "./token-cache.mjs";
+import { buildTokenUrl } from "./token-endpoint.mjs";
 
 /** `auth.injection.exchange` with the exchange on. */
 export type ExchangeSettings = Extract<ExchangeConfig, { enabled: true }>;
