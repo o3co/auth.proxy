@@ -71,6 +71,16 @@ describe("decideValidation", () => {
 			expect(logger.error).not.toHaveBeenCalled();
 		});
 
+		it.each([{ active: "false" }, { active: 1 }, { active: "true" }])(
+			"answers 401 Invalid Token when a supplied introspector resolves a non-boolean active (%j), never forwarding on truthiness",
+			async (result) => {
+				const { deps, introspect } = makeDeps();
+				introspect.mockResolvedValueOnce(result as unknown as IntrospectionResult);
+				const outcome = await decideValidation(inputs("Bearer t"), deps);
+				expect(outcome).toMatchObject({ kind: "reject", status: 401, body: { code: 401 } });
+			},
+		);
+
 		it("answers 401 Invalid Token to an inactive token, logging nothing at error", async () => {
 			const { deps, introspect, logger } = makeDeps();
 			introspect.mockResolvedValueOnce({ active: false });

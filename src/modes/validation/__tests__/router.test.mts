@@ -56,11 +56,18 @@ describe("validation router", () => {
 	it("forwards a live token, then refuses it when its warm cache reaches exp", async () => {
 		const start = 1_700_000_000_000;
 		const clock = vi.spyOn(Date, "now").mockReturnValue(start);
-		vi.stubGlobal("fetch", vi.fn(async () => Response.json({ active: true, exp: start / 1000 + 1 })));
+		const fetchMock = vi.fn(async () => Response.json({ active: true, exp: start / 1000 + 1 }));
+		vi.stubGlobal("fetch", fetchMock);
 		expect((await request(app).get("/protected").set("Authorization", "Bearer t")).status).toBe(200);
+		// F14: the inbound bytes reach the upstream on the production path too.
+		expect(upstreamHeaders[0].authorization).toBe("Bearer t");
 		clock.mockReturnValue(start + 1000);
 		expect((await request(app).get("/protected").set("Authorization", "Bearer t")).status).toBe(401);
 		expect(upstreamCalls).toBe(1);
+		// The entry stops being served the instant it reaches `exp` (`expiresAt > now`,
+		// not `>=`), so the second request misses and re-fetches; `introspect` then
+		// refuses the response whose `exp` has passed. Two calls, one forward.
+		expect(fetchMock).toHaveBeenCalledTimes(2);
 	});
 
 	it.each([{ jkt: "key" }, { "x5t#S256": "certificate" }])("refuses bound token %j before forwarding", async (cnf) => {
@@ -136,13 +143,18 @@ describe("validation router", () => {
 			const own = express();
 			own.use(createRouter({ config: makeConfig(upstreamPort), deps: { introspect, logger: injected } }));
 
-			const res = await request(own).get("/protected").set("Authorization", "Bearer t extra");
+			const res = await request(own)
+				.get("/protected")
+				.set("Authorization", "Bearer t extra")
+				.set("x-request-id", "rid-abc");
 
 			expect(res.status).toBe(200);
 			expect(upstreamCalls).toBe(1);
 			// F14: the first SP-delimited word is introspected, the inbound bytes are forwarded.
 			expect(upstreamHeaders[0].authorization).toBe("Bearer t extra");
-			expect(introspect).toHaveBeenCalledWith("t", expect.any(String));
+			// The request id the decision hands over is the one the request-id middleware settled on.
+			expect(introspect).toHaveBeenCalledWith("t", "rid-abc");
+			expect(res.headers["x-request-id"]).toBe("rid-abc");
 			expect(fetchMock).not.toHaveBeenCalled();
 			expect(injected.info.mock.calls.map((call) => call[1])).toContain("incoming request");
 			expect(singletonInfo).not.toHaveBeenCalled();
