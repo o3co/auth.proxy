@@ -139,7 +139,7 @@ export const decideInjection = async (
 	 * for a first-party token or the request is refused (#90). That also
 	 * leaves `stripInboundAuthorization` nothing to strip. A request without
 	 * the header takes the paths below exactly as it would with the exchange
-	 * disabled. The exchange itself is decided by its handler (F2); this only
+	 * disabled. The exchange itself is decided by `decideExchange` (F2); this only
 	 * hands off.
 	 */
 	if (exchangeEnabled && authorization !== undefined) {
