@@ -87,6 +87,22 @@ describe("createIntrospectionCache", () => {
 		expect(cache.get("c")).not.toBeNull();
 	});
 
+	it("evicts nothing when the write is a key it already holds, even at the bound", () => {
+		// Nothing on the proxy's path reaches this — a write only follows a miss,
+		// and a stale duplicate is swept before the bound is considered — but the
+		// interface is a caller's to use directly, and the arithmetic should not
+		// cost an unrelated entry.
+		const cache = createIntrospectionCache({ maxEntries: 2 });
+		const live = Date.now() + 60_000;
+		cache.set("a", { active: true, sub: "a" }, live);
+		cache.set("b", { active: true, sub: "b" }, live);
+		cache.set("b", { active: true, sub: "refreshed" }, live);
+
+		expect(cache.size()).toBe(2);
+		expect(cache.get("a")).toEqual({ active: true, sub: "a" });
+		expect(cache.get("b")).toEqual({ active: true, sub: "refreshed" });
+	});
+
 	it("clears", () => {
 		const cache = createIntrospectionCache({ maxEntries: 10 });
 		cache.set("a", { active: true }, Date.now() + 60_000);

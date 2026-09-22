@@ -26,11 +26,16 @@ import type { IntrospectionResult } from "./introspection-client.mjs";
  * Two deliberate differences from the injection path's `TokenCache`, both of
  * them the behaviour this replaced: `get` does not delete the stale entry it
  * declines to serve, so the bound is enforced on write alone; and `set` does
- * not re-insert a key it already holds, so below the bound a refreshed entry
- * keeps its position and is evicted on its original age. Eviction is by
- * insertion rather than by use — with one seam: at the bound the oldest is
- * dropped before the write, and when that is the key being written it is
- * re-inserted last.
+ * not re-insert a key it already holds, so a refreshed entry keeps its
+ * position and is evicted on its original age. Eviction is by insertion
+ * rather than by use.
+ *
+ * Writing a key the map already holds evicts nothing: it cannot push the map
+ * past its bound, and the fused function this replaced would have dropped an
+ * unrelated live entry for it. That was unreachable there — a write only ever
+ * followed a miss, and a stale duplicate is swept first — and it stays
+ * unreachable through `createIntrospector`, but this interface is a caller's
+ * to use directly now.
  */
 export interface IntrospectionCache {
 	get(key: string): IntrospectionResult | null;
@@ -70,7 +75,10 @@ export const createIntrospectionCache = ({
 					entries.delete(k);
 				}
 			}
-			if (entries.size >= maxEntries) {
+			// Only a new key can push the map past its bound. Dropping the oldest
+			// for a key already held would evict a live entry to make room for
+			// one that needs none, and leave the map one under its bound.
+			if (!entries.has(key) && entries.size >= maxEntries) {
 				const oldestKey = entries.keys().next().value;
 				if (oldestKey !== undefined) {
 					entries.delete(oldestKey);
