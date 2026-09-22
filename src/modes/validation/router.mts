@@ -14,31 +14,56 @@
  * limitations under the License.
  */
 
-import type { Request, Response } from "express";
+import type { NextFunction, Request, Response } from "express";
 import express from "express";
 import type { AppConfig } from "../../../config/application.schema.mjs";
-import { extractBearerToken } from "../../express/bearer.mjs";
 import { createRequestIdMiddleware } from "../../express/requestId.mjs";
-import logger from "../../logger.mjs";
+import defaultLogger from "../../logger.mjs";
 import { createUpstreamProxy } from "../../router/upstream.mjs";
-import {
-	buildAuthHeader,
-	type ClientCredentials,
-	IntrospectHttpError,
-	introspect,
-} from "./introspect.mjs";
+import { decideValidation, type Introspector, type ValidationDeps } from "./decision.mjs";
+import { buildAuthHeader, type ClientCredentials, introspect } from "./introspect.mjs";
 
 type ValidationConfig = Extract<AppConfig["auth"], { mode: "validation" }>;
 
-export const createRouter = ({ config }: { config: AppConfig }): express.Router => {
-	if (config.auth.mode !== "validation") {
-		throw new Error(
-			`validation router requires auth.mode = "validation" (got "${config.auth.mode}")`,
-		);
-	}
-	const validation: ValidationConfig["validation"] = config.auth.validation;
+/** What `createRouter` builds by default and a caller may supply instead (#95 F3). */
+export type ValidationDepsOverrides = Partial<ValidationDeps>;
 
-	const router = express.Router();
+/**
+ * Reads the two headers, lets `decideValidation` decide, applies the outcome.
+ * `forward` leaves `req.headers` untouched, so the upstream receives the
+ * inbound `Authorization` bytes (F14). An outcome kind this switch does not
+ * know throws rather than leaving the request unanswered and the socket held.
+ */
+const validationMiddleware =
+	(deps: ValidationDeps) =>
+	async (req: Request, res: Response, next: NextFunction): Promise<void> => {
+		const outcome = await decideValidation(
+			{
+				requestId: (req.headers["x-request-id"] as string | undefined) ?? "",
+				authorization: req.headers.authorization,
+			},
+			deps,
+		);
+		switch (outcome.kind) {
+			case "forward":
+				return next();
+			case "reject":
+				res.status(outcome.status).json(outcome.body);
+				return;
+			default: {
+				const _exhaustive: never = outcome;
+				throw new Error(
+					`unhandled validation outcome: ${(_exhaustive as { kind: string }).kind}`,
+				);
+			}
+		}
+	};
+
+/**
+ * The concrete `introspect` bound to this router's config: URL, cache bounds,
+ * timeout, and the credential choice per token (`buildAuthHeader`).
+ */
+const bindIntrospect = (validation: ValidationConfig["validation"]): Introspector => {
 	const introspectUrl: string = validation.introspect.url;
 	const cacheTtlSec: number = validation.introspect.cacheTtlSec;
 	const cacheMaxEntries: number = validation.introspect.cacheMaxEntries;
@@ -47,6 +72,39 @@ export const createRouter = ({ config }: { config: AppConfig }): express.Router 
 	const { clientId, clientSecret } = validation.client;
 	const credentials: ClientCredentials | null =
 		clientId !== null && clientSecret !== null ? { clientId, clientSecret } : null;
+
+	return (token, requestId) =>
+		introspect(
+			token,
+			introspectUrl,
+			cacheTtlSec,
+			requestId,
+			buildAuthHeader(credentials, token),
+			cacheMaxEntries,
+			introspectTimeoutMs,
+		);
+};
+
+export const createRouter = ({
+	config,
+	deps: overrides = {},
+}: {
+	config: AppConfig;
+	deps?: ValidationDepsOverrides;
+}): express.Router => {
+	if (config.auth.mode !== "validation") {
+		throw new Error(
+			`validation router requires auth.mode = "validation" (got "${config.auth.mode}")`,
+		);
+	}
+	const validation: ValidationConfig["validation"] = config.auth.validation;
+
+	const router = express.Router();
+	const logger = overrides.logger ?? defaultLogger;
+	const deps: ValidationDeps = {
+		introspect: overrides.introspect ?? bindIntrospect(validation),
+		logger,
+	};
 
 	router
 		.use(createRequestIdMiddleware())
@@ -61,43 +119,7 @@ export const createRouter = ({ config }: { config: AppConfig }): express.Router 
 			);
 			return next();
 		})
-		.use(async (req: Request, res: Response, next) => {
-			if (!req?.headers?.authorization) {
-				return next();
-			}
-
-			const requestId = req.headers["x-request-id"] as string;
-			const bearer = extractBearerToken(req.headers.authorization);
-
-			if (!bearer) {
-				return res.status(400).json({ code: 400, message: "Invalid Token Type" });
-			}
-
-			const authHeader = buildAuthHeader(credentials, bearer.token);
-
-			try {
-				const result = await introspect(
-					bearer.token,
-					introspectUrl,
-					cacheTtlSec,
-					requestId,
-					authHeader,
-					cacheMaxEntries,
-					introspectTimeoutMs,
-				);
-				if (!result.active) {
-					return res.status(401).json({ code: 401, message: "Invalid Token" });
-				}
-			} catch (e) {
-				logger.error({ "x-request-id": requestId, error: e }, "introspect failed");
-				if (e instanceof IntrospectHttpError && e.status === 401) {
-					return res.status(401).json({ code: 401, message: "Invalid Token" });
-				}
-				return res.status(500).json({ code: 500, message: "Internal Server Error" });
-			}
-
-			return next();
-		})
+		.use(validationMiddleware(deps))
 		.use(createUpstreamProxy(config));
 
 	return router;
