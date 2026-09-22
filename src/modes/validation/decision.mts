@@ -29,8 +29,13 @@ export interface ValidationInputs {
  * What the decision asks of the provider: the introspection result for one
  * token, from the cache or the endpoint. `createRouter` binds the concrete
  * `introspect` with its URL, bounds and credential choice; a caller may supply
- * its own. The client interface and a router-owned cache are F5 on #95, which
- * replaces this seam without moving the decision.
+ * its own — and then owns what `introspect` guarantees and the decision does
+ * not: the RFC 7662 section 2.2 check that `active` is a boolean (the decision
+ * forwards only on `true`, so a non-boolean is a refusal, never a bypass), the
+ * refusals for a `cnf`, a non-Bearer `token_type` and expiry during the call,
+ * and its own timeout, since the decision has none. The client interface and
+ * a router-owned cache are F5 on #95, which replaces this seam without moving
+ * the decision.
  */
 export type Introspector = (token: string, requestId: string) => Promise<IntrospectionResult>;
 
@@ -86,7 +91,10 @@ export const decideValidation = async (
 
 	try {
 		const result = await introspect(bearer.token, requestId);
-		if (!result.active) {
+		// `=== true`, not truthiness: the concrete `introspect` already refuses a
+		// non-boolean `active`, but a supplied introspector may not, and
+		// `{ active: "false" }` must not forward.
+		if (result.active !== true) {
 			return reject(401, "Invalid Token");
 		}
 	} catch (e) {
