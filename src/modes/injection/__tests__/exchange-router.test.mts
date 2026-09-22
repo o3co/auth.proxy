@@ -5,8 +5,12 @@ import express from "express";
 import request from "supertest";
 import { afterEach, beforeEach, describe, expect, it, vi } from "vitest";
 import type { AppConfig, ExchangeConfig } from "../../../../config/application.schema.mjs";
+import type { Logger } from "../../../logger.mjs";
 import logger from "../../../logger.mjs";
+import { exchangeCacheKey, exchangeContext } from "../exchange.mjs";
 import { createRouter } from "../router.mjs";
+import { createSingleFlight, type SingleFlight } from "../single-flight.mjs";
+import { createTokenCache } from "../token-cache.mjs";
 
 // External credential exchange (#90): with auth.injection.exchange enabled, an
 // inbound `Authorization: Bearer <JWT>` is submitted to the provider as an
@@ -771,6 +775,100 @@ describe("injection router — external credential exchange (#90)", () => {
 			]) {
 				expect(logged).not.toContain(secret);
 			}
+		});
+	});
+
+	describe("injected deps (#95 F2)", () => {
+		const eventsOf = (spy: ReturnType<typeof vi.fn>): unknown[] =>
+			spy.mock.calls
+				.map(([first]) => first)
+				.filter((first): first is Record<string, unknown> => typeof first === "object" && first !== null)
+				.map((fields) => fields.event);
+
+		it("accepts an injected exchange client: the supplied client replaces fetch", async () => {
+			const assertion = makeAssertion();
+			const client = { exchange: vi.fn(async () => ({ accessToken: "issued-injected", expiresIn: 300 })) };
+			const app = express();
+			app.use(createRouter({ config: makeConfig(upstream.baseURL), deps: { exchange: { client } } }));
+
+			const res = await request(app).get("/orders").set("Authorization", `Bearer ${assertion}`);
+
+			expect(res.status).toBe(204);
+			expect(upstream.received[0].headers.authorization).toBe("Bearer issued-injected");
+			expect(fetchMock).not.toHaveBeenCalled();
+			expect(client.exchange).toHaveBeenCalledWith({ assertion, requestId: expect.any(String) });
+		});
+
+		it("accepts an injected exchange token cache: a pre-seeded entry is served with no client or fetch call", async () => {
+			const assertion = makeAssertion();
+			const tokenCache = createTokenCache({ maxEntries: 10 });
+			tokenCache.set(
+				exchangeCacheKey(exchangeContext("http://provider.example", ENABLED), assertion),
+				"issued-seeded",
+				Date.now() + 60_000,
+			);
+			const client = { exchange: vi.fn() };
+			const app = express();
+			app.use(
+				createRouter({ config: makeConfig(upstream.baseURL), deps: { exchange: { client, tokenCache } } }),
+			);
+
+			const res = await request(app).get("/orders").set("Authorization", `Bearer ${assertion}`);
+
+			expect(res.status).toBe(204);
+			expect(upstream.received[0].headers.authorization).toBe("Bearer issued-seeded");
+			expect(client.exchange).not.toHaveBeenCalled();
+			expect(fetchMock).not.toHaveBeenCalled();
+		});
+
+		it("accepts an injected exchange single flight: the supplied run is what coalesces the submission", async () => {
+			const assertion = makeAssertion();
+			const real = createSingleFlight<string>();
+			const singleFlight: SingleFlight<string> = { run: vi.fn(real.run), _sizeForTesting: real._sizeForTesting };
+			fetchMock.mockResolvedValueOnce(okToken("issued-flight"));
+			const app = express();
+			app.use(createRouter({ config: makeConfig(upstream.baseURL), deps: { exchange: { singleFlight } } }));
+
+			const res = await request(app).get("/orders").set("Authorization", `Bearer ${assertion}`);
+
+			expect(res.status).toBe(204);
+			expect(upstream.received[0].headers.authorization).toBe("Bearer issued-flight");
+			expect(singleFlight.run).toHaveBeenCalledTimes(1);
+			expect(singleFlight.run).toHaveBeenCalledWith(
+				exchangeCacheKey(exchangeContext("http://provider.example", ENABLED), assertion),
+				expect.any(Function),
+			);
+		});
+
+		it("refuses deps.exchange while the exchange is disabled, at construction", () => {
+			const client = { exchange: vi.fn() };
+			expect(() =>
+				createRouter({
+					config: makeConfig(upstream.baseURL, { enabled: false }),
+					deps: { exchange: { client } },
+				}),
+			).toThrow("deps.exchange supplied while auth.injection.exchange.enabled is false");
+		});
+
+		it("an injected logger reaches the exchange path and the singleton stays silent", async () => {
+			const injected = {
+				debug: vi.fn<Logger["debug"]>(),
+				info: vi.fn<Logger["info"]>(),
+				warn: vi.fn<Logger["warn"]>(),
+				error: vi.fn<Logger["error"]>(),
+			};
+			const singletonInfo = vi.spyOn(logger, "info");
+			const singletonWarn = vi.spyOn(logger, "warn");
+			const app = express();
+			app.use(createRouter({ config: makeConfig(upstream.baseURL), deps: { logger: injected } }));
+
+			const res = await request(app).get("/orders").set("Authorization", "Basic abc");
+
+			expect(res.status).toBe(401);
+			expect(res.body.error).toBe("credential_unsupported");
+			expect(eventsOf(injected.info)).toContain("injection.exchange_credential_unsupported");
+			expect(singletonInfo).not.toHaveBeenCalled();
+			expect(singletonWarn).not.toHaveBeenCalled();
 		});
 	});
 });

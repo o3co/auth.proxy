@@ -1,5 +1,10 @@
 import { describe, expect, it } from "vitest";
-import { computeExchangeExpiresAt, type ExchangeContext, exchangeCacheKey } from "../exchange.mjs";
+import {
+	computeExchangeExpiresAt,
+	type ExchangeContext,
+	exchangeCacheKey,
+	exchangeContext,
+} from "../exchange.mjs";
 
 const context: ExchangeContext = {
 	tokenEndpoint: "http://provider.example/oauth/token",
@@ -107,5 +112,26 @@ describe("computeExchangeExpiresAt", () => {
 		expect(
 			computeExchangeExpiresAt({ ...base, assertionExpiresAt: now / 1000 - 10 }),
 		).toBeNull();
+	});
+});
+
+describe("exchangeContext", () => {
+	it("derives the token endpoint from the provider origin and copies what changes the issued token", () => {
+		const settings = {
+			clientId: "proxy-exchange",
+			clientSecret: "s3cret",
+			scope: "api",
+			audience: "https://api.example",
+			resource: null,
+		};
+		const ctx = exchangeContext("http://provider.example", settings);
+		expect(ctx).toEqual<ExchangeContext>({
+			tokenEndpoint: "http://provider.example/oauth/token",
+			clientId: "proxy-exchange",
+			scope: "api",
+			audience: "https://api.example",
+			resource: null,
+		});
+		expect(ctx).not.toHaveProperty("clientSecret");
 	});
 });
