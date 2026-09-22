@@ -34,8 +34,8 @@ const sha256Hex = (s: string): string =>
 /**
  * What the session decision needs. `createRouter` builds every default and
  * accepts overrides for the cache, the flight table, the grant client and the
- * logger (#95 F4). The exchange handler itself is not here: the decision only
- * needs to know whether the exchange is on, and hands off with `ExchangeArgs`.
+ * logger (#95 F4). The exchange's deps are not here: the decision only needs
+ * to know whether the exchange is on, and hands off with `ExchangeArgs`.
  */
 export interface InjectionDeps {
 	cfg: InjectionConfig["injection"];
@@ -64,7 +64,7 @@ export interface InjectionInputs {
 /** Why a request goes upstream without the proxy having minted anything. */
 export type ForwardWithoutInjectionReason = "no_cookie" | "cookie_rejected";
 
-/** What the exchange handler (F2) receives when the decision hands off to it. */
+/** What `decideExchange` (F2) receives when the decision hands off to it. */
 export interface ExchangeArgs {
 	requestId: string;
 	authorization: string;

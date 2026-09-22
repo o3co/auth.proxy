@@ -60,8 +60,8 @@ A violation is a `validate` error at boot; the process does not start. The offen
 | `http.bodyLimitSize`, `upstream.baseURL` | [`createUpstreamProxy`](../src/router/upstream.mts) via `UpstreamStageConfig`, which both mode routers mount |
 | `auth.mode` | [`resolveRouter`](../src/app-internal.mts), and the guard at the top of each mode router |
 | `auth.validation.*` | [validation `createRouter`](../src/modes/validation/router.mts) |
-| `auth.injection.*` | [injection `createRouter`](../src/modes/injection/router.mts), which hands the whole object to `createSessionGrantClient` (reads the five fields of [`SessionGrantClientConfig`](../src/modes/injection/session-grant-client.mts)) and to `createExchangeHandler` ([`ExchangeHandlerConfig`](../src/modes/injection/exchange.mts)) |
-| `auth.injection.exchange` | [`createExchangeHandler`](../src/modes/injection/exchange.mts), which builds the jwt-bearer client from it |
+| `auth.injection.*` | [injection `createRouter`](../src/modes/injection/router.mts), which hands the whole object to `createSessionGrantClient` (reads the five fields of [`SessionGrantClientConfig`](../src/modes/injection/session-grant-client.mts)) and, with the exchange on, builds the exchange's deps from it ([`buildExchangeDeps`](../src/modes/injection/router.mts): the jwt-bearer client from `providerOrigin`, `timeoutMs` and the `exchange` block, the key's context by [`exchangeContext`](../src/modes/injection/exchange.mts), the cache policy from `tokenCache`) |
+| `auth.injection.exchange` | [`buildExchangeDeps`](../src/modes/injection/router.mts), which builds the jwt-bearer client from it and hands `allowedIssuers` to [`decideExchange`](../src/modes/injection/exchange.mts) |
 
 ## Contract tests
 
