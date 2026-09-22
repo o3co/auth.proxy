@@ -43,9 +43,9 @@ State held for the life of the process, and who owns it:
 | --- | --- | --- |
 | parsed config | `config` in [`app.mts`](app.mts) | never; immutable after boot |
 | session token cache and single-flight table, router-built (the default) | the [`createRouter`](modes/injection/router.mts) closure | at process exit |
-| session token cache and single-flight table, supplied via `deps` (#95 F4) | the caller that supplied them — it may retain, clear or dispose them, and share them only between routers with an identical grant context (the key is the cookie alone, #95 F33) | the caller's responsibility; the router never clears what it did not build |
+| session token cache and single-flight table, supplied via `deps` (#95 F4) | the caller that supplied them — it may retain, clear or dispose them, and share them only between routers with an identical grant context and cache policy (the key is the cookie alone, #95 F33) | the caller's responsibility; the router never clears what it did not build |
 | exchange cache and single-flight table, router-built (the default) | the [`createRouter`](modes/injection/router.mts) closure | at process exit |
-| exchange cache and single-flight table, supplied via `deps.exchange` (#95 F2) | the caller that supplied them — it may retain, clear or dispose them, and share them only between routers with an identical exchange context and client (the key carries the context, not the client, #95 F33) | the caller's responsibility; the router never clears what it did not build |
+| exchange cache and single-flight table, supplied via `deps.exchange` (#95 F2) | the caller that supplied them — it may retain, clear or dispose them, and share them only between routers with an identical exchange context, client and cache policy (the key carries the context, neither the client nor the policy, #95 F33) | the caller's responsibility; the router never clears what it did not build |
 | introspection cache | the module-level `cache` in [`introspect.mts`](modes/validation/introspect.mts) | at process exit; `clearCache` is a test seam |
 | `shuttingDown` / `finished` | the [`installGracefulShutdown`](shutdown.mts) closure | n/a |
 | the logger | the default export of [`logger.mts`](logger.mts) | n/a |

@@ -43,7 +43,7 @@ export interface InjectionDeps {
 	 * Both keyed by SHA-256 of the cookie value alone — nothing of the grant
 	 * context is in the key. An instance supplied through `createRouter({ deps })`
 	 * may therefore be shared only between routers whose grant settings (provider,
-	 * client, scope, grant client) are identical (#95 F33).
+	 * client, scope, grant client) and cache policy are identical (#95 F33).
 	 */
 	tokenCache: TokenCache;
 	singleFlight: SingleFlight<string>;

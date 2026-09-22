@@ -60,12 +60,14 @@ type FakeLogger = ReturnType<typeof fakeLogger>;
 type Exchange = (args: { assertion: string; requestId: string }) => Promise<JwtBearerResult>;
 
 /** The overrides a test may ask for; the fakes it gets back are always the ones wired in. */
-const makeDeps = (overrides: Partial<Pick<ExchangeDeps, "allowedIssuers" | "cachePolicy">> = {}) => {
+const makeDeps = (
+	overrides: { allowedIssuers?: readonly string[]; cachePolicy?: ExchangeDeps["cachePolicy"] } = {},
+) => {
 	const logger: FakeLogger & Logger = fakeLogger();
 	const client = { exchange: vi.fn<Exchange>() };
 	const deps: ExchangeDeps = {
 		context: exchangeContext("http://provider.example", ENABLED),
-		allowedIssuers: overrides.allowedIssuers ?? [],
+		allowedIssuers: new Set(overrides.allowedIssuers ?? []),
 		cachePolicy: overrides.cachePolicy ?? { ttlSeconds: 60, safetyMarginSeconds: 5 },
 		client,
 		tokenCache: createTokenCache({ maxEntries: 100 }),
@@ -171,6 +173,15 @@ describe("decideExchange", () => {
 			expect(eventsOf(logger.info)).toContain("injection.exchange_issuer_refused");
 			expect(everythingLogged(logger)).not.toContain("idp-z.example");
 			expect(everythingLogged(logger)).not.toContain(assertion);
+		});
+
+		it("refuses a listed-out issuer before the cache is consulted: a seeded entry for it is not served", async () => {
+			const { deps, client } = makeDeps({ allowedIssuers: ["https://idp-a.example"] });
+			const assertion = makeAssertion({ iss: "https://idp-z.example" });
+			deps.tokenCache.set(exchangeCacheKey(deps.context, assertion), "issued-seeded", Date.now() + 60_000);
+			const outcome = await decideExchange(args(assertion), deps);
+			expect(outcome).toMatchObject({ kind: "respond", status: 401, body: { error: "credential_rejected" } });
+			expect(client.exchange).not.toHaveBeenCalled();
 		});
 
 		it("refuses an assertion without iss when the list is set", async () => {
@@ -325,7 +336,7 @@ describe("decideExchange", () => {
 		];
 
 		it.each(answers)(
-			"%s is answered with the client's status and message, logged at %s as %s",
+			"%s is answered %i with the client's message, logged at %s as %s",
 			async (code, status, level, event, retryAfter) => {
 				const { deps, logger, client } = makeDeps();
 				client.exchange.mockRejectedValueOnce(

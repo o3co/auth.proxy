@@ -850,6 +850,31 @@ describe("injection router — external credential exchange (#90)", () => {
 			).toThrow("deps.exchange supplied while auth.injection.exchange.enabled is false");
 		});
 
+		it("an injected logger receives the provider-path events too, and the singleton stays silent", async () => {
+			const injected = {
+				debug: vi.fn<Logger["debug"]>(),
+				info: vi.fn<Logger["info"]>(),
+				warn: vi.fn<Logger["warn"]>(),
+				error: vi.fn<Logger["error"]>(),
+			};
+			const singletonInfo = vi.spyOn(logger, "info");
+			const singletonDebug = vi.spyOn(logger, "debug");
+			fetchMock.mockResolvedValueOnce(okToken("issued-logged"));
+			const app = express();
+			app.use(createRouter({ config: makeConfig(upstream.baseURL), deps: { logger: injected } }));
+			const assertion = makeAssertion();
+
+			expect((await request(app).get("/orders").set("Authorization", `Bearer ${assertion}`)).status).toBe(204);
+			expect((await request(app).get("/orders").set("Authorization", `Bearer ${assertion}`)).status).toBe(204);
+
+			expect(eventsOf(injected.info)).toEqual(
+				expect.arrayContaining(["injection.exchange_fetch", "injection.exchange_success"]),
+			);
+			expect(eventsOf(injected.debug)).toContain("injection.exchange_cache_hit");
+			expect(singletonInfo).not.toHaveBeenCalled();
+			expect(singletonDebug).not.toHaveBeenCalled();
+		});
+
 		it("an injected logger reaches the exchange path and the singleton stays silent", async () => {
 			const injected = {
 				debug: vi.fn<Logger["debug"]>(),

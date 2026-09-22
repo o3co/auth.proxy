@@ -109,19 +109,21 @@ export const computeExchangeExpiresAt = ({
 export interface ExchangeDeps {
 	/** The cache key's context, derived once by `exchangeContext`. */
 	context: ExchangeContext;
-	/** `auth.injection.exchange.allowedIssuers`: a prefilter when non-empty, no filter when empty. */
-	allowedIssuers: readonly string[];
+	/** `auth.injection.exchange.allowedIssuers` as a set: a prefilter when non-empty, no filter when empty. */
+	allowedIssuers: ReadonlySet<string>;
 	/** `auth.injection.tokenCache`'s bounds on a cached result; `maxEntries` is the cache's own. */
 	cachePolicy: { ttlSeconds: number; safetyMarginSeconds: number };
 	client: JwtBearerClient;
 	/**
 	 * The exchange path's own instances — the session path's never see an
 	 * exchange entry, and vice versa. Both are keyed by `exchangeCacheKey`,
-	 * which carries the context but not the client, so an instance supplied
-	 * through `createRouter({ deps })` may be shared only between routers whose
-	 * context and client are identical (#95 F33).
+	 * which carries the context but neither the client nor the cache policy,
+	 * so an instance supplied through `createRouter({ deps })` may be shared
+	 * only between routers whose context, client and cache policy are
+	 * identical (#95 F33).
 	 */
 	tokenCache: TokenCache;
+	/** Same key space, same sharing contract as `tokenCache`. */
 	singleFlight: SingleFlight<string>;
 	logger: Logger;
 }
@@ -239,8 +241,8 @@ export const decideExchange = async (
 	// A prefilter only: it can refuse, never admit, and `iss` selects
 	// nothing. The unverified value is not logged.
 	if (
-		deps.allowedIssuers.length > 0 &&
-		(parsed.issuer === null || !deps.allowedIssuers.includes(parsed.issuer))
+		deps.allowedIssuers.size > 0 &&
+		(parsed.issuer === null || !deps.allowedIssuers.has(parsed.issuer))
 	) {
 		logger.info(
 			{ requestId, event: "injection.exchange_issuer_refused" },

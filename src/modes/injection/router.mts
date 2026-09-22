@@ -34,14 +34,23 @@ import { createTokenCache } from "./token-cache.mjs";
 
 type InjectionConfig = Extract<AppConfig["auth"], { mode: "injection" }>;
 
-/** The exchange path's client, cache and flight table a caller may supply (#95 F2, F4). */
+/**
+ * The exchange path's client, cache and flight table a caller may supply
+ * (#95 F2, F4). See `ExchangeDeps` for what each is and for the sharing
+ * contract on the cache and the flight table (#95 F33).
+ */
 export type ExchangeDepsOverrides = Partial<Pick<ExchangeDeps, "client" | "tokenCache" | "singleFlight">>;
 
 /** What `createRouter` builds by default and a caller may supply instead (#95 F4). */
 export type InjectionDepsOverrides = Partial<
 	Pick<InjectionDeps, "tokenCache" | "singleFlight" | "grantClient" | "logger">
 > & {
-	/** Accepted only while `auth.injection.exchange.enabled` is on; the logger is the shared one. */
+	/**
+	 * Accepted only while `auth.injection.exchange.enabled` is on — any value,
+	 * even `{}`, is refused at construction otherwise, since an injected client
+	 * silently dropped would leave the inbound `Authorization` on the forward
+	 * path. The logger is the shared `deps.logger`.
+	 */
 	exchange?: ExchangeDepsOverrides;
 };
 
@@ -118,8 +127,9 @@ const buildExchangeDeps = (
 	logger: Logger,
 ): ExchangeDeps => ({
 	context: exchangeContext(cfg.providerOrigin, exchange),
-	allowedIssuers: exchange.allowedIssuers,
-	cachePolicy: cfg.tokenCache,
+	// Built once: the prefilter runs on every exchange request.
+	allowedIssuers: new Set(exchange.allowedIssuers),
+	cachePolicy: { ttlSeconds: cfg.tokenCache.ttlSeconds, safetyMarginSeconds: cfg.tokenCache.safetyMarginSeconds },
 	client:
 		overrides.client ??
 		createJwtBearerClient({
