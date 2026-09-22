@@ -43,7 +43,7 @@ A third copy of `cacheMaxEntries` / `timeoutMs` exists as parameter defaults of 
 - `auth.validation.client.clientId` and `clientSecret` are both set or both unset (the `.refine` on `auth.validation.client`).
 - `auth.injection.providerOrigin` is an http(s) origin only — no userinfo, path, query or fragment (the `.refine` on `providerOrigin`).
 - `auth.injection.sessionCookieName` is an RFC 6265 `cookie-name` ([`COOKIE_NAME_RE`](application.schema.mts)) — it is interpolated into the outbound `Cookie` header.
-- `auth.injection.exchange.enabled` requires `clientId` and `clientSecret` (the `.transform` in [`exchangeSchema`](application.schema.mts)); disabled parses to `{ enabled: false }` and nothing else is read.
+- `auth.injection.exchange.enabled` requires `clientId` and `clientSecret` (the `.transform` in [`exchangeSchema`](application.schema.mts)); disabled parses to `{ enabled: false }` — every `exchange.*` field is still parsed and validated first (an invalid `allowedIssuers` entry fails the configuration even when disabled), and the transform then drops them.
 - `auth.injection.tokenCache.safetyMarginSeconds < ttlSeconds` (the `.refine` on `tokenCache`).
 
 ## Failure and lifecycle
