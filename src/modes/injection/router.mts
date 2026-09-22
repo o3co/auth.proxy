@@ -13,249 +13,87 @@
  * See the License for the specific language governing permissions and
  * limitations under the License.
  */
-import crypto from "node:crypto";
 import type { NextFunction, Request, Response } from "express";
 import express from "express";
 import type { AppConfig } from "../../../config/application.schema.mjs";
 import { createRequestIdMiddleware } from "../../express/requestId.mjs";
-import logger from "../../logger.mjs";
+import defaultLogger from "../../logger.mjs";
 import { createUpstreamProxy } from "../../router/upstream.mjs";
-import { computeCacheExpiresAt } from "./cache-expiry.mjs";
-import { type CookieRejectReason, extractCookie } from "./cookie-extractor.mjs";
+import { decideInjection, type InjectionDeps } from "./decision.mjs";
 import { createExchangeHandler, type ExchangeHandler } from "./exchange.mjs";
-import {
-	createSessionGrantClient,
-	type SessionGrantClient,
-	SessionGrantError,
-} from "./session-grant-client.mjs";
-import { createSingleFlight, type SingleFlight } from "./single-flight.mjs";
-import { createTokenCache, type TokenCache } from "./token-cache.mjs";
+import { createSessionGrantClient } from "./session-grant-client.mjs";
+import { createSingleFlight } from "./single-flight.mjs";
+import { createTokenCache } from "./token-cache.mjs";
 
 type InjectionConfig = Extract<AppConfig["auth"], { mode: "injection" }>;
 
-const sha256Hex = (s: string): string =>
-	crypto.createHash("sha256").update(s).digest("hex");
-
-interface Deps {
-	tokenCache: TokenCache;
-	singleFlight: SingleFlight<string>;
-	grantClient: SessionGrantClient;
-	cfg: InjectionConfig["injection"];
-	/** `null` when `auth.injection.exchange.enabled` is off. */
-	exchange: ExchangeHandler | null;
-}
+/** What `createRouter` builds by default and a caller may supply instead (#95 F4). */
+export type InjectionDepsOverrides = Partial<
+	Pick<InjectionDeps, "tokenCache" | "singleFlight" | "grantClient" | "logger">
+>;
 
 /**
- * A session cookie pair the proxy refuses to forward (#23). Unlike the absent
- * case this deserves an operator's attention, so it is a distinct event at warn
- * (#73). Only the bounded reason class is logged, never the value bytes.
- * `action` tells the two outcomes apart: `forward` — every same-name pair was
- * refused and the request goes upstream anonymously; `fallback` — a malformed
- * pair was skipped and a later well-formed same-name pair is used (#74).
+ * Reads the three headers, lets `decideInjection` decide, applies the outcome.
+ *
+ * `inject` and `forward_stripped` act on `req.headers`, before the upstream
+ * stage, rather than in the proxy's `proxyReqOptDecorator`: express-http-proxy
+ * copies `req.headers` wholesale into the outbound request, so the decorator
+ * alone would leave the original copy in place. `exchange` is a hand-off: the
+ * exchange handler, held here and not by the decision, still drives `req` /
+ * `res` itself (F2). An outcome kind this switch does not know throws rather
+ * than leaving the request unanswered and the socket held.
  */
-const logCookieRejected = (
-	requestId: string,
-	reason: CookieRejectReason,
-	action: "forward" | "fallback",
-): void => {
-	logger.warn(
-		{
-			requestId,
-			event: "injection.cookie_rejected",
-			reason,
-			action,
-			metric: "auth_proxy_injection_cookie_rejected",
-		},
-		action === "forward"
-			? "session cookie rejected, forwarding without Authorization"
-			: "malformed session cookie pair skipped, using the next well-formed pair",
-	);
-};
-
 const injectionMiddleware =
-	(deps: Deps) =>
+	(deps: InjectionDeps, exchange: ExchangeHandler | null) =>
 	async (req: Request, res: Response, next: NextFunction): Promise<void> => {
-		const { tokenCache, singleFlight, grantClient, cfg, exchange } = deps;
-		const requestId = (req.headers["x-request-id"] as string | undefined) ?? "";
-		const cookieHeader = req.headers.cookie;
-		const extraction = extractCookie(cookieHeader, cfg.sessionCookieName);
-
-		/**
-		 * With the exchange enabled, an inbound `Authorization` header — any
-		 * scheme, even empty — is never forwarded as received: it is exchanged
-		 * for a first-party token or the request is refused (#90). That also
-		 * leaves `stripInboundAuthorization` nothing to strip. A request without
-		 * the header takes the paths below exactly as it would with the exchange
-		 * disabled.
-		 */
-		if (exchange !== null && req.headers.authorization !== undefined) {
-			await exchange(req, res, next, {
-				requestId,
+		const outcome = await decideInjection(
+			{
+				requestId: (req.headers["x-request-id"] as string | undefined) ?? "",
+				cookieHeader: req.headers.cookie,
 				authorization: req.headers.authorization,
-				sessionCookie: extraction.kind,
-			});
-			return;
-		}
-
-		/**
-		 * The two paths that forward without the proxy having minted anything.
-		 * `applyAuthorization` overwrites an inbound `Authorization` on every
-		 * path that DID mint, so these are the only ones where a client's own
-		 * header survives to the upstream — the reason an upstream service must
-		 * never read "a Bearer header arrived from the proxy" as "the proxy
-		 * minted this". `stripInboundAuthorization` removes the ambiguity for
-		 * deployments that want it; it is opt-in because the pass-through is
-		 * load-bearing for topologies where a service account presents its own
-		 * token through the same proxy.
-		 *
-		 * The header is dropped from `req.headers` rather than in the proxy's
-		 * `proxyReqOptDecorator`: express-http-proxy copies `req.headers`
-		 * wholesale into the outbound request, so the decorator alone would
-		 * leave the original copy in place.
-		 */
-		const forwardWithoutInjection = (reason: "no_cookie" | "cookie_rejected"): void => {
-			if (cfg.stripInboundAuthorization && req.headers.authorization) {
-				logger.warn(
-					{
-						requestId,
-						event: "injection.inbound_authorization_stripped",
-						reason,
-						metric: "auth_proxy_injection_inbound_authorization_stripped",
-					},
-					"stripping inbound Authorization header the proxy did not mint",
-				);
+			},
+			deps,
+		);
+		switch (outcome.kind) {
+			case "forward":
+				return next();
+			case "forward_stripped":
 				// `delete`, not `= undefined`: express-http-proxy copies own
 				// enumerable properties, and Node's `setHeader` throws
 				// ERR_HTTP_INVALID_HEADER_VALUE on an undefined value.
 				delete req.headers.authorization;
-			}
-			next();
-		};
-
-		if (extraction.kind === "absent") {
-			logger.debug(
-				{ requestId, event: "injection.no_cookie", action: "forward" },
-				"no session cookie",
-			);
-			forwardWithoutInjection("no_cookie");
-			return;
-		}
-
-		if (extraction.kind === "rejected") {
-			logCookieRejected(requestId, extraction.reason, "forward");
-			forwardWithoutInjection("cookie_rejected");
-			return;
-		}
-
-		if (extraction.skipped !== null) {
-			logCookieRejected(requestId, extraction.skipped, "fallback");
-		}
-
-		const sessionCookieValue = extraction.value;
-		const cacheKey = sha256Hex(sessionCookieValue);
-		const cached = tokenCache.get(cacheKey);
-
-		const applyAuthorization = (token: string): void => {
-			if (req.headers.authorization) {
-				logger.warn(
-					{
-						requestId,
-						event: "injection.authorization_override",
-						metric: "auth_proxy_injection_authorization_override",
-					},
-					"overriding inbound Authorization header",
-				);
-			}
-			req.headers.authorization = `Bearer ${token}`;
-		};
-
-		if (cached !== null) {
-			logger.debug({ requestId, event: "injection.cache_hit" }, "cache hit");
-			applyAuthorization(cached);
-			next();
-			return;
-		}
-
-		try {
-			const { value: token, wasWaiter } = await singleFlight.run(cacheKey, async () => {
-				logger.info({ requestId, event: "injection.grant_fetch" }, "fetching grant");
-				// Captured before the request goes out: expires_in is measured
-				// from here, not from however late the response arrives.
-				const requestedAt = Date.now();
-				const result = await grantClient.exchange({
-					sessionCookieValue,
-					requestId,
-				});
-				const expiresAt = computeCacheExpiresAt({
-					requestedAt,
-					now: Date.now(),
-					ttlSeconds: cfg.tokenCache.ttlSeconds,
-					safetyMarginSeconds: cfg.tokenCache.safetyMarginSeconds,
-					expiresIn: result.expiresIn,
-				});
-				if (expiresAt !== null) {
-					tokenCache.set(cacheKey, result.accessToken, expiresAt);
+				return next();
+			case "inject":
+				req.headers.authorization = `Bearer ${outcome.token}`;
+				return next();
+			case "respond":
+				if (outcome.retryAfter !== null) {
+					res.setHeader("Retry-After", outcome.retryAfter);
 				}
-				logger.info(
-					{ requestId, event: "injection.grant_success", expiresIn: result.expiresIn },
-					"grant success",
-				);
-				return result.accessToken;
-			});
-			if (wasWaiter) {
-				logger.debug({ requestId, event: "injection.single_flight_wait" }, "coalesced");
-			}
-			applyAuthorization(token);
-			next();
-		} catch (err) {
-			if (err instanceof SessionGrantError) {
-				const body = {
-					error:
-						err.code === "session_unauthorized" ? "session_required" : err.code,
-					error_description: err.message,
-				};
-				if (err.retryAfter !== null) {
-					res.setHeader("Retry-After", err.retryAfter);
-				}
-				if (err.status === 401) {
-					logger.info(
-						{ requestId, event: "injection.session_unauthorized", error: err.message },
-						"grant failed",
-					);
-				} else if (err.code === "provider_config_error") {
-					logger.error(
-						{ requestId, event: "injection.provider_config_error", error: err.message },
-						"grant failed",
-					);
-				} else if (err.code === "provider_invalid_response") {
-					logger.error(
-						{ requestId, event: "injection.provider_invalid_response", error: err.message },
-						"grant failed",
-					);
-				} else {
-					logger.error(
-						{ requestId, event: "injection.provider_unavailable", error: err.message },
-						"grant failed",
-					);
-				}
-				res.status(err.status).json(body);
+				res.status(outcome.status).json(outcome.body);
 				return;
+			case "exchange":
+				// `createRouter` sets `deps.exchangeEnabled` from this very handler, so the
+				// decision hands off only when there is one; a null here is a wiring bug.
+				if (exchange === null) {
+					throw new Error("injection outcome `exchange` while the exchange is disabled");
+				}
+				return exchange(req, res, next, outcome.args);
+			default: {
+				const _exhaustive: never = outcome;
+				throw new Error(
+					`unhandled injection outcome: ${(_exhaustive as { kind: string }).kind}`,
+				);
 			}
-			logger.error(
-				{ requestId, event: "injection.unexpected_error", error: String(err) },
-				"grant failed (unknown)",
-			);
-			res.status(502).json({
-				error: "provider_unavailable",
-				error_description: "provider call failed",
-			});
 		}
 	};
 
 export const createRouter = ({
 	config,
+	deps: overrides = {},
 }: {
 	config: AppConfig;
+	deps?: InjectionDepsOverrides;
 }): express.Router => {
 	if (config.auth.mode !== "injection") {
 		throw new Error(
@@ -265,12 +103,19 @@ export const createRouter = ({
 	const cfg: InjectionConfig["injection"] = config.auth.injection;
 
 	const router = express.Router();
-	const tokenCache = createTokenCache({ maxEntries: cfg.tokenCache.maxEntries });
-	const singleFlight = createSingleFlight<string>();
-	const grantClient = createSessionGrantClient(cfg);
+	const logger = overrides.logger ?? defaultLogger;
 	const exchange = cfg.exchange.enabled
 		? createExchangeHandler({ ...cfg, exchange: cfg.exchange })
 		: null;
+	const deps: InjectionDeps = {
+		cfg,
+		tokenCache:
+			overrides.tokenCache ?? createTokenCache({ maxEntries: cfg.tokenCache.maxEntries }),
+		singleFlight: overrides.singleFlight ?? createSingleFlight<string>(),
+		grantClient: overrides.grantClient ?? createSessionGrantClient(cfg),
+		exchangeEnabled: exchange !== null,
+		logger,
+	};
 
 	router
 		.use(createRequestIdMiddleware())
@@ -285,7 +130,7 @@ export const createRouter = ({
 			);
 			next();
 		})
-		.use(injectionMiddleware({ tokenCache, singleFlight, grantClient, cfg, exchange }))
+		.use(injectionMiddleware(deps, exchange))
 		.use(createUpstreamProxy(config));
 
 	return router;
