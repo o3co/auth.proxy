@@ -16,11 +16,11 @@
 
 import type { Request, Response } from "express";
 import express from "express";
-import proxy from "express-http-proxy";
 import type { AppConfig } from "../../../config/application.schema.mjs";
 import { extractBearerToken } from "../../express/bearer.mjs";
 import { createRequestIdMiddleware } from "../../express/requestId.mjs";
 import logger from "../../logger.mjs";
+import { createUpstreamProxy } from "../../router/upstream.mjs";
 import {
 	buildAuthHeader,
 	type ClientCredentials,
@@ -98,20 +98,7 @@ export const createRouter = ({ config }: { config: AppConfig }): express.Router 
 
 			return next();
 		})
-		.use(
-			proxy(config.upstream.baseURL, {
-				limit: config.http.bodyLimitSize,
-				proxyReqOptDecorator: async (proxyReqOpts, srcReq) => {
-					if (srcReq?.headers?.authorization) {
-						proxyReqOpts.headers.Authorization = srcReq.headers.authorization;
-					}
-					if (srcReq?.headers?.["x-request-id"]) {
-						proxyReqOpts.headers["x-request-id"] = srcReq.headers["x-request-id"];
-					}
-					return proxyReqOpts;
-				},
-			}),
-		);
+		.use(createUpstreamProxy(config));
 
 	return router;
 };
