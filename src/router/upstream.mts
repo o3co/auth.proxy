@@ -39,9 +39,9 @@ export interface UpstreamStageConfig {
  * and the last write wins, so only the casing on the wire changes — and it
  * re-sets `x-request-id` to the value already there, a wire no-op. That is
  * why `stripInboundAuthorization` deletes the header from `req.headers` in
- * `src/modes/injection/router.mts` (see the comment above
+ * `src/modes/injection/decision.mts` (see the comment above
  * `forwardWithoutInjection`) rather than acting here. Whether to drop this
- * decorator is tracked with F14 / F15 on #95.
+ * decorator is tracked with F14 on #95.
  */
 export const createUpstreamProxy = (config: UpstreamStageConfig): RequestHandler =>
 	proxy(config.upstream.baseURL, {
