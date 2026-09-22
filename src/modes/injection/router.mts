@@ -16,10 +16,10 @@
 import crypto from "node:crypto";
 import type { NextFunction, Request, Response } from "express";
 import express from "express";
-import proxy from "express-http-proxy";
 import type { AppConfig } from "../../../config/application.schema.mjs";
 import { createRequestIdMiddleware } from "../../express/requestId.mjs";
 import logger from "../../logger.mjs";
+import { createUpstreamProxy } from "../../router/upstream.mjs";
 import { computeCacheExpiresAt } from "./cache-expiry.mjs";
 import { type CookieRejectReason, extractCookie } from "./cookie-extractor.mjs";
 import { createExchangeHandler, type ExchangeHandler } from "./exchange.mjs";
@@ -286,20 +286,7 @@ export const createRouter = ({
 			next();
 		})
 		.use(injectionMiddleware({ tokenCache, singleFlight, grantClient, cfg, exchange }))
-		.use(
-			proxy(config.upstream.baseURL, {
-				limit: config.http.bodyLimitSize,
-				proxyReqOptDecorator: async (proxyReqOpts, srcReq) => {
-					if (srcReq?.headers?.authorization) {
-						proxyReqOpts.headers.Authorization = srcReq.headers.authorization;
-					}
-					if (srcReq?.headers?.["x-request-id"]) {
-						proxyReqOpts.headers["x-request-id"] = srcReq.headers["x-request-id"];
-					}
-					return proxyReqOpts;
-				},
-			}),
-		);
+		.use(createUpstreamProxy(config));
 
 	return router;
 };
