@@ -1,0 +1,101 @@
+/*
+ * Copyright 2026 1o1 Co. Ltd.
+ *
+ * Licensed under the Apache License, Version 2.0 (the "License");
+ * you may not use this file except in compliance with the License.
+ * You may obtain a copy of the License at
+ *
+ *     http://www.apache.org/licenses/LICENSE-2.0
+ *
+ * Unless required by applicable law or agreed to in writing, software
+ * distributed under the License is distributed on an "AS IS" BASIS,
+ * WITHOUT WARRANTIES OR CONDITIONS OF ANY KIND, either express or implied.
+ * See the License for the specific language governing permissions and
+ * limitations under the License.
+ */
+
+import { extractBearerToken } from "../../express/bearer.mjs";
+import type { Logger } from "../../logger.mjs";
+import { IntrospectHttpError, type IntrospectionResult } from "./introspect.mjs";
+
+/** The two header values the decision reads — plain strings, no request object. */
+export interface ValidationInputs {
+	/** As normalised by `express/requestId`; `""` when that middleware is not mounted first. */
+	requestId: string;
+	authorization: string | undefined;
+}
+
+/**
+ * What the decision asks of the provider: the introspection result for one
+ * token, from the cache or the endpoint. `createRouter` binds the concrete
+ * `introspect` with its URL, bounds and credential choice; a caller may supply
+ * its own. The client interface and a router-owned cache are F5 on #95, which
+ * replaces this seam without moving the decision.
+ */
+export type Introspector = (token: string, requestId: string) => Promise<IntrospectionResult>;
+
+/** What the validation decision needs (#95 F3). */
+export interface ValidationDeps {
+	introspect: Introspector;
+	logger: Logger;
+}
+
+/**
+ * The decision, as data. The middleware in `router.mts` applies it: `forward`
+ * calls `next()` with `req.headers` untouched, `reject` writes the status and
+ * the `{ code, message }` body.
+ */
+export type ValidationOutcome =
+	| { kind: "forward" }
+	| { kind: "reject"; status: number; body: { code: number; message: string } };
+
+const reject = (status: number, message: string): ValidationOutcome => ({
+	kind: "reject",
+	status,
+	body: { code: status, message },
+});
+
+/**
+ * The validation decision (#95 F3): the one place that reads `Authorization`,
+ * consults the introspector and says what happens to the request. It never
+ * sees Express; `router.mts` reads the headers and applies the outcome.
+ *
+ *   - no Authorization                        forward, the provider not consulted
+ *   - not `Bearer <token>`                    400 Invalid Token Type
+ *   - active: false                           401 Invalid Token
+ *   - the provider answers 401                401 Invalid Token
+ *   - any other failure                       500 Internal Server Error
+ *   - active: true                            forward
+ *
+ * What is forwarded is decided by `req.headers`, which the middleware never
+ * modifies on this path: the first SP-delimited word is introspected, the
+ * inbound bytes go upstream (F14).
+ */
+export const decideValidation = async (
+	{ requestId, authorization }: ValidationInputs,
+	{ introspect, logger }: ValidationDeps,
+): Promise<ValidationOutcome> => {
+	if (!authorization) {
+		return { kind: "forward" };
+	}
+
+	const bearer = extractBearerToken(authorization);
+	if (!bearer) {
+		return reject(400, "Invalid Token Type");
+	}
+
+	try {
+		const result = await introspect(bearer.token, requestId);
+		if (!result.active) {
+			return reject(401, "Invalid Token");
+		}
+	} catch (e) {
+		logger.error({ "x-request-id": requestId, error: e }, "introspect failed");
+		if (e instanceof IntrospectHttpError && e.status === 401) {
+			return reject(401, "Invalid Token");
+		}
+		return reject(500, "Internal Server Error");
+	}
+
+	return { kind: "forward" };
+};
