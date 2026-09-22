@@ -14,19 +14,22 @@
  * limitations under the License.
  */
 import crypto from "node:crypto";
-import type { NextFunction, Request, Response } from "express";
 import type { ExchangeConfig } from "../../../config/application.schema.mjs";
-import logger from "../../logger.mjs";
+import type { Logger } from "../../logger.mjs";
 import { parseBearerAssertion } from "./bearer-assertion.mjs";
 import { computeCacheExpiresAt } from "./cache-expiry.mjs";
+import type { ExchangeArgs, InjectionOutcome } from "./decision.mjs";
 import {
-	createJwtBearerClient,
 	JWT_BEARER_GRANT_TYPE,
+	type JwtBearerClient,
 	JwtBearerError,
 } from "./jwt-bearer-client.mjs";
 import { buildTokenUrl } from "./session-grant-client.mjs";
-import { createSingleFlight } from "./single-flight.mjs";
-import { createTokenCache } from "./token-cache.mjs";
+import type { SingleFlight } from "./single-flight.mjs";
+import type { TokenCache } from "./token-cache.mjs";
+
+/** `auth.injection.exchange` with the exchange on. */
+export type ExchangeSettings = Extract<ExchangeConfig, { enabled: true }>;
 
 /** Everything besides the assertion that changes what the provider issues. */
 export interface ExchangeContext {
@@ -36,6 +39,21 @@ export interface ExchangeContext {
 	audience: string | null;
 	resource: string | null;
 }
+
+/**
+ * The context from config. Pure, so the assembly derives it once per router;
+ * the client secret is deliberately not part of it.
+ */
+export const exchangeContext = (
+	providerOrigin: string,
+	exchange: Pick<ExchangeSettings, "clientId" | "scope" | "audience" | "resource">,
+): ExchangeContext => ({
+	tokenEndpoint: buildTokenUrl(providerOrigin),
+	clientId: exchange.clientId,
+	scope: exchange.scope,
+	audience: exchange.audience,
+	resource: exchange.resource,
+});
 
 /**
  * The cache and single-flight key: SHA-256 over a JSON array, so no field's
@@ -87,35 +105,49 @@ export const computeExchangeExpiresAt = ({
 		? null
 		: computeCacheExpiresAt({ ...rest, notAfter: assertionExpiresAt * 1000 });
 
-export interface ExchangeHandlerConfig {
-	providerOrigin: string;
-	timeoutMs: number;
-	tokenCache: { ttlSeconds: number; maxEntries: number; safetyMarginSeconds: number };
-	exchange: Extract<ExchangeConfig, { enabled: true }>;
+/** What the exchange decision reads and calls (#95 F2, F4). */
+export interface ExchangeDeps {
+	/** The cache key's context, derived once by `exchangeContext`. */
+	context: ExchangeContext;
+	/** `auth.injection.exchange.allowedIssuers` as a set: a prefilter when non-empty, no filter when empty. */
+	allowedIssuers: ReadonlySet<string>;
+	/** `auth.injection.tokenCache`'s bounds on a cached result; `maxEntries` is the cache's own. */
+	cachePolicy: { ttlSeconds: number; safetyMarginSeconds: number };
+	client: JwtBearerClient;
+	/**
+	 * The exchange path's own instances — the session path's never see an
+	 * exchange entry, and vice versa. Both are keyed by `exchangeCacheKey`,
+	 * which carries the context but neither the client nor the cache policy,
+	 * so an instance supplied through `createRouter({ deps })` may be shared
+	 * only between routers whose context, client and cache policy are
+	 * identical (#95 F33).
+	 */
+	tokenCache: TokenCache;
+	/** Same key space, same sharing contract as `tokenCache`. */
+	singleFlight: SingleFlight<string>;
+	logger: Logger;
 }
 
-export type ExchangeHandler = (
-	req: Request,
-	res: Response,
-	next: NextFunction,
-	args: { requestId: string; authorization: string; sessionCookie: "absent" | "found" | "rejected" },
-) => Promise<void>;
+/**
+ * The exchange answers in the session decision's vocabulary: inject the
+ * issued token, or respond. `router.mts` applies it the same way.
+ */
+export type ExchangeOutcome = Extract<InjectionOutcome, { kind: "inject" | "respond" }>;
 
 const respond = (
-	res: Response,
 	status: number,
 	error: string,
 	description: string,
 	retryAfter: string | null = null,
-): void => {
-	if (retryAfter !== null) {
-		res.setHeader("Retry-After", retryAfter);
-	}
+): ExchangeOutcome => ({
+	kind: "respond",
+	status,
 	// No WWW-Authenticate, as on the session path: the body is the contract.
-	res.status(status).json({ error, error_description: description });
-};
+	body: { error, error_description: description },
+	retryAfter,
+});
 
-const logFailure = (requestId: string, err: JwtBearerError): void => {
+const logFailure = (logger: Logger, requestId: string, err: JwtBearerError): void => {
 	const fields = { requestId, providerError: err.providerError, error: err.message };
 	switch (err.code) {
 		case "credential_rejected":
@@ -149,13 +181,14 @@ const logFailure = (requestId: string, err: JwtBearerError): void => {
 };
 
 /**
- * The external credential exchange (#90) — the injection-mode path for a
+ * The external credential exchange (#90) — the injection-mode decision for a
  * request that carries an `Authorization` header while
- * `auth.injection.exchange.enabled` is on.
+ * `auth.injection.exchange.enabled` is on. The session decision hands off to it
+ * with `ExchangeArgs`; it never sees Express (#95 F2).
  *
  * The proxy is a token-endpoint client here and nothing more: it submits the
  * inbound JWT as an RFC 7523 assertion to its configured provider, and on
- * success REPLACES the inbound header with the issued token. Which issuers are
+ * success the issued token REPLACES the inbound header. Which issuers are
  * trusted, on what terms, for which client, scope and audience — and the
  * ID-JAG profile's client binding and one-time `jti` — are decided by the
  * provider's assertion issuer registry. On every other outcome the request is
@@ -172,139 +205,105 @@ const logFailure = (requestId: string, err: JwtBearerError): void => {
  * submission. Failures are neither cached nor retried, so a one-time assertion
  * is submitted once per client presentation and never silently again.
  */
-export const createExchangeHandler = (cfg: ExchangeHandlerConfig): ExchangeHandler => {
-	const { exchange } = cfg;
-	const client = createJwtBearerClient({
-		providerOrigin: cfg.providerOrigin,
-		timeoutMs: cfg.timeoutMs,
-		clientId: exchange.clientId,
-		clientSecret: exchange.clientSecret,
-		scope: exchange.scope,
-		audience: exchange.audience,
-		resource: exchange.resource,
-	});
-	// Its own instances: the session cache and its single-flight never see an
-	// exchange entry, and vice versa. Sized by the same tokenCache.maxEntries.
-	const cache = createTokenCache({ maxEntries: cfg.tokenCache.maxEntries });
-	const singleFlight = createSingleFlight<string>();
-	const context: ExchangeContext = {
-		tokenEndpoint: buildTokenUrl(cfg.providerOrigin),
-		clientId: exchange.clientId,
-		scope: exchange.scope,
-		audience: exchange.audience,
-		resource: exchange.resource,
-	};
-	const allowedIssuers =
-		exchange.allowedIssuers.length > 0 ? new Set(exchange.allowedIssuers) : null;
+export const decideExchange = async (
+	{ requestId, authorization, sessionCookie }: ExchangeArgs,
+	deps: ExchangeDeps,
+): Promise<ExchangeOutcome> => {
+	const { logger } = deps;
+	if (sessionCookie !== "absent") {
+		// Two credentials for one request. Picking either would let a
+		// failure on one quietly become a success on the other.
+		logger.warn(
+			{
+				requestId,
+				event: "injection.exchange_credential_ambiguous",
+				sessionCookie,
+				metric: "auth_proxy_injection_exchange_credential_ambiguous",
+			},
+			"request carries both a session cookie and an Authorization header",
+		);
+		return respond(
+			400,
+			"credential_ambiguous",
+			"send either the session cookie or an Authorization header, not both",
+		);
+	}
 
-	return async (req, res, next, { requestId, authorization, sessionCookie }) => {
-		if (sessionCookie !== "absent") {
-			// Two credentials for one request. Picking either would let a
-			// failure on one quietly become a success on the other.
-			logger.warn(
+	const parsed = parseBearerAssertion(authorization);
+	if (parsed.kind === "unsupported") {
+		logger.info(
+			{ requestId, event: "injection.exchange_credential_unsupported", reason: parsed.reason },
+			"Authorization is not a Bearer JWT assertion",
+		);
+		return respond(401, "credential_unsupported", "Authorization must be a Bearer JWT assertion");
+	}
+
+	// A prefilter only: it can refuse, never admit, and `iss` selects
+	// nothing. The unverified value is not logged.
+	if (
+		deps.allowedIssuers.size > 0 &&
+		(parsed.issuer === null || !deps.allowedIssuers.has(parsed.issuer))
+	) {
+		logger.info(
+			{ requestId, event: "injection.exchange_issuer_refused" },
+			"assertion issuer is not in allowedIssuers",
+		);
+		return respond(401, "credential_rejected", "the credential was rejected");
+	}
+
+	const cacheKey = exchangeCacheKey(deps.context, parsed.assertion);
+
+	// No await between this lookup and `singleFlight.run`: a request that
+	// misses here joins a flight still in progress rather than starting a
+	// second submission of the same assertion.
+	const cached = deps.tokenCache.get(cacheKey);
+	if (cached !== null) {
+		logger.debug({ requestId, event: "injection.exchange_cache_hit" }, "cache hit");
+		return { kind: "inject", token: cached };
+	}
+
+	try {
+		const { value: token, wasWaiter } = await deps.singleFlight.run(cacheKey, async () => {
+			logger.info({ requestId, event: "injection.exchange_fetch" }, "exchanging assertion");
+			// Captured before the request goes out: expires_in is measured
+			// from here, not from however late the response arrives.
+			const requestedAt = Date.now();
+			const result = await deps.client.exchange({ assertion: parsed.assertion, requestId });
+			const expiresAt = computeExchangeExpiresAt({
+				requestedAt,
+				now: Date.now(),
+				ttlSeconds: deps.cachePolicy.ttlSeconds,
+				safetyMarginSeconds: deps.cachePolicy.safetyMarginSeconds,
+				expiresIn: result.expiresIn,
+				assertionExpiresAt: parsed.expiresAt,
+			});
+			if (expiresAt !== null) {
+				deps.tokenCache.set(cacheKey, result.accessToken, expiresAt);
+			}
+			logger.info(
 				{
 					requestId,
-					event: "injection.exchange_credential_ambiguous",
-					sessionCookie,
-					metric: "auth_proxy_injection_exchange_credential_ambiguous",
-				},
-				"request carries both a session cookie and an Authorization header",
-			);
-			respond(
-				res,
-				400,
-				"credential_ambiguous",
-				"send either the session cookie or an Authorization header, not both",
-			);
-			return;
-		}
-
-		const parsed = parseBearerAssertion(authorization);
-		if (parsed.kind === "unsupported") {
-			logger.info(
-				{ requestId, event: "injection.exchange_credential_unsupported", reason: parsed.reason },
-				"Authorization is not a Bearer JWT assertion",
-			);
-			respond(
-				res,
-				401,
-				"credential_unsupported",
-				"Authorization must be a Bearer JWT assertion",
-			);
-			return;
-		}
-
-		// A prefilter only: it can refuse, never admit, and `iss` selects
-		// nothing. The unverified value is not logged.
-		if (allowedIssuers !== null && (parsed.issuer === null || !allowedIssuers.has(parsed.issuer))) {
-			logger.info(
-				{ requestId, event: "injection.exchange_issuer_refused" },
-				"assertion issuer is not in allowedIssuers",
-			);
-			respond(res, 401, "credential_rejected", "the credential was rejected");
-			return;
-		}
-
-		const cacheKey = exchangeCacheKey(context, parsed.assertion);
-		const replace = (token: string): void => {
-			req.headers.authorization = `Bearer ${token}`;
-			next();
-		};
-
-		// No await between this lookup and `singleFlight.run`: a request that
-		// misses here joins a flight still in progress rather than starting a
-		// second submission of the same assertion.
-		const cached = cache.get(cacheKey);
-		if (cached !== null) {
-			logger.debug({ requestId, event: "injection.exchange_cache_hit" }, "cache hit");
-			replace(cached);
-			return;
-		}
-
-		try {
-			const { value: token, wasWaiter } = await singleFlight.run(cacheKey, async () => {
-				logger.info({ requestId, event: "injection.exchange_fetch" }, "exchanging assertion");
-				// Captured before the request goes out: expires_in is measured
-				// from here, not from however late the response arrives.
-				const requestedAt = Date.now();
-				const result = await client.exchange({ assertion: parsed.assertion, requestId });
-				const expiresAt = computeExchangeExpiresAt({
-					requestedAt,
-					now: Date.now(),
-					ttlSeconds: cfg.tokenCache.ttlSeconds,
-					safetyMarginSeconds: cfg.tokenCache.safetyMarginSeconds,
+					event: "injection.exchange_success",
 					expiresIn: result.expiresIn,
-					assertionExpiresAt: parsed.expiresAt,
-				});
-				if (expiresAt !== null) {
-					cache.set(cacheKey, result.accessToken, expiresAt);
-				}
-				logger.info(
-					{
-						requestId,
-						event: "injection.exchange_success",
-						expiresIn: result.expiresIn,
-						cached: expiresAt !== null,
-					},
-					"exchange success",
-				);
-				return result.accessToken;
-			});
-			if (wasWaiter) {
-				logger.debug({ requestId, event: "injection.exchange_single_flight_wait" }, "coalesced");
-			}
-			replace(token);
-		} catch (err) {
-			if (err instanceof JwtBearerError) {
-				logFailure(requestId, err);
-				respond(res, err.status, err.code, err.message, err.retryAfter);
-				return;
-			}
-			logger.error(
-				{ requestId, event: "injection.exchange_unexpected_error", error: String(err) },
-				"exchange failed (unknown)",
+					cached: expiresAt !== null,
+				},
+				"exchange success",
 			);
-			respond(res, 502, "provider_unavailable", "provider call failed");
+			return result.accessToken;
+		});
+		if (wasWaiter) {
+			logger.debug({ requestId, event: "injection.exchange_single_flight_wait" }, "coalesced");
 		}
-	};
+		return { kind: "inject", token };
+	} catch (err) {
+		if (err instanceof JwtBearerError) {
+			logFailure(logger, requestId, err);
+			return respond(err.status, err.code, err.message, err.retryAfter);
+		}
+		logger.error(
+			{ requestId, event: "injection.exchange_unexpected_error", error: String(err) },
+			"exchange failed (unknown)",
+		);
+		return respond(502, "provider_unavailable", "provider call failed");
+	}
 };

@@ -6,8 +6,8 @@
  * plain header values and the injectable deps, and returns an outcome the
  * middleware applies. Nothing here touches Express; the wire shape of each
  * outcome is pinned by `router.test.mts`, the exchange path's refusals by
- * `exchange-router.test.mts` (the exchange handler itself is F2 and is only
- * handed off to from here).
+ * `exchange-router.test.mts`; the exchange decision is `exchange-decision.test.mts`
+ * and is only handed off to from here.
  */
 import { createHash } from "node:crypto";
 import { describe, expect, it, vi } from "vitest";
@@ -357,7 +357,7 @@ describe("decideInjection", () => {
 		});
 	});
 
-	describe("exchange: the hand-off to the exchange handler (F2), not decided here", () => {
+	describe("exchange: the hand-off to decideExchange (F2), not decided here", () => {
 		it.each([
 			{ cookieHeader: undefined, sessionCookie: "absent" as const },
 			{ cookieHeader: "sid=s1", sessionCookie: "found" as const },
