@@ -9,7 +9,6 @@ import { afterEach, beforeEach, describe, expect, it, vi } from "vitest";
 import type { AppConfig } from "../../../../config/application.schema.mjs";
 import type { Logger } from "../../../logger.mjs";
 import logger from "../../../logger.mjs";
-import { clearCache } from "../introspect.mjs";
 import { createRouter } from "../router.mjs";
 
 const makeConfig = (upstreamPort: number): AppConfig => ({
@@ -32,7 +31,6 @@ describe("validation router", () => {
 	let upstreamPort: number;
 
 	beforeEach(async () => {
-		clearCache();
 		upstreamCalls = 0;
 		upstreamHeaders = [];
 		upstream = createServer((req, res) => {
