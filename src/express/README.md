@@ -16,7 +16,7 @@ Transport helpers for the Express layer. They read and normalise inbound headers
 
 ## Inputs and outputs
 
-- `bearer.mts` — in: the header string; out: `{ token }`. It carried the header as received as well, for forwarding it on unchanged, which nothing ever read: what goes upstream is `req.headers`, which the modes leave alone (F15).
+- `bearer.mts` — in: the header string; out: `{ token }`. It carried the header as received as well, for forwarding it on unchanged, which nothing ever read (F15). Only validation parses a header with this, and that path forwards what `req.headers` already holds, so there was nothing for a copy to do. Injection does rewrite `req.headers.authorization` — stripping it or replacing it with the token it minted — but it decides that from the cookie and its own outcome, never from a parsed bearer.
 - `requestId.mts` — in: `req.headers[<header>]` (`string | string[]`); out: the same key normalised to one non-empty string, and the response header. Default header `x-request-id`, compared lowercased as Node stores it (`headerKey` in [`createRequestIdMiddleware`](requestId.mts)).
 
 ## Dependencies
