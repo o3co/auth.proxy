@@ -9,6 +9,7 @@ import type { AppConfig } from "../../../../config/application.schema.mjs";
 import type { Logger } from "../../../logger.mjs";
 import logger from "../../../logger.mjs";
 import { createRouter } from "../router.mjs";
+import { createSingleFlight, type SingleFlight } from "../single-flight.mjs";
 import { createTokenCache } from "../token-cache.mjs";
 
 type UpstreamRecorder = {
@@ -614,5 +615,26 @@ describe("injection router", () => {
 		expect(upstream.received[0].headers.authorization).toBe("Bearer tok-seeded");
 		expect(grantClient.exchange).not.toHaveBeenCalled();
 		expect(fetchMock).not.toHaveBeenCalled();
+	});
+
+	it("accepts an injected single flight: the supplied run is what coalesces the grant call (#95 F4)", async () => {
+		const real = createSingleFlight<string>();
+		const singleFlight: SingleFlight<string> = {
+			run: vi.fn(real.run),
+			_sizeForTesting: real._sizeForTesting,
+		};
+		fetchMock.mockResolvedValueOnce(okGrantResponse("tok-flight"));
+		const app = express();
+		app.use(createRouter({ config: makeConfig(upstream.baseURL), deps: { singleFlight } }));
+
+		const res = await request(app).get("/any").set("Cookie", "sid=s1");
+
+		expect(res.status).toBe(204);
+		expect(upstream.received[0].headers.authorization).toBe("Bearer tok-flight");
+		expect(singleFlight.run).toHaveBeenCalledTimes(1);
+		expect(singleFlight.run).toHaveBeenCalledWith(
+			createHash("sha256").update("s1").digest("hex"),
+			expect.any(Function),
+		);
 	});
 });

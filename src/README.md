@@ -42,7 +42,8 @@ State held for the life of the process, and who owns it:
 | State | Owner | Released |
 | --- | --- | --- |
 | parsed config | `config` in [`app.mts`](app.mts) | never; immutable after boot |
-| session token cache and single-flight table | the [`createRouter`](modes/injection/router.mts) closure — built there, or supplied via `deps` (#95 F4) | at process exit |
+| session token cache and single-flight table, router-built (the default) | the [`createRouter`](modes/injection/router.mts) closure | at process exit |
+| session token cache and single-flight table, supplied via `deps` (#95 F4) | the caller that supplied them — it may retain, share, clear or dispose them | the caller's responsibility; the router never clears what it did not build |
 | exchange cache and single-flight table | the [`createExchangeHandler`](modes/injection/exchange.mts) closure | at process exit |
 | introspection cache | the module-level `cache` in [`introspect.mts`](modes/validation/introspect.mts) | at process exit; `clearCache` is a test seam |
 | `shuttingDown` / `finished` | the [`installGracefulShutdown`](shutdown.mts) closure | n/a |
