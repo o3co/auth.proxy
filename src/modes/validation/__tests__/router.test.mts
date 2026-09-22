@@ -87,11 +87,14 @@ describe("validation router", () => {
 		});
 
 		it("answers 401 Invalid Token when the provider answers 401", async () => {
-			vi.stubGlobal("fetch", vi.fn(async () => new Response("", { status: 401 })));
+			const fetchMock = vi.fn(async () => new Response("", { status: 401 }));
+			vi.stubGlobal("fetch", fetchMock);
 			const res = await request(app).get("/protected").set("Authorization", "Bearer t");
 			expect(res.status).toBe(401);
 			expect(res.body).toEqual({ code: 401, message: "Invalid Token" });
 			expect(upstreamCalls).toBe(0);
+			// The mapping was reached through introspection, not around it.
+			expect(fetchMock).toHaveBeenCalledTimes(1);
 		});
 
 		it.each([
@@ -99,11 +102,13 @@ describe("validation router", () => {
 			{ failure: "the provider answers 200 with a non-JSON body (IntrospectHttpError 502 raised by introspect itself)", fetchImpl: async () => new Response("<html>", { status: 200 }) },
 			{ failure: "fetch rejects", fetchImpl: async () => { throw new Error("socket hang up"); } },
 		])("answers 500 Internal Server Error when $failure", async ({ fetchImpl }) => {
-			vi.stubGlobal("fetch", vi.fn(fetchImpl));
+			const fetchMock = vi.fn(fetchImpl);
+			vi.stubGlobal("fetch", fetchMock);
 			const res = await request(app).get("/protected").set("Authorization", "Bearer t");
 			expect(res.status).toBe(500);
 			expect(res.body).toEqual({ code: 500, message: "Internal Server Error" });
 			expect(upstreamCalls).toBe(0);
+			expect(fetchMock).toHaveBeenCalledTimes(1);
 		});
 	});
 });
