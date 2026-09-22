@@ -61,7 +61,7 @@ const validationMiddleware =
 
 /**
  * The concrete `introspect` bound to this router's config: URL, cache bounds,
- * timeout, and the credential choice per token ([`buildAuthHeader`]).
+ * timeout, and the credential choice per token (`buildAuthHeader`).
  */
 const bindIntrospect = (validation: ValidationConfig["validation"]): Introspector => {
 	const introspectUrl: string = validation.introspect.url;
