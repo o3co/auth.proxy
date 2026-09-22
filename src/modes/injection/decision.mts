@@ -39,6 +39,12 @@ const sha256Hex = (s: string): string =>
  */
 export interface InjectionDeps {
 	cfg: InjectionConfig["injection"];
+	/**
+	 * Both keyed by SHA-256 of the cookie value alone — nothing of the grant
+	 * context is in the key. An instance supplied through `createRouter({ deps })`
+	 * may therefore be shared only between routers whose grant settings (provider,
+	 * client, scope, grant client) are identical (#95 F33).
+	 */
 	tokenCache: TokenCache;
 	singleFlight: SingleFlight<string>;
 	grantClient: SessionGrantClient;
