@@ -15,18 +15,35 @@
  */
 import type { RequestHandler } from "express";
 import proxy from "express-http-proxy";
-import type { AppConfig } from "../../config/application.schema.mjs";
+
+/** The two config fields the stage reads. `AppConfig` satisfies it structurally. */
+export interface UpstreamStageConfig {
+	upstream: { baseURL: string };
+	http: { bodyLimitSize: string };
+}
 
 /**
  * The upstream proxy stage — the last middleware of either mode's router.
  *
  * It is assembly (built from `upstream.baseURL` and `http.bodyLimitSize`), not
  * a mode's decision, so both routers mount this one function instead of each
- * carrying its own copy (#95 F18). The decorator copies the inbound
- * `Authorization` and `x-request-id` onto the proxied request when present;
- * upstream receives the inbound bytes unchanged.
+ * carrying its own copy (#95 F18).
+ *
+ * What reaches upstream is decided before this stage, on `req.headers`.
+ * express-http-proxy copies every inbound header except `connection` and
+ * `host` onto the outbound request and sets `connection: close` before any
+ * decorator runs (`reqHeaders` in `express-http-proxy/lib/requestOptions.js`).
+ * So this decorator does not choose what is forwarded. It re-sets
+ * `Authorization` in canonical casing beside the lowercase copy the library
+ * already made — Node's `setHeader` dedups header names case-insensitively
+ * and the last write wins, so only the casing on the wire changes — and it
+ * re-sets `x-request-id` to the value already there, a wire no-op. That is
+ * why `stripInboundAuthorization` deletes the header from `req.headers` in
+ * `src/modes/injection/router.mts` (see the comment above
+ * `forwardWithoutInjection`) rather than acting here. Whether to drop this
+ * decorator is tracked with F14 / F15 on #95.
  */
-export const createUpstreamProxy = (config: AppConfig): RequestHandler =>
+export const createUpstreamProxy = (config: UpstreamStageConfig): RequestHandler =>
 	proxy(config.upstream.baseURL, {
 		limit: config.http.bodyLimitSize,
 		proxyReqOptDecorator: async (proxyReqOpts, srcReq) => {
