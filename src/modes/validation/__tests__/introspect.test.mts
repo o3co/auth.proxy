@@ -135,6 +135,10 @@ describe("createIntrospector", () => {
 
 			await Promise.all([introspector("fresh", "r3"), introspector("fresh", "r4")]);
 
+			// Both really reached the provider: two seeding calls plus these two.
+			// Without this the scenario could be one call and one cache hit, which
+			// is not the case under test.
+			expect(introspect).toHaveBeenCalledTimes(4);
 			expect(cache.size()).toBe(2);
 			expect(cache.get(sha256("older"))).toBeNull();
 			expect(cache.get(sha256("newer"))).not.toBeNull();
