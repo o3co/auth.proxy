@@ -27,7 +27,7 @@ In: `application.conf` plus the process environment — every `${?NAME}` substit
 | `auth.injection.timeoutMs` | `auth.injection` | `.default()` |
 | `auth.injection.exchange.*` | `auth.injection.exchange` | `strictBoolean`, `optionalString`, `whitespaceSeparatedList`; an absent block is `{}` via `.prefault` on [`exchangeSchema`](application.schema.mts) |
 
-Those two had a third copy as parameter defaults of the old fused `introspect`; #95 F23 removed it, and the schema is now the only place they are declared. Keys whose default lives **only** in the conf (the schema validates but has no `.default()`): `auth.validation.introspect.url`, `auth.injection.providerOrigin`, `auth.injection.sessionCookieName`, `upstream.baseURL`. Keys the conf sets to a placeholder the schema refuses, so they are effectively required: `auth.mode` (`null` in the conf; the `discriminatedUnion` has no default), `auth.injection.clientId` (`""` in the conf; `.min(1)`), `auth.injection.scope` (`""` in the conf; `.min(1)`).
+Those two had a third declaration as parameter defaults of the old fused `introspect`; #95 F23 removed it, so they are declared in the schema and in the shipped conf like every other key, and nowhere else in code. Keys whose default lives **only** in the conf (the schema validates but has no `.default()`): `auth.validation.introspect.url`, `auth.injection.providerOrigin`, `auth.injection.sessionCookieName`, `upstream.baseURL`. Keys the conf sets to a placeholder the schema refuses, so they are effectively required: `auth.mode` (`null` in the conf; the `discriminatedUnion` has no default), `auth.injection.clientId` (`""` in the conf; `.min(1)`), `auth.injection.scope` (`""` in the conf; `.min(1)`).
 
 ## Dependencies
 

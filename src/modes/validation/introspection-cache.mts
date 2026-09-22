@@ -22,6 +22,15 @@ import type { IntrospectionResult } from "./introspection-client.mjs";
  * An entry is served only while `expiresAt` is still ahead; a stale one is not
  * served and is swept on the next write, so a cache that is never written to
  * again keeps its dead entries and serves none of them.
+ *
+ * Two deliberate differences from the injection path's `TokenCache`, both of
+ * them the behaviour this replaced: `get` does not delete the stale entry it
+ * declines to serve, so the bound is enforced on write alone; and `set` does
+ * not re-insert a key it already holds, so below the bound a refreshed entry
+ * keeps its position and is evicted on its original age. Eviction is by
+ * insertion rather than by use — with one seam: at the bound the oldest is
+ * dropped before the write, and when that is the key being written it is
+ * re-inserted last.
  */
 export interface IntrospectionCache {
 	get(key: string): IntrospectionResult | null;

@@ -56,19 +56,31 @@ describe("buildAuthHeader", () => {
 	// re-splits the credential at the wrong place and the provider reads a
 	// different client.
 	it("percent-encodes a ':' in either half so the credential cannot re-split", () => {
-		const header = buildAuthHeader({ clientId: "a:b", clientSecret: "c:d" }, "t");
-		const decoded = Buffer.from(header.slice("Basic ".length), "base64").toString();
-		expect(decoded).toBe("a%3Ab:c%3Ad");
+		const header = buildAuthHeader(
+			{ clientId: "https://api.example.com/orders", clientSecret: "a:b" },
+			"unused",
+		);
+		const decoded = Buffer.from(header.slice("Basic ".length), "base64").toString("utf8");
+
+		expect(decoded).toBe("https%3A%2F%2Fapi.example.com%2Forders:a%3Ab");
+		// Exactly one ":" survives — the userid/password separator itself.
 		expect(decoded.split(":")).toHaveLength(2);
 	});
 
+	// The provider decodes with `decodeURIComponent(s.replace(/\+/g, " "))`, the
+	// matching form-urlencoded decoder, so every encoded byte round-trips. A
+	// space becomes %20 rather than "+" (encodeURIComponent), which that decoder
+	// reads back as a space just the same.
 	it("round-trips reserved characters through the provider's form-urlencoded decoder", () => {
-		const header = buildAuthHeader({ clientId: "a b+c", clientSecret: "d/e=f" }, "t");
-		const [id, secret] = Buffer.from(header.slice("Basic ".length), "base64")
-			.toString()
-			.split(":");
-		expect(decodeURIComponent(id)).toBe("a b+c");
-		expect(decodeURIComponent(secret)).toBe("d/e=f");
+		const clientId = "cl ient+id%20&x=1";
+		const clientSecret = "s3:cret/with?reserved#chars";
+		const header = buildAuthHeader({ clientId, clientSecret }, "unused");
+		const decoded = Buffer.from(header.slice("Basic ".length), "base64").toString("utf8");
+		const [encodedId, encodedSecret] = decoded.split(":");
+		const formUrlDecode = (v: string): string => decodeURIComponent(v.replace(/\+/g, " "));
+
+		expect(formUrlDecode(encodedId)).toBe(clientId);
+		expect(formUrlDecode(encodedSecret)).toBe(clientSecret);
 	});
 });
 

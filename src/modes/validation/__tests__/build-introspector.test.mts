@@ -12,6 +12,7 @@ import express from "express";
 import request from "supertest";
 import { afterEach, describe, expect, it, vi } from "vitest";
 import type { AppConfig } from "../../../../config/application.schema.mjs";
+import { createIntrospector } from "../introspect.mjs";
 import { createIntrospectionCache } from "../introspection-cache.mjs";
 import { createIntrospectionClient } from "../introspection-client.mjs";
 import { createRouter } from "../router.mjs";
@@ -24,9 +25,14 @@ vi.mock("../introspection-cache.mjs", async (importOriginal) => {
 	const actual = await importOriginal<typeof import("../introspection-cache.mjs")>();
 	return { ...actual, createIntrospectionCache: vi.fn(actual.createIntrospectionCache) };
 });
+vi.mock("../introspect.mjs", async (importOriginal) => {
+	const actual = await importOriginal<typeof import("../introspect.mjs")>();
+	return { ...actual, createIntrospector: vi.fn(actual.createIntrospector) };
+});
 
 const clientFactory = vi.mocked(createIntrospectionClient);
 const cacheFactory = vi.mocked(createIntrospectionCache);
+const introspectorFactory = vi.mocked(createIntrospector);
 
 const makeConfig = (client: { clientId: string | null; clientSecret: string | null }): AppConfig => ({
 	http: {
@@ -57,6 +63,11 @@ describe("the router's own introspector", () => {
 			credentials: { clientId: "proxy", clientSecret: "s3cret" },
 		});
 		expect(cacheFactory).toHaveBeenCalledWith({ maxEntries: 77 });
+		// The three numbers are distinct, so a swapped wiring — the timeout
+		// arriving as the TTL, say — fails here rather than passing unseen.
+		expect(introspectorFactory).toHaveBeenCalledWith(
+			expect.objectContaining({ cacheTtlSec: 31 }),
+		);
 	});
 
 	it("resolves no credentials unless both halves are configured", () => {
@@ -81,7 +92,10 @@ describe("the router's own introspector", () => {
 		const app = express();
 		app.use(createRouter({ config: makeConfig({ clientId: null, clientSecret: null }) }));
 
-		const first = await request(app).get("/protected").set("Authorization", "Bearer tok");
+		const first = await request(app)
+			.get("/protected")
+			.set("Authorization", "Bearer tok")
+			.set("x-request-id", "rid-bound");
 		const second = await request(app).get("/protected").set("Authorization", "Bearer tok");
 
 		expect(first.status).toBe(401);
@@ -89,6 +103,10 @@ describe("the router's own introspector", () => {
 		// `cacheTtlSec: 31` is what makes the second answer come from the cache.
 		expect(fetchMock).toHaveBeenCalledTimes(1);
 		expect(fetchMock.mock.calls[0][0]).toBe("http://provider.test/introspect-bound");
+		// The request id survives the whole seam: middleware, decision,
+		// introspector, client, provider request.
+		const headers = fetchMock.mock.calls[0][1]?.headers as Record<string, string>;
+		expect(headers["x-request-id"]).toBe("rid-bound");
 	});
 
 	it("does not build either when the caller supplies its own introspector", () => {
@@ -97,5 +115,6 @@ describe("the router's own introspector", () => {
 
 		expect(clientFactory).not.toHaveBeenCalled();
 		expect(cacheFactory).not.toHaveBeenCalled();
+		expect(introspectorFactory).not.toHaveBeenCalled();
 	});
 });

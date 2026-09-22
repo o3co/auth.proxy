@@ -35,12 +35,15 @@ describe("createIntrospectionCache", () => {
 		expect(createIntrospectionCache({ maxEntries: 10 }).get("absent")).toBeNull();
 	});
 
-	it("sweeps expired entries on the next write, so a stale one does not hold a slot", () => {
+	it("sweeps expired entries before applying the bound, so a live entry is not evicted for a dead one", () => {
 		const clock = vi.spyOn(Date, "now").mockReturnValue(AT);
 		try {
-			const cache = createIntrospectionCache({ maxEntries: 10 });
+			// `live` is the oldest insertion and `stale` the one that dies, so a
+			// cache that dropped the oldest first would evict the usable entry
+			// and keep the corpse.
+			const cache = createIntrospectionCache({ maxEntries: 2 });
+			cache.set("live", { active: true, sub: "live" }, AT + 5000);
 			cache.set("stale", { active: true }, AT + 500);
-			cache.set("live", { active: true }, AT + 5000);
 			expect(cache.size()).toBe(2);
 
 			clock.mockReturnValue(AT + 1000);
@@ -48,10 +51,28 @@ describe("createIntrospectionCache", () => {
 
 			expect(cache.size()).toBe(2);
 			expect(cache.get("stale")).toBeNull();
-			expect(cache.get("live")).not.toBeNull();
+			expect(cache.get("live")).toEqual({ active: true, sub: "live" });
 		} finally {
 			clock.mockRestore();
 		}
+	});
+
+	it("below the bound, a re-set keeps its position: eviction is by insertion, not by use", () => {
+		// The injection path's `TokenCache` re-inserts on every `set`; this one
+		// does not, which is the behaviour it replaced. Refreshing `a` while
+		// there is room does not save it from being the first one dropped.
+		const cache = createIntrospectionCache({ maxEntries: 3 });
+		const live = Date.now() + 60_000;
+		cache.set("a", { active: true }, live);
+		cache.set("b", { active: true }, live);
+		cache.set("a", { active: true, sub: "refreshed" }, live);
+		expect(cache.get("a")).toEqual({ active: true, sub: "refreshed" });
+
+		cache.set("c", { active: true }, live);
+		cache.set("d", { active: true }, live);
+
+		expect(cache.get("a")).toBeNull();
+		expect(cache.get("b")).not.toBeNull();
 	});
 
 	it("drops the oldest insertion at the bound", () => {

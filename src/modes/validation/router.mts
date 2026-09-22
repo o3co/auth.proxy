@@ -20,7 +20,7 @@ import type { AppConfig } from "../../../config/application.schema.mjs";
 import { createRequestIdMiddleware } from "../../express/requestId.mjs";
 import defaultLogger from "../../logger.mjs";
 import { createUpstreamProxy } from "../../router/upstream.mjs";
-import { decideValidation, type ValidationDeps } from "./decision.mjs";
+import { decideValidation, type Introspector, type ValidationDeps } from "./decision.mjs";
 import { createIntrospector } from "./introspect.mjs";
 import { createIntrospectionCache } from "./introspection-cache.mjs";
 import { type ClientCredentials, createIntrospectionClient } from "./introspection-client.mjs";
@@ -67,7 +67,7 @@ const validationMiddleware =
  * response between them (#95 F5). Each router builds its own — the cache was
  * module state shared by every router in the process until then.
  */
-const buildIntrospector = (validation: ValidationConfig["validation"]) => {
+const buildIntrospector = (validation: ValidationConfig["validation"]): Introspector => {
 	const { clientId, clientSecret } = validation.client;
 	const credentials: ClientCredentials | null =
 		clientId !== null && clientSecret !== null ? { clientId, clientSecret } : null;
