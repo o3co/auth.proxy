@@ -32,11 +32,11 @@ import type { IntrospectionResult } from "./introspection-client.mjs";
  *
  * Writing a key the map already holds evicts nothing: it cannot push the map
  * past its bound, and the fused function this replaced dropped an unrelated
- * live entry for it. That is a deliberate difference, and it is reachable —
- * with no single-flight on this path, two requests for one token can both
- * miss, both call the provider and both write, and the second write is the
- * duplicate. Where the old function evicted a second live entry for it, this
- * one evicts none.
+ * live entry for it. That is a deliberate difference. It used to be reachable
+ * through the composition — with no single-flight, two requests for one token
+ * both missed, both called the provider and both wrote — and since #95 F6 it
+ * is not: one flight means one write. The property is the cache's own either
+ * way, and `introspection-cache.test.mts` is where it is pinned.
  */
 export interface IntrospectionCache {
 	get(key: string): IntrospectionResult | null;

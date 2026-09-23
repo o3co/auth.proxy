@@ -84,6 +84,25 @@ describe("the router's own introspector", () => {
 		expect(cacheFactory.mock.results[0].value).not.toBe(cacheFactory.mock.results[1].value);
 	});
 
+	// The flight table is the router's too, for the same reason and with the
+	// same key: two routers must not coalesce each other's requests, and a
+	// caller supplying deps.introspect gets neither (#95 F6).
+	it("gives each router its own flight table, and neither when the introspector is supplied", () => {
+		createRouter({ config: makeConfig({ clientId: null, clientSecret: null }) });
+		createRouter({ config: makeConfig({ clientId: null, clientSecret: null }) });
+
+		expect(introspectorFactory).toHaveBeenCalledTimes(2);
+		const [first, second] = introspectorFactory.mock.calls;
+		expect(first[0].singleFlight).not.toBe(second[0].singleFlight);
+
+		createRouter({
+			config: makeConfig({ clientId: null, clientSecret: null }),
+			deps: { introspect: vi.fn() },
+		});
+
+		expect(introspectorFactory).toHaveBeenCalledTimes(2);
+	});
+
 	it("passes the configured TTL through: a second request inside it does not reach the provider", async () => {
 		const fetchMock = vi.fn<(url: string, init?: RequestInit) => Promise<Response>>(async () =>
 			Response.json({ active: false }),

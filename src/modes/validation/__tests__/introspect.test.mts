@@ -10,10 +10,10 @@
  */
 import { createHash } from "node:crypto";
 import { describe, expect, it, vi } from "vitest";
-
+import { createSingleFlight } from "../../../single-flight.mjs";
 import { createIntrospector } from "../introspect.mjs";
 import { createIntrospectionCache } from "../introspection-cache.mjs";
-import type { IntrospectionResult } from "../introspection-client.mjs";
+import { IntrospectHttpError, type IntrospectionResult } from "../introspection-client.mjs";
 
 type Introspect = (token: string, requestId: string) => Promise<IntrospectionResult>;
 
@@ -25,9 +25,118 @@ const build = ({
 }: { cacheTtlSec?: number; maxEntries?: number } = {}) => {
 	const introspect = vi.fn<Introspect>();
 	const cache = createIntrospectionCache({ maxEntries });
-	const introspector = createIntrospector({ client: { introspect }, cache, cacheTtlSec });
-	return { introspector, cache, introspect };
+	const singleFlight = createSingleFlight<IntrospectionResult>();
+	const introspector = createIntrospector({
+		client: { introspect },
+		cache,
+		singleFlight,
+		cacheTtlSec,
+	});
+	return { introspector, cache, introspect, singleFlight };
 };
+
+// Injection has coalesced concurrent misses since it had a cache; validation
+// asked the provider once per request, so a burst on one token multiplied
+// into a burst at the provider — against the rate limit the root README
+// warns about, and the more so the shorter the cache TTL (#95 F6).
+describe("the single flight", () => {
+	const deferred = () => {
+		let resolve!: (value: IntrospectionResult) => void;
+		let reject!: (reason: unknown) => void;
+		const promise = new Promise<IntrospectionResult>((res, rej) => {
+			resolve = res;
+			reject = rej;
+		});
+		return { promise, resolve, reject };
+	};
+
+	it("calls the provider once for concurrent misses on one token, and answers both", async () => {
+		const { introspector, introspect } = build();
+		const first = deferred();
+		introspect.mockReturnValueOnce(first.promise);
+
+		const both = Promise.all([introspector("t", "r1"), introspector("t", "r2")]);
+		first.resolve({ active: true, sub: "user-1" });
+
+		expect(await both).toEqual([
+			{ active: true, sub: "user-1" },
+			{ active: true, sub: "user-1" },
+		]);
+		expect(introspect).toHaveBeenCalledTimes(1);
+	});
+
+	// The TTL turns the cache off, not the flight. An operator setting it to 0
+	// to get a fresh provider check per request gets one per concurrent group.
+	it("coalesces concurrent misses even with the cache disabled", async () => {
+		const { introspector, introspect, cache } = build({ cacheTtlSec: 0 });
+		const first = deferred();
+		introspect.mockReturnValueOnce(first.promise);
+
+		const both = Promise.all([introspector("t", "r1"), introspector("t", "r2")]);
+		first.resolve({ active: true });
+
+		await both;
+		expect(introspect).toHaveBeenCalledTimes(1);
+		expect(cache.size()).toBe(0);
+	});
+
+	// The key is the digest, not the token: the flight table must no more hold
+	// a live credential than the cache does.
+	it("keys the flight by the digest, so the table never holds the token", async () => {
+		const { introspector, introspect, singleFlight } = build();
+		const seen: string[] = [];
+		const run = singleFlight.run.bind(singleFlight);
+		vi.spyOn(singleFlight, "run").mockImplementation((key, fetch) => {
+			seen.push(key);
+			return run(key, fetch);
+		});
+		introspect.mockResolvedValue({ active: true });
+
+		await introspector("a-live-token", "r1");
+
+		expect(seen).toEqual([sha256("a-live-token")]);
+	});
+
+	it("does not coalesce two different tokens", async () => {
+		const { introspector, introspect } = build();
+		introspect.mockResolvedValue({ active: true });
+
+		await Promise.all([introspector("one", "r1"), introspector("two", "r2")]);
+
+		expect(introspect).toHaveBeenCalledTimes(2);
+	});
+
+	// The waiters share the leader's failure rather than each raising their
+	// own, which is what the injection path does and what makes one flight
+	// one provider call on the error path too.
+	it("shares a rejection with every waiter without a second provider call", async () => {
+		const { introspector, introspect } = build();
+		const failure = new IntrospectHttpError(503, "introspect returned 503");
+		const first = deferred();
+		introspect.mockReturnValueOnce(first.promise);
+
+		const both = Promise.allSettled([introspector("t", "r1"), introspector("t", "r2")]);
+		first.reject(failure);
+
+		expect(await both).toEqual([
+			{ status: "rejected", reason: failure },
+			{ status: "rejected", reason: failure },
+		]);
+		expect(introspect).toHaveBeenCalledTimes(1);
+	});
+
+	it("releases the key, so the next miss calls the provider again", async () => {
+		const { introspector, introspect, singleFlight } = build({ cacheTtlSec: 0 });
+		introspect.mockResolvedValue({ active: true });
+
+		await introspector("t", "r1");
+		expect(singleFlight._sizeForTesting()).toBe(0);
+
+		await introspector("t", "r2");
+
+		expect(introspect).toHaveBeenCalledTimes(2);
+	});
+});
 
 describe("createIntrospector", () => {
 	describe("the cache", () => {
@@ -122,11 +231,13 @@ describe("createIntrospector", () => {
 			expect(introspect).toHaveBeenCalledTimes(4);
 		});
 
-		it("evicts once, not twice, when two concurrent misses on one token both write (#95 F5)", async () => {
-			// There is no single-flight here (invariant 7), so both requests call
-			// the provider and both write. The second write is for a key the cache
-			// already holds and takes no room, where the fused function this
-			// replaced would have dropped a second live entry for it.
+		it("evicts once for a token two concurrent requests ask about (#95 F5, F6)", async () => {
+			// One flight, so one write. Before F6 both requests called the
+			// provider and both wrote, and the second write was for a key the
+			// cache already held — which is where the fused function this
+			// replaced would have dropped a second live entry. That double write
+			// is no longer reachable here; `set` is idempotent for a held key
+			// either way, which `introspection-cache.test.mts` owns.
 			const { introspector, cache, introspect } = build({ maxEntries: 2 });
 			introspect.mockResolvedValue({ active: true });
 			await introspector("older", "r1");
@@ -135,10 +246,7 @@ describe("createIntrospector", () => {
 
 			await Promise.all([introspector("fresh", "r3"), introspector("fresh", "r4")]);
 
-			// Both really reached the provider: two seeding calls plus these two.
-			// Without this the scenario could be one call and one cache hit, which
-			// is not the case under test.
-			expect(introspect).toHaveBeenCalledTimes(4);
+			expect(introspect).toHaveBeenCalledTimes(3);
 			expect(cache.size()).toBe(2);
 			expect(cache.get(sha256("older"))).toBeNull();
 			expect(cache.get(sha256("newer"))).not.toBeNull();

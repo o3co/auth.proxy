@@ -20,7 +20,7 @@ Flow:
 
 1. Detects `Authorization: Bearer <token>` header (passes through if absent).
 2. Checks in-memory cache keyed by SHA-256 of the token.
-3. On cache miss, calls provider's `POST /oauth/introspect`.
+3. On cache miss, calls provider's `POST /oauth/introspect`. Concurrent misses on the same token coalesce into a single provider call (single-flight), as the injection path's do.
 4. Returns `401` if `active: false`; forwards the request if `active: true`.
 
 A `401` carries `WWW-Authenticate: Bearer error="invalid_token"`, the RFC 6750 §3 challenge for a request that presented an access token the proxy would not accept. No other refusal carries one: a `400` attempted an authentication method this proxy does not support, which §3.1 says SHOULD NOT carry an error code, and a `500` or `502` is the proxy's or the provider's failure rather than a statement about the caller's credential. Injection mode answers no challenge on any path, deliberately: its caller holds a session cookie, not a Bearer token.
@@ -221,7 +221,7 @@ Active access tokens reside in process memory. An attacker with read access to p
 
 The provider rate-limits its OAuth endpoints on the **caller's IP address** — the bucket key is `<endpoint>:ip:<ip>`. Every call this proxy makes shares one bucket per proxy instance: `POST /oauth/token` in injection mode (session grants and exchanges alike), `POST /oauth/introspect` in validation mode. Not per user, not per session, not per token.
 
-With the provider's default budget of 60 requests per 60s, one proxy instance is capped at roughly **60 cache-missing requests a minute**, however many end users sit behind it. Cache hits are free; every miss spends from the shared bucket.
+With the provider's default budget of 60 requests per 60s, one proxy instance is capped at roughly **60 cache-missing requests a minute**, however many end users sit behind it. Cache hits are free; every miss spends from the shared bucket. Concurrent misses on one credential spend once: both modes coalesce them into a single provider call, so a burst of parallel requests carrying the same token or cookie costs one.
 
 The overflow is not graceful. The provider answers `429`, and the proxy turns that into a 5xx:
 
