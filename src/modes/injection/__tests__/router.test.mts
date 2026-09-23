@@ -194,6 +194,82 @@ describe("injection router", () => {
 		expect(fetchMock).toHaveBeenCalledTimes(1);
 	});
 
+	// #95 F10. No client takes a caller's signal, so the only cancellation is
+	// AbortSignal.timeout — and a caller that leaves cannot abort a flight the
+	// other waiters share. The one that leaves here is the leader.
+	it("a disconnect does not abort the flight its waiters share, and the token is still cached", async () => {
+		let askedProvider!: () => void;
+		const providerAsked = new Promise<void>((resolve) => {
+			askedProvider = resolve;
+		});
+		let answerProvider!: () => void;
+		const answered = new Promise<Response>((resolve) => {
+			answerProvider = () => resolve(okGrantResponse("tok-abandoned"));
+		});
+		// The mock honours init.signal, so this test can tell the difference it
+		// claims to: if anything ever wired a caller's disconnect to the
+		// outbound call, the flight would reject here instead of answering.
+		fetchMock.mockImplementationOnce(async (_url: unknown, init?: RequestInit) => {
+			askedProvider();
+			return await Promise.race([
+				answered,
+				new Promise<never>((_, reject) => {
+					init?.signal?.addEventListener("abort", () =>
+						reject(new DOMException("The operation was aborted", "AbortError")),
+					);
+				}),
+			]);
+		});
+		const debugSpy = vi.spyOn(logger, "debug");
+		const server = mountApp(makeConfig(upstream.baseURL)).listen(0, "127.0.0.1");
+		await new Promise((resolve) => server.once("listening", resolve));
+		const port = (server.address() as AddressInfo).port;
+		const get = (path: string) => {
+			const req = http.request({ host: "127.0.0.1", port, path, headers: { Cookie: "sid=s1" } });
+			// Resolves with null on a reset rather than rejecting: destroying the
+			// socket is the point, and an unhandled rejection would fail the run
+			// for the thing under test.
+			const done = new Promise<number | null>((resolve) => {
+				req.on("response", (res) => {
+					res.resume();
+					res.on("end", () => resolve(res.statusCode ?? 0));
+				});
+				req.on("error", () => resolve(null));
+			});
+			req.end();
+			return { req, done };
+		};
+
+		try {
+			const leader = get("/leader");
+			await providerAsked;
+			leader.req.destroy();
+			expect(await leader.done).toBeNull();
+
+			const waiter = get("/waiter");
+			await new Promise((r) => setTimeout(r, 10));
+			answerProvider();
+
+			expect(await waiter.done).toBe(204);
+			expect(fetchMock).toHaveBeenCalledTimes(1);
+			// It joined the abandoned leader's flight rather than being served
+			// from a cache the leader had already written — without this, a
+			// waiter that arrived late would satisfy every other assertion.
+			expect(eventsOf(debugSpy)).toContain("injection.single_flight_wait");
+			expect(eventsOf(debugSpy)).not.toContain("injection.cache_hit");
+
+			// The grant the abandoned request started is in the cache.
+			const later = get("/later");
+			expect(await later.done).toBe(204);
+			expect(fetchMock).toHaveBeenCalledTimes(1);
+			expect(eventsOf(debugSpy)).toContain("injection.cache_hit");
+			expect(upstream.received.at(-1)?.headers.authorization).toBe("Bearer tok-abandoned");
+		} finally {
+			server.closeAllConnections();
+			await new Promise<void>((resolve) => server.close(() => resolve()));
+		}
+	});
+
 	it("returns 401 session_required on provider 401 (no WWW-Authenticate)", async () => {
 		fetchMock.mockResolvedValueOnce(jsonResponse(401, { error: "invalid_grant" }));
 		const app = mountApp(makeConfig(upstream.baseURL));

@@ -78,6 +78,11 @@ export const buildAuthHeader = (credentials: ClientCredentials | null, token: st
  * response is one it would read at all.
  */
 export interface IntrospectionClient {
+	/**
+	 * No signal parameter, deliberately (#95 F10): the only cancellation is
+	 * `AbortSignal.timeout(timeoutMs)`, and a caller's disconnect must not
+	 * abort a call other waiters are coalesced onto.
+	 */
 	introspect(token: string, requestId: string): Promise<IntrospectionResult>;
 }
 

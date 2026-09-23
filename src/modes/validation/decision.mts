@@ -36,6 +36,10 @@ export interface ValidationInputs {
  * and its own timeout, since the decision has none. What `createRouter`
  * builds behind this seam is `createIntrospector` over an
  * `IntrospectionClient` and an `IntrospectionCache` (#95 F5).
+ *
+ * No signal parameter, deliberately (#95 F10): the only cancellation is the
+ * timeout the implementation behind this seam imposes on itself, and a
+ * caller's disconnect must not abort a call other waiters are coalesced onto.
  */
 export type Introspector = (token: string, requestId: string) => Promise<IntrospectionResult>;
 

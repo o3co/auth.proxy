@@ -77,6 +77,11 @@ export interface JwtBearerClientConfig {
 }
 
 export interface JwtBearerClient {
+	/**
+	 * No signal parameter, deliberately (#95 F10): the only cancellation is
+	 * `AbortSignal.timeout(cfg.timeoutMs)`, and a caller's disconnect must not
+	 * abort an exchange other waiters are coalesced onto.
+	 */
 	exchange(args: { assertion: string; requestId: string }): Promise<JwtBearerResult>;
 }
 
