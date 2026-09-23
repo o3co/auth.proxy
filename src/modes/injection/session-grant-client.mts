@@ -150,13 +150,32 @@ export const createSessionGrantClient = (
 			}
 
 			if (resp.status === 401) {
-				// The answer is the status: an expired or unknown session. Read
-				// nothing, but release the body (#95 F37). This is the most
-				// frequent refusal here — every request from a browser still
-				// holding an expired session cookie — which is why it is worth
-				// being explicit about, even though a normal-sized body costs
-				// nothing either way (see discardBody).
-				await discardBody(resp);
+				// Almost always an expired or unknown session — but RFC 6749
+				// section 5.2 also answers 401 invalid_client when the client fails
+				// authentication, which for this public client means the proxy's
+				// own clientId is wrong (#95 F47). Reporting that as an expired
+				// session told every browser to sign in again, over something
+				// signing in cannot fix. Only the body's `error` tells the two
+				// apart, so it is read — bounded, like every error body here. A
+				// provider that trickles this body now holds the request (and any
+				// waiter coalesced onto it) until AbortSignal.timeout ends the
+				// read, which then lands as the expired session; the 400 branch
+				// has always read its body the same way.
+				const data = await readBoundedJsonObject(resp, MAX_ERROR_BODY_BYTES);
+				if (data?.error === "invalid_client") {
+					// The description is relayed to the client, as on the 400
+					// branch: only a validated one, so a provider echoing the
+					// session cookie cannot put it there.
+					const provided = sanitizeErrorDescription(data.error_description, [
+						sessionCookieValue,
+					]);
+					throw new SessionGrantError(
+						"provider_config_error",
+						502,
+						provided ?? "provider rejected the proxy's client (client_id)",
+						retryAfter,
+					);
+				}
 				throw new SessionGrantError(
 					"session_unauthorized",
 					401,

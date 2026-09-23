@@ -298,6 +298,19 @@ describe("injection router", () => {
 		expect(upstream.received).toHaveLength(0);
 	});
 
+	// #95 F47, on the wire: the browser is not told to sign in again over the
+	// proxy's own client being refused.
+	it("returns 502 provider_config_error when the provider's 401 refused the proxy's client", async () => {
+		fetchMock.mockResolvedValueOnce(jsonResponse(401, { error: "invalid_client" }));
+		const app = mountApp(makeConfig(upstream.baseURL));
+
+		const res = await request(app).get("/any").set("Cookie", "sid=s1");
+
+		expect(res.status).toBe(502);
+		expect(res.body.error).toBe("provider_config_error");
+		expect(upstream.received).toHaveLength(0);
+	});
+
 	it("propagates Retry-After on provider 401", async () => {
 		fetchMock.mockResolvedValueOnce(
 			jsonResponse(401, { error: "invalid_grant" }, { "retry-after": "30" }),

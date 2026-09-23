@@ -53,7 +53,7 @@ The client the proxy authenticates as must therefore be associated with the audi
 
 A proxy fronting `https://api.example.com/orders` that authenticates as some unrelated `client_id` answers `401` to every request whose token was minted with an RFC 8707 `resource` audience — which, wherever resource indicators are in use, is every request it sees.
 
-**What a provider `401` means.** RFC 7662 §2.3 has the introspection request authenticated, so the provider's `401` answers whichever credential it carried. Without client credentials the inbound token *is* that credential and the `401` is about the caller: `401 Invalid Token`. With them the credential is the proxy's own Basic header, the `401` refused the *proxy*, and the caller's token was never examined — that is `502 Provider Configuration Error`, logged as `introspect refused the proxy's client credentials` rather than the generic `introspect failed`, because it is the operator's to fix. The injection path has always reported the same situation as `provider_config_error` 502. A misconfigured deployment therefore answers a status that clients and gateways retry more readily than `401`, which spends the same per-instance introspection budget described under [Provider rate limiting](#provider-rate-limiting); the fix is the credential, not the retry policy.
+**What a provider `401` means.** RFC 7662 §2.3 has the introspection request authenticated, so the provider's `401` answers whichever credential it carried. Without client credentials the inbound token *is* that credential and the `401` is about the caller: `401 Invalid Token`. With them the credential is the proxy's own Basic header, the `401` refused the *proxy*, and the caller's token was never examined — that is `502 Provider Configuration Error`, logged as `introspect refused the proxy's client credentials` rather than the generic `introspect failed`, because it is the operator's to fix. The injection path reports the same situation as `provider_config_error` 502 — the exchange always has, and the session grant since #95 F47. A misconfigured deployment therefore answers a status that clients and gateways retry more readily than `401`, which spends the same per-instance introspection budget described under [Provider rate limiting](#provider-rate-limiting); the fix is the credential, not the retry policy.
 
 > A companion change in `auth.provider` widens this pin to `allowedAudiences ∪ {clientId}`, the ceiling its other grants already use. Until it lands, only a token whose `aud` is exactly the caller's `client_id` introspects as active under client authentication.
 
@@ -112,6 +112,9 @@ One proxy instance serves one OAuth scope domain. `auth.injection.clientId` and 
 A provider response of `400 invalid_grant` is mapped to `401 session_required`,
 so a revoked session prompts authentication rather than appearing as a proxy
 configuration failure. Other provider 400 responses retain their configuration-error mapping.
+Conversely, a provider `401` is `session_required` unless its `error` is `invalid_client`,
+which means the proxy's own `auth.injection.clientId` was refused — a configuration failure that
+signing in again cannot fix, answered `502 provider_config_error` rather than a login prompt.
 
 A redirect from the token endpoint is not followed on either injection path: it is
 `502 provider_config_error`, with the status in the message. The endpoint is configuration, and a
