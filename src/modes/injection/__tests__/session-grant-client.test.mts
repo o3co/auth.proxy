@@ -39,6 +39,11 @@ const getFetchCallHeaders = (
 ): Record<string, string> =>
 	getFetchCallInit(fetchMock, index).headers as Record<string, string>;
 
+// Most fixtures below pass `sessionCookieValue: "c"`, which since #95 F30 is
+// a credential that matches every string. They assert code, status or a body
+// with no error_description, so nothing depends on a provider's text being
+// relayed — but adding an error_description to one of them gets the proxy's
+// generic wording, not the provider's.
 describe("createSessionGrantClient.exchange", () => {
 	let fetchMock: ReturnType<typeof vi.fn>;
 	const client = () => createSessionGrantClient(baseCfg);
@@ -320,12 +325,31 @@ describe("createSessionGrantClient.exchange", () => {
 		const client = createSessionGrantClient(baseCfg);
 
 		await expect(
-			client.exchange({ sessionCookieValue: "c", requestId: "r" }),
+			client.exchange({ sessionCookieValue: "session-value-1", requestId: "r" }),
 		).rejects.toMatchObject({
 			code: "provider_config_error",
 			status: 502,
 			retryAfter: null,
 			message: "unknown scope",
+		});
+	});
+
+	// The cost of #95 F30, at the level where it is paid: the description is
+	// relayed to the client, so a cookie value the proxy did not choose is
+	// matched anywhere in it and at any length. A one-character value is in
+	// almost any sentence, and the proxy's own wording takes its place.
+	it("drops a provider error_description that contains the session cookie value, however short", async () => {
+		fetchMock.mockResolvedValueOnce(
+			jsonResponse(400, { error: "invalid_scope", error_description: "unknown scope" }),
+		);
+		const client = createSessionGrantClient(baseCfg);
+
+		await expect(
+			client.exchange({ sessionCookieValue: "c", requestId: "r" }),
+		).rejects.toMatchObject({
+			code: "provider_config_error",
+			status: 502,
+			message: "provider rejected proxy configuration (client_id or scope)",
 		});
 	});
 

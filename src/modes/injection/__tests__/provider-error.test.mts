@@ -157,17 +157,45 @@ describe("sanitizeErrorDescription", () => {
 });
 
 describe("credential matching", () => {
-	// A substring test on a very short value would refuse ordinary text for
-	// no gain; below 8 characters only an exact echo is refused.
-	it("refuses an exact echo of a short credential but not text that merely contains it", () => {
-		expect(sanitizeErrorCode("abc", ["abc"])).toBe(INVALID_ERROR_CODE);
-		expect(sanitizeErrorCode("invalid_scope", ["c"])).toBe("invalid_scope");
-		expect(sanitizeErrorDescription("c", ["c"])).toBeNull();
-		expect(sanitizeErrorDescription("unknown scope", ["c"])).toBe("unknown scope");
-	});
-
 	it("refuses text containing a credential of 8 characters or more", () => {
 		expect(sanitizeErrorCode("x_12345678_x", ["12345678"])).toBe(INVALID_ERROR_CODE);
-		expect(sanitizeErrorDescription("bad 12345678 here", ["12345678"])).toBeNull();
+		expect(sanitizeErrorDescription("bad 12345678 here", ["12345678"])).toBe(null);
+	});
+
+	// Until #95 F30 a credential shorter than 8 characters was matched exactly
+	// and not as a substring, so `bad abc` reached a log line and a relayed
+	// error_description with the cookie value `abc` inside it. Length is not
+	// something the proxy can bound for a value the caller chose, and losing a
+	// provider's diagnostic costs less than putting a credential in a log.
+	it.each([1, 2, 3, 7])(
+		"refuses text containing a credential of %d characters, not only an exact echo",
+		(length) => {
+			const credential = "c".repeat(length);
+
+			expect(sanitizeErrorCode(`x_${credential}_x`, [credential])).toBe(INVALID_ERROR_CODE);
+			expect(sanitizeErrorDescription(`bad ${credential} here`, [credential])).toBe(null);
+		},
+	);
+
+	it("still refuses an exact echo, at any length", () => {
+		expect(sanitizeErrorCode("abc", ["abc"])).toBe(INVALID_ERROR_CODE);
+		expect(sanitizeErrorDescription("c", ["c"])).toBe(null);
+	});
+
+	// The cost of the change, stated rather than discovered: a one-character
+	// credential refuses almost any text. The caller substitutes its own
+	// wording for a refusal, so what is lost is the provider's diagnostic and
+	// never the answer — `sanitizeErrorCode` classifies the raw value before
+	// this runs.
+	it("refuses ordinary text that happens to contain a very short credential", () => {
+		expect(sanitizeErrorCode("invalid_scope", ["c"])).toBe(INVALID_ERROR_CODE);
+		expect(sanitizeErrorDescription("unknown scope", ["c"])).toBe(null);
+	});
+
+	// An empty credential is in no text and in every text; it must not be read
+	// as being in every text.
+	it("ignores an empty credential rather than refusing everything", () => {
+		expect(sanitizeErrorCode("invalid_scope", [""])).toBe("invalid_scope");
+		expect(sanitizeErrorDescription("unknown scope", [""])).toBe("unknown scope");
 	});
 });
