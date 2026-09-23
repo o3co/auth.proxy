@@ -3,6 +3,7 @@ import {
 	createSessionGrantClient,
 	SessionGrantError,
 } from "../session-grant-client.mjs";
+import { MAX_TOKEN_BODY_BYTES } from "../token-endpoint.mjs";
 
 const baseCfg = {
 	providerOrigin: "http://provider.example",
@@ -192,7 +193,26 @@ describe("createSessionGrantClient.exchange", () => {
 		).rejects.toMatchObject({
 			code: "provider_invalid_response",
 			status: 502,
-			message: "provider returned 200 with a non-JSON or non-object JSON body",
+			message: "provider returned 200 with a body that is not a JSON object, or is over the size bound",
+		});
+	});
+
+	// The bound is the point: a provider streaming an endless 200 must not be
+	// able to make the proxy buffer it (#95 F35).
+	it("throws provider_invalid_response on a 200 body over the bound", async () => {
+		fetchMock.mockResolvedValueOnce(
+			new Response(`{"access_token":"${"a".repeat(MAX_TOKEN_BODY_BYTES)}"}`, {
+				status: 200,
+				headers: { "Content-Type": "application/json" },
+			}),
+		);
+		const client = createSessionGrantClient(baseCfg);
+
+		await expect(
+			client.exchange({ sessionCookieValue: "c", requestId: "r" }),
+		).rejects.toMatchObject({
+			code: "provider_invalid_response",
+			status: 502,
 		});
 	});
 

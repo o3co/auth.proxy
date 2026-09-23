@@ -102,15 +102,29 @@ export const sanitizeErrorDescription = (
 export const MAX_ERROR_BODY_BYTES = 16 * 1024;
 
 /**
- * A provider error response's body as a JSON object, or `null` — read at most
- * `maxBytes` of it.
+ * The decode both paths read a body through: UTF-8, non-fatal, and — the
+ * reason it is not `Buffer.toString("utf8")` — dropping a leading BOM, which
+ * is what `Response.text()` does and what the success path relied on before it
+ * read through here (#95 F35).
+ */
+const utf8 = new TextDecoder();
+
+/**
+ * A provider response's body as a JSON object, or `null` — read at most
+ * `maxBytes` of it, decoded as UTF-8.
  *
- * An error body is only ever consulted for its diagnostic `error` code, so
- * there is no reason to buffer an unbounded one: a body over the limit is
- * abandoned (the stream is cancelled) rather than read to the end. An empty,
- * non-JSON or non-object body, or a stream that fails mid-read, is `null` —
- * a missing diagnostic, never an exception that would change how the response
+ * There is no reason to buffer an unbounded body on either path: a body over
+ * the limit is abandoned (the stream is cancelled) rather than read to the
+ * end. An empty, non-JSON or non-object body, an array, or a stream that fails
+ * mid-read, is `null` — never an exception that would change how the response
  * is answered.
+ *
+ * The bound is the caller's, and each path has its own: an error body is
+ * consulted only for its diagnostic `error` code ({@link MAX_ERROR_BODY_BYTES}),
+ * while a token response is the answer itself and is allowed more
+ * (`MAX_TOKEN_BODY_BYTES` in `token-endpoint.mts`, #95 F35). `maxBytes`
+ * defaults to the error bound because this module owns that path; a caller on
+ * any other one passes its own rather than inheriting it.
  */
 export const readBoundedJsonObject = async (
 	resp: Response,
@@ -119,10 +133,13 @@ export const readBoundedJsonObject = async (
 	if (resp.body === null) {
 		return null;
 	}
-	const reader = resp.body.getReader();
 	const chunks: Uint8Array[] = [];
 	let total = 0;
 	try {
+		// Inside the try with the read itself: getReader throws on a body that
+		// is already locked or read, and this answers null for a body it cannot
+		// read rather than making its caller handle an exception.
+		const reader = resp.body.getReader();
 		for (;;) {
 			const { done, value } = await reader.read();
 			if (done) {
@@ -139,7 +156,11 @@ export const readBoundedJsonObject = async (
 		return null;
 	}
 	try {
-		const parsed: unknown = JSON.parse(Buffer.concat(chunks).toString("utf8"));
+		// TextDecoder, not Buffer.toString("utf8"): it is the UTF-8 decode
+		// Response.text() performs, which drops a leading BOM. Buffer keeps it
+		// and JSON.parse then refuses the body — which would cost the diagnostic
+		// here, and a whole token response on the success path (#95 F35).
+		const parsed: unknown = JSON.parse(utf8.decode(Buffer.concat(chunks)));
 		return typeof parsed === "object" && parsed !== null && !Array.isArray(parsed)
 			? (parsed as Record<string, unknown>)
 			: null;

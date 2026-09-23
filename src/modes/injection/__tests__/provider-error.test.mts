@@ -82,6 +82,15 @@ describe("readBoundedJsonObject", () => {
 		});
 	});
 
+	// The bytes are decoded as UTF-8, which drops a leading BOM — the same
+	// reading Response.text() gives, and what the success path needs since it
+	// reads through this too (#95 F35).
+	it("decodes as UTF-8, so a leading BOM does not cost the diagnostic", async () => {
+		await expect(readBoundedJsonObject(body('\uFEFF{"error":"invalid_grant"}'))).resolves.toEqual({
+			error: "invalid_grant",
+		});
+	});
+
 	it("tolerates a body that is not a JSON object", async () => {
 		for (const text of ["", "<html>busy</html>", "[1,2]", "null", '"text"', "{"]) {
 			await expect(readBoundedJsonObject(body(text)), text).resolves.toBeNull();
