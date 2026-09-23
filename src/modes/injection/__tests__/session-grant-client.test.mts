@@ -1,4 +1,5 @@
 import { afterEach, beforeEach, describe, expect, it, vi } from "vitest";
+import { MAX_ERROR_BODY_BYTES } from "../provider-error.mjs";
 import {
 	createSessionGrantClient,
 	SessionGrantError,
@@ -298,9 +299,10 @@ describe("createSessionGrantClient.exchange", () => {
 		return { resp, wasCancelled: () => cancelled };
 	};
 
+	// The 401 is not in this list since #95 F47: it reads its body, bounded,
+	// to tell an expired session from the proxy's own client being refused.
 	it.each([
 		[302, "provider_config_error"],
-		[401, "session_unauthorized"],
 		[503, "provider_unavailable"],
 		[403, "provider_unavailable"],
 	])("cancels the body of a %d it answers without reading (%s)", async (status, code) => {
@@ -328,24 +330,121 @@ describe("createSessionGrantClient.exchange", () => {
 						controller.error(new Error("socket hang up"));
 					},
 				}),
-				{ status: 401 },
+				{ status: 503 },
 			),
 		);
 
 		await expect(
 			createSessionGrantClient(baseCfg).exchange({ sessionCookieValue: "session-value-1", requestId: "r" }),
-		).rejects.toMatchObject({ code: "session_unauthorized", status: 401 });
+		).rejects.toMatchObject({ code: "provider_unavailable", status: 502 });
 	});
 
 	it("keeps the refusal when cancelling the body fails", async () => {
-		const { resp } = trackedBody(401, () => {
+		const { resp } = trackedBody(503, () => {
 			throw new Error("socket hang up");
 		});
 		fetchMock.mockResolvedValueOnce(resp);
 
 		await expect(
 			createSessionGrantClient(baseCfg).exchange({ sessionCookieValue: "session-value-1", requestId: "r" }),
-		).rejects.toMatchObject({ code: "session_unauthorized", status: 401 });
+		).rejects.toMatchObject({ code: "provider_unavailable", status: 502 });
+	});
+
+	// #95 F47. RFC 6749 section 5.2 lets the token endpoint answer 401
+	// invalid_client when the client fails authentication. For this public
+	// client that means the proxy's own clientId is wrong or unregistered —
+	// and reporting it as session_unauthorized told every browser to sign in
+	// again, forever, over something signing in cannot fix.
+	describe("a 401 that refused the proxy's client", () => {
+		const exchange401 = (body: unknown) => {
+			fetchMock.mockResolvedValueOnce(jsonResponse(401, body));
+			return createSessionGrantClient(baseCfg).exchange({
+				sessionCookieValue: "session-value-1",
+				requestId: "r",
+			});
+		};
+
+		it("is provider_config_error 502, not an expired session", async () => {
+			await expect(exchange401({ error: "invalid_client" })).rejects.toMatchObject({
+				code: "provider_config_error",
+				status: 502,
+				message: "provider rejected the proxy's client (client_id)",
+			});
+		});
+
+		it("relays a safe error_description, as the 400 branch does", async () => {
+			await expect(
+				exchange401({ error: "invalid_client", error_description: "unknown client_id" }),
+			).rejects.toMatchObject({ code: "provider_config_error", message: "unknown client_id" });
+		});
+
+		// The description reaches the browser and the log, so this branch
+		// sanitises it exactly as the 400 branch does.
+		it.each([
+			["contains the session cookie value", "no client for session-value-1"],
+			["is not a safe RFC 6749 description", 'unknown "client"'],
+		])("falls back to its own wording when the description %s", async (_label, description) => {
+			await expect(
+				exchange401({ error: "invalid_client", error_description: description }),
+			).rejects.toMatchObject({
+				code: "provider_config_error",
+				message: "provider rejected the proxy's client (client_id)",
+			});
+		});
+
+		it("carries Retry-After on the 502", async () => {
+			fetchMock.mockResolvedValueOnce(
+				jsonResponse(401, { error: "invalid_client" }, { "retry-after": "30" }),
+			);
+
+			await expect(
+				createSessionGrantClient(baseCfg).exchange({ sessionCookieValue: "session-value-1", requestId: "r" }),
+			).rejects.toMatchObject({ code: "provider_config_error", retryAfter: "30" });
+		});
+
+		it.each([
+			["another error code", { error: "invalid_token" }],
+			["a near miss", { error: "unauthorized_client" }],
+			["no error code", {}],
+			["an error code that is not a string", { error: 42 }],
+		])("is still an expired session for %s", async (_label, body) => {
+			await expect(exchange401(body)).rejects.toMatchObject({
+				code: "session_unauthorized",
+				status: 401,
+			});
+		});
+
+		// Reading the body to classify it is bounded like every other error
+		// read: past MAX_ERROR_BODY_BYTES it is abandoned, and the 401 is then
+		// read as the expired session it almost always is.
+		// Reading the body means a stream that fails mid-read has to land
+		// somewhere: it is the expired session, not an exception.
+		it("answers the expired session when the 401 body stream fails", async () => {
+			fetchMock.mockResolvedValueOnce(
+				new Response(
+					new ReadableStream<Uint8Array>({
+						start(controller) {
+							controller.enqueue(new TextEncoder().encode('{"error":'));
+							controller.error(new Error("socket hang up"));
+						},
+					}),
+					{ status: 401 },
+				),
+			);
+
+			await expect(
+				createSessionGrantClient(baseCfg).exchange({ sessionCookieValue: "session-value-1", requestId: "r" }),
+			).rejects.toMatchObject({ code: "session_unauthorized", status: 401 });
+		});
+
+		it("gives up on an oversized 401 body and answers the expired session", async () => {
+			const oversized = { error: "invalid_client", pad: "a".repeat(MAX_ERROR_BODY_BYTES) };
+
+			await expect(exchange401(oversized)).rejects.toMatchObject({
+				code: "session_unauthorized",
+				status: 401,
+			});
+		});
 	});
 
 	it("throws session_unauthorized on provider 401 with Retry-After propagation", async () => {
