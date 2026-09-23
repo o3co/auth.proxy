@@ -14,6 +14,7 @@
  * limitations under the License.
  */
 import { clientSecretBasic } from "../../oauth/client-secret-basic.mjs";
+import { discardBody } from "../../response-body.mjs";
 import { readBoundedJsonObject, sanitizeErrorCode } from "./provider-error.mjs";
 import { buildTokenUrl, parseJsonBody } from "./token-endpoint.mjs";
 
@@ -176,6 +177,7 @@ export const createJwtBearerClient = (cfg: JwtBearerClientConfig): JwtBearerClie
 			}
 
 			if (resp.status >= 300 && resp.status < 400) {
+				await discardBody(resp);
 				throw new JwtBearerError(
 					"provider_config_error",
 					502,

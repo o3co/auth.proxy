@@ -226,6 +226,46 @@ describe("createJwtBearerClient.exchange", () => {
 		});
 	});
 
+	// #95 F37: the redirect branch answers from the status alone, and an unread
+	// body holds its socket out of undici's pool until it is collected.
+	describe("a body nothing reads", () => {
+		const trackedRedirect = (onCancel: () => void = () => {}) => {
+			let cancelled = false;
+			const resp = new Response(
+				new ReadableStream<Uint8Array>({
+					start(controller) {
+						controller.enqueue(new TextEncoder().encode("moved"));
+					},
+					cancel() {
+						cancelled = true;
+						onCancel();
+					},
+				}),
+				{ status: 302, headers: { Location: "https://elsewhere.test/" } },
+			);
+			return { resp, wasCancelled: () => cancelled };
+		};
+
+		it("cancels the body of a redirect it refuses without reading", async () => {
+			const { resp, wasCancelled } = trackedRedirect();
+			fetchMock.mockResolvedValueOnce(resp);
+
+			await expect(exchange()).rejects.toMatchObject({ code: "provider_config_error" });
+
+			expect(wasCancelled()).toBe(true);
+			expect(resp.bodyUsed).toBe(true);
+		});
+
+		it("keeps the refusal when cancelling the body fails", async () => {
+			const { resp } = trackedRedirect(() => {
+				throw new Error("socket hang up");
+			});
+			fetchMock.mockResolvedValueOnce(resp);
+
+			await expect(exchange()).rejects.toMatchObject({ code: "provider_config_error", status: 502 });
+		});
+	});
+
 	describe("provider refusals", () => {
 		it("maps invalid_grant to credential_rejected (401), passing Retry-After through", async () => {
 			fetchMock.mockResolvedValueOnce(
