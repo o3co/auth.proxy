@@ -18,8 +18,8 @@ The three replaceable pieces the injection path already had are here now (#95 F5
 
 `createRouter({ config, deps? })` returns an Express router and throws unless `auth.mode` is `"validation"` (the guard at the top of [`createRouter`](router.mts)); `deps` may supply the introspector and the logger, defaulting to what it builds — pinned by [`accepts an injected introspector and logger: fetch and the singleton are not touched, and the inbound bytes are forwarded`](__tests__/router.test.mts) and [`an injected logger receives the introspect failure line`](__tests__/router.test.mts). Refusals are `{ "code", "message" }` — a different shape from injection's. Which of them carries a `WWW-Authenticate` challenge follows RFC 6750 §3, which makes the header a MUST on a refusal and a SHOULD to name the `error` **when the request included an access token**:
 
-- The 401 carries `Bearer error="invalid_token"` (#95 F29).
-- A 400 for a malformed `Bearer` (`Bearer`, `Bearer  t`) carries `Bearer error="invalid_request"`, which is §3.1's "otherwise malformed" (F45).
+- The 401 carries `Bearer error="invalid_token"` (#95 F29), with the realm ahead of it when one is set.
+- A 400 for a malformed `Bearer` (`Bearer`, `Bearer  t`) carries `Bearer error="invalid_request"`, which is §3.1's "otherwise malformed" (F45), with the realm ahead of it when one is set.
 - A 400 for another method (`Basic …`, or a lowercase `bearer`) gets no error code. §3.1's last paragraph keeps one off a request that "attempted using an unsupported authentication method". It carries `Bearer realm="…"` when `auth.validation.realm` is set, as in §3.1's own example, and nothing otherwise, because §3's scheme needs at least one auth-param (F45).
 - A configured realm leads every challenge: `Bearer realm="…", error="…"`.
 - The 500 and the 502 carry none, because they are the proxy's or the provider's failure rather than a statement about the credential.
