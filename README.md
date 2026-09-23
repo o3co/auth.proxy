@@ -233,7 +233,7 @@ With the provider's default budget of 60 requests per 60s, one proxy instance is
 The overflow is not graceful. The provider answers `429`, and the proxy turns that into a 5xx:
 
 - Injection mode — an unexpected provider 4xx becomes `502 provider_unavailable` (the provider's `Retry-After` is passed through).
-- Validation mode — the provider's `429` becomes `502 Bad Gateway`, as every provider failure there does.
+- Validation mode — the provider's `429` becomes `502 Bad Gateway`, as every provider failure there does other than a `401` (the token's `401 Invalid Token`, or `502 Provider Configuration Error` for the proxy's own client) and a redirect (`502 Provider Configuration Error`).
 
 So the symptom is a burst of proxy 5xx under load, with nothing in it that says "rate limit". Check the provider's rate-limit events before treating it as a provider outage.
 
