@@ -224,6 +224,20 @@ describe("injection router", () => {
 		const server = mountApp(makeConfig(upstream.baseURL)).listen(0, "127.0.0.1");
 		await new Promise((resolve) => server.once("listening", resolve));
 		const port = (server.address() as AddressInfo).port;
+		// A causal join signal instead of a sleep. Express is the server's first
+		// "request" listener, and nothing between it and the flight awaits —
+		// the cookie parse, the cache read and SingleFlight.run's table check
+		// are synchronous — so by the time this later listener sees the second
+		// request, the waiter has joined the leader's flight.
+		let arrived = 0;
+		let waiterJoined!: () => void;
+		const joined = new Promise<void>((resolve) => {
+			waiterJoined = resolve;
+		});
+		server.on("request", () => {
+			arrived += 1;
+			if (arrived === 2) waiterJoined();
+		});
 		const get = (path: string) => {
 			const req = http.request({ host: "127.0.0.1", port, path, headers: { Cookie: "sid=s1" } });
 			// Resolves with null on a reset rather than rejecting: destroying the
@@ -247,7 +261,8 @@ describe("injection router", () => {
 			expect(await leader.done).toBeNull();
 
 			const waiter = get("/waiter");
-			await new Promise((r) => setTimeout(r, 10));
+			await joined;
+			await new Promise((r) => setImmediate(r));
 			answerProvider();
 
 			expect(await waiter.done).toBe(204);

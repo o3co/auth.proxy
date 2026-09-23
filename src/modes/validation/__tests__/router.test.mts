@@ -110,6 +110,20 @@ describe("validation router", () => {
 		const server = app.listen(0, "127.0.0.1");
 		await once(server, "listening");
 		const port = (server.address() as AddressInfo).port;
+		// A causal join signal instead of a sleep. Express is the server's first
+		// "request" listener, and nothing between it and the flight awaits —
+		// the cache read and SingleFlight.run's table check are synchronous — so
+		// by the time this later listener sees the second request, the waiter
+		// has joined the leader's flight.
+		let arrived = 0;
+		let waiterJoined!: () => void;
+		const joined = new Promise<void>((resolve) => {
+			waiterJoined = resolve;
+		});
+		server.on("request", () => {
+			arrived += 1;
+			if (arrived === 2) waiterJoined();
+		});
 		try {
 			// The leader, which goes away mid-flight.
 			const leader = httpGet(port, "one-token");
@@ -118,15 +132,15 @@ describe("validation router", () => {
 			expect(await leader.done).toEqual({ status: null });
 
 			// A waiter that arrives while the flight is still open. Asserted to be
-			// still waiting before the release — without it, a waiter that
-			// arrived late would be served from the cache and satisfy every
-			// other assertion in this test.
+			// still waiting at the release, too: a waiter served from the cache
+			// instead would satisfy every other assertion in this test.
 			const waiter = httpGet(port, "one-token");
 			let waiterSettled = false;
 			void waiter.done.then(() => {
 				waiterSettled = true;
 			});
-			await new Promise((r) => setTimeout(r, 20));
+			await joined;
+			await new Promise((r) => setImmediate(r));
 			expect(waiterSettled).toBe(false);
 			releaseProvider();
 
