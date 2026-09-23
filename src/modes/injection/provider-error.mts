@@ -102,10 +102,15 @@ export const sanitizeErrorDescription = (
 export const MAX_ERROR_BODY_BYTES = 16 * 1024;
 
 /**
- * The decode both paths read a body through: UTF-8, non-fatal, and — the
- * reason it is not `Buffer.toString("utf8")` — dropping a leading BOM, which
- * is what `Response.text()` does and what the success path relied on before it
- * read through here (#95 F35).
+ * The decode both paths read a body through.
+ *
+ * `TextDecoder` rather than `Buffer.toString("utf8")` because the two differ
+ * on one input: a leading BOM. `TextDecoder` drops it (`ignoreBOM` defaults to
+ * `false`), `Buffer` keeps it, and `JSON.parse` then refuses the body. Dropping
+ * it is what `Response.text()` does, which is what the success path used until
+ * it started reading through here (#95 F35) — so this keeps both paths reading
+ * a BOM-prefixed body the way the success path always did. Neither is `fatal`,
+ * so invalid UTF-8 is U+FFFD in both.
  */
 const utf8 = new TextDecoder();
 

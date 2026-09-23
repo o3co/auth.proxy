@@ -96,6 +96,37 @@ describe("parseJsonBody", () => {
 			await expect(parseJsonBody(responseOf(body))).resolves.toBeNull();
 		});
 
+		// The bound is only worth having if it stops the read: answering null
+		// after draining the whole body would leave the memory it was meant to
+		// bound already spent.
+		it("cancels the stream at the bound instead of reading what follows", async () => {
+			const chunkBytes = 8 * 1024;
+			const chunk = new TextEncoder().encode("a".repeat(chunkBytes));
+			const availableChunks = 64;
+			let pulled = 0;
+			let cancelled = false;
+			const body = new ReadableStream<Uint8Array>({
+				pull(controller) {
+					if (pulled === availableChunks) {
+						controller.close();
+						return;
+					}
+					pulled += 1;
+					controller.enqueue(chunk);
+				},
+				cancel() {
+					cancelled = true;
+				},
+			});
+
+			await expect(parseJsonBody(new Response(body, { status: 200 }))).resolves.toBeNull();
+
+			expect(cancelled).toBe(true);
+			// One read past the bound is what detects it; the remaining
+			// 512 KiB - 64 KiB the source would have handed over is not read.
+			expect(pulled).toBe(MAX_TOKEN_BODY_BYTES / chunkBytes + 1);
+		});
+
 		// What the bound is FOR, in absolute terms rather than relative to
 		// itself: a token response carrying a large id_token beside the access
 		// and refresh tokens has to fit, and an error body's allowance does not
