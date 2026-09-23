@@ -11,6 +11,7 @@ import { createSingleFlight, type SingleFlight } from "../../../single-flight.mj
 import { exchangeCacheKey, exchangeContext } from "../exchange.mjs";
 import { createRouter } from "../router.mjs";
 import { createTokenCache } from "../token-cache.mjs";
+import { listenForFlight } from "./flight-joined.mjs";
 
 // External credential exchange (#90): with auth.injection.exchange enabled, an
 // inbound `Authorization: Bearer <JWT>` is submitted to the provider as an
@@ -572,44 +573,52 @@ describe("injection router — external credential exchange (#90)", () => {
 			const assertion = makeAssertion();
 			const pending = deferred();
 			fetchMock.mockReturnValueOnce(pending.promise);
-			const app = mountApp(makeConfig(upstream.baseURL));
+			const { server, baseURL, joined } = await listenForFlight(mountApp(makeConfig(upstream.baseURL)), 3);
 
-			const inflight = Promise.all(
-				["/a", "/b", "/c"].map((path) =>
-					request(app).get(path).set("Authorization", `Bearer ${assertion}`),
-				),
-			);
-			await new Promise((r) => setTimeout(r, 20));
-			pending.resolve(okToken("issued-shared"));
-			const responses = await inflight;
+			try {
+				const inflight = Promise.all(
+					["/a", "/b", "/c"].map((path) =>
+						request(baseURL).get(path).set("Authorization", `Bearer ${assertion}`),
+					),
+				);
+				await joined;
+				pending.resolve(okToken("issued-shared"));
+				const responses = await inflight;
 
-			expect(fetchMock).toHaveBeenCalledTimes(1);
-			expect(responses.map((r) => r.status)).toEqual([204, 204, 204]);
-			expect(upstream.received.map((r) => r.headers.authorization)).toEqual([
-				"Bearer issued-shared",
-				"Bearer issued-shared",
-				"Bearer issued-shared",
-			]);
+				expect(fetchMock).toHaveBeenCalledTimes(1);
+				expect(responses.map((r) => r.status)).toEqual([204, 204, 204]);
+				expect(upstream.received.map((r) => r.headers.authorization)).toEqual([
+					"Bearer issued-shared",
+					"Bearer issued-shared",
+					"Bearer issued-shared",
+				]);
+			} finally {
+				server.close();
+			}
 		});
 
 		it("shares a refusal with every concurrent identical request instead of resubmitting", async () => {
 			const assertion = makeAssertion();
 			const pending = deferred();
 			fetchMock.mockReturnValueOnce(pending.promise);
-			const app = mountApp(makeConfig(upstream.baseURL));
+			const { server, baseURL, joined } = await listenForFlight(mountApp(makeConfig(upstream.baseURL)), 2);
 
-			const inflight = Promise.all(
-				["/a", "/b"].map((path) =>
-					request(app).get(path).set("Authorization", `Bearer ${assertion}`),
-				),
-			);
-			await new Promise((r) => setTimeout(r, 20));
-			pending.resolve(jsonResponse(400, { error: "invalid_grant" }));
-			const responses = await inflight;
+			try {
+				const inflight = Promise.all(
+					["/a", "/b"].map((path) =>
+						request(baseURL).get(path).set("Authorization", `Bearer ${assertion}`),
+					),
+				);
+				await joined;
+				pending.resolve(jsonResponse(400, { error: "invalid_grant" }));
+				const responses = await inflight;
 
-			expect(fetchMock).toHaveBeenCalledTimes(1);
-			expect(responses.map((r) => r.status)).toEqual([401, 401]);
-			expect(upstream.received).toHaveLength(0);
+				expect(fetchMock).toHaveBeenCalledTimes(1);
+				expect(responses.map((r) => r.status)).toEqual([401, 401]);
+				expect(upstream.received).toHaveLength(0);
+			} finally {
+				server.close();
+			}
 		});
 	});
 

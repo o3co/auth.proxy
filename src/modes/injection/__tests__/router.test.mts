@@ -11,6 +11,7 @@ import { createSingleFlight, type SingleFlight } from "../../../single-flight.mj
 import { sessionCacheKey } from "../decision.mjs";
 import { createRouter } from "../router.mjs";
 import { createTokenCache } from "../token-cache.mjs";
+import { listenForFlight } from "./flight-joined.mjs";
 
 type UpstreamRecorder = {
 	server: Server;
@@ -180,18 +181,23 @@ describe("injection router", () => {
 				grantControl.resolve = resolve;
 			}),
 		);
-		const app = mountApp(makeConfig(upstream.baseURL));
+		const { server, baseURL, joined } = await listenForFlight(mountApp(makeConfig(upstream.baseURL)), 3);
 
-		const inflight = Promise.all([
-			request(app).get("/a").set("Cookie", "sid=s1"),
-			request(app).get("/b").set("Cookie", "sid=s1"),
-			request(app).get("/c").set("Cookie", "sid=s1"),
-		]);
-		await new Promise((r) => setTimeout(r, 10));
-		grantControl.resolve?.(okGrantResponse("tok-shared"));
-		await inflight;
+		try {
+			const inflight = Promise.all([
+				request(baseURL).get("/a").set("Cookie", "sid=s1"),
+				request(baseURL).get("/b").set("Cookie", "sid=s1"),
+				request(baseURL).get("/c").set("Cookie", "sid=s1"),
+			]);
+			await joined;
+			grantControl.resolve?.(okGrantResponse("tok-shared"));
+			const responses = await inflight;
 
-		expect(fetchMock).toHaveBeenCalledTimes(1);
+			expect(fetchMock).toHaveBeenCalledTimes(1);
+			expect(responses.map((r) => r.status)).toEqual([204, 204, 204]);
+		} finally {
+			server.close();
+		}
 	});
 
 	// #95 F10. No client takes a caller's signal, so the only cancellation is
