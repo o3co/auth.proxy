@@ -14,7 +14,7 @@
  * limitations under the License.
  */
 
-import { readBoundedJsonObject } from "./provider-error.mjs";
+import { readBoundedJsonObject } from "../../response-body.mjs";
 
 /**
  * What every call to the provider's token endpoint needs, wherever it is made

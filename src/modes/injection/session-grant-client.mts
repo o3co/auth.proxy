@@ -14,8 +14,8 @@
  * limitations under the License.
  */
 
-import { discardBody } from "../../response-body.mjs";
-import { readBoundedJsonObject, sanitizeErrorDescription } from "./provider-error.mjs";
+import { discardBody, readBoundedJsonObject } from "../../response-body.mjs";
+import { MAX_ERROR_BODY_BYTES, sanitizeErrorDescription } from "./provider-error.mjs";
 import { buildTokenUrl, parseJsonBody } from "./token-endpoint.mjs";
 
 /** The provider-specific grant this client submits, as the request says it. */
@@ -165,7 +165,7 @@ export const createSessionGrantClient = (
 				);
 			}
 			if (resp.status === 400) {
-				const data = await readBoundedJsonObject(resp);
+				const data = await readBoundedJsonObject(resp, MAX_ERROR_BODY_BYTES);
 				// A revoked/expired session is a rejected grant, not a proxy
 				// configuration error. Preserve the existing session_required
 				// response so the caller can recover by authenticating again.

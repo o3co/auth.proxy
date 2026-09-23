@@ -14,8 +14,8 @@
  * limitations under the License.
  */
 import { clientSecretBasic } from "../../oauth/client-secret-basic.mjs";
-import { discardBody } from "../../response-body.mjs";
-import { readBoundedJsonObject, sanitizeErrorCode } from "./provider-error.mjs";
+import { discardBody, readBoundedJsonObject } from "../../response-body.mjs";
+import { MAX_ERROR_BODY_BYTES, sanitizeErrorCode } from "./provider-error.mjs";
 import { buildTokenUrl, parseJsonBody } from "./token-endpoint.mjs";
 
 /** RFC 7523 section 2.1. */
@@ -187,7 +187,7 @@ export const createJwtBearerClient = (cfg: JwtBearerClientConfig): JwtBearerClie
 			}
 
 			if (resp.status === 400 || resp.status === 401) {
-				const data = await readBoundedJsonObject(resp);
+				const data = await readBoundedJsonObject(resp, MAX_ERROR_BODY_BYTES);
 				const rawError = data?.error;
 				const providerError = sanitizeErrorCode(rawError, [assertion, cfg.clientSecret]);
 				if (resp.status === 400 && rawError === "invalid_grant") {
@@ -221,7 +221,7 @@ export const createJwtBearerClient = (cfg: JwtBearerClientConfig): JwtBearerClie
 
 			// The answer does not depend on the body; its validated `error` code
 			// is kept only so the log line can say what the provider reported.
-			const data = await readBoundedJsonObject(resp);
+			const data = await readBoundedJsonObject(resp, MAX_ERROR_BODY_BYTES);
 			throw new JwtBearerError(
 				"provider_unavailable",
 				502,
