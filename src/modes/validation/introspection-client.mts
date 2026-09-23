@@ -61,8 +61,10 @@ export class IntrospectHttpError extends Error {
 		message: string,
 		/** Set on a 401 by the bundled client; `null` on every other status. */
 		public readonly refusedCredential: RefusedCredential | null = null,
+		/** What was thrown instead of an answer, when there was no answer. */
+		cause?: unknown,
 	) {
-		super(message);
+		super(message, cause === undefined ? undefined : { cause });
 		this.name = "IntrospectHttpError";
 	}
 }
@@ -88,8 +90,8 @@ export const buildAuthHeader = (credentials: ClientCredentials | null, token: st
  * the inbound token or the proxy's own client authentication — and `502`
  * for a 200 whose body is not a JSON object, is over the
  * {@link MAX_INTROSPECTION_BODY_BYTES} bound, or is not a valid RFC 7662
- * response. A `fetch` rejection
- * — timeout or network — propagates unwrapped. The same class carries one
+ * response, and `502` for a call that never answered — a timeout or a
+ * network error, kept as the `cause` (#95 F42). The same class carries one
  * more `502` raised outside this module: a malformed `exp` on an otherwise
  * valid response, which `createIntrospector` refuses once it has decided the
  * response is one it would read at all.
@@ -123,7 +125,10 @@ export const createIntrospectionClient = ({
 
 	return {
 		async introspect(token, requestId) {
-			const resp = await fetch(url, {
+			// Built before the call, so a failure building it — a `timeoutMs` that
+			// `AbortSignal.timeout` refuses, say — stays the proxy's own and is not
+			// reported as the provider's (#95 F42).
+			const init: RequestInit = {
 				method: "POST",
 				headers: {
 					"Content-Type": "application/x-www-form-urlencoded",
@@ -140,7 +145,23 @@ export const createIntrospectionClient = ({
 				// as the non-2xx it is, and the decision reports it.
 				redirect: "manual",
 				signal: AbortSignal.timeout(timeoutMs),
-			});
+			};
+			let resp: Response;
+			try {
+				resp = await fetch(url, init);
+			} catch (err) {
+				// The provider did not answer: a timeout, a refused connection, a
+				// DNS failure. That is the provider failing, as its 5xx is, so it is
+				// reported in the same class and answered 502 (#95 F42) — until then
+				// it propagated raw and the decision answered 500, the status it
+				// keeps for what the proxy itself did not expect.
+				throw new IntrospectHttpError(
+					502,
+					`introspect call failed: ${err instanceof Error ? err.message : String(err)}`,
+					null,
+					err,
+				);
+			}
 
 			if (!resp.ok) {
 				// Nothing reads an error body on this path (#95 F28).

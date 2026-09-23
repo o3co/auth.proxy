@@ -239,8 +239,8 @@ describe("decideValidation", () => {
 
 		// The class says only a 401 carries a mark, but nothing enforces it and
 		// `deps.introspect` is injectable: an out-of-contract error must not
-		// reach the 502 branch, whose whole meaning is "the provider refused our
-		// client authentication".
+		// reach the Provider Configuration Error branch, whose whole meaning is
+		// "the provider refused our client authentication".
 		it("ignores a client mark on a status that is not 401", async () => {
 			const { deps, introspect } = makeDeps();
 			introspect.mockRejectedValueOnce(
@@ -249,8 +249,8 @@ describe("decideValidation", () => {
 
 			await expect(decideValidation(inputs("Bearer t"), deps)).resolves.toEqual({
 				kind: "reject",
-				status: 500,
-				body: { code: 500, message: "Internal Server Error" },
+				status: 502,
+				body: { code: 502, message: "Bad Gateway" },
 				challenge: null,
 			});
 		});
@@ -272,9 +272,33 @@ describe("decideValidation", () => {
 			);
 		});
 
+		// #95 F42: what the provider did is a 502, as on the injection path;
+		// only what the proxy did not expect is a 500.
 		it.each([
-			{ failure: "an IntrospectHttpError with another status", err: new IntrospectHttpError(503, "introspect failed: 503") },
+			{ failure: "the provider's 503", err: new IntrospectHttpError(503, "introspect returned 503") },
+			{ failure: "the provider's 429", err: new IntrospectHttpError(429, "introspect returned 429") },
+			{ failure: "the provider's 400", err: new IntrospectHttpError(400, "introspect returned 400") },
+			{ failure: "a 200 that is not an introspection response", err: new IntrospectHttpError(502, "introspect returned 200 but …") },
+			{ failure: "a call that never answered", err: new IntrospectHttpError(502, "introspect call failed: timeout") },
+		])("answers 502 Bad Gateway on $failure, logging it", async ({ err }) => {
+			const { deps, introspect, logger } = makeDeps();
+			introspect.mockRejectedValueOnce(err);
+			const outcome = await decideValidation(inputs("Bearer t"), deps);
+			expect(outcome).toEqual<ValidationOutcome>({
+				kind: "reject",
+				status: 502,
+				body: { code: 502, message: "Bad Gateway" },
+				challenge: null,
+			});
+			expect(logger.error).toHaveBeenCalledWith(
+				{ "x-request-id": "rid-1", error: err },
+				"introspect failed",
+			);
+		});
+
+		it.each([
 			{ failure: "a rejection that is not an IntrospectHttpError", err: new Error("socket hang up") },
+			{ failure: "a thrown non-Error", err: "boom" },
 		])("answers 500 Internal Server Error on $failure, logging it", async ({ err }) => {
 			const { deps, introspect, logger } = makeDeps();
 			introspect.mockRejectedValueOnce(err);

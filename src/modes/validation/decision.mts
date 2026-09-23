@@ -110,7 +110,11 @@ const reject = (
  *                                             authentication that was refused:
  *                                             502 Provider Configuration Error
  *   - the endpoint redirects                  502 Provider Configuration Error
- *   - any other failure                       500 Internal Server Error
+ *   - any other provider failure              502 Bad Gateway — a 5xx, a 429,
+ *     (an IntrospectHttpError)                a 4xx that is not 401, a 200 that
+ *                                             is not an introspection response,
+ *                                             no answer at all (#95 F42)
+ *   - anything else thrown                    500 Internal Server Error
  *   - active: true                            forward
  *
  * What is forwarded is decided by `req.headers`, which the middleware never
@@ -182,6 +186,14 @@ export const decideValidation = async (
 		// supplied introspector that marks nothing is read the way it always was.
 		if (e instanceof IntrospectHttpError && e.status === 401) {
 			return reject(401, "Invalid Token", INVALID_TOKEN_CHALLENGE);
+		}
+		// The rest of IntrospectHttpError is the provider failing, and a gateway
+		// reports its upstream's failure as 502 (RFC 9110 §15.6.3) — the status
+		// the injection path gives every one of these already (#95 F42). What
+		// is left is something the proxy, or a supplied introspector, did not
+		// expect, and that is the proxy's own 500.
+		if (e instanceof IntrospectHttpError) {
+			return reject(502, "Bad Gateway", null);
 		}
 		return reject(500, "Internal Server Error", null);
 	}

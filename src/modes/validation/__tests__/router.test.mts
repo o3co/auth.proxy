@@ -268,13 +268,14 @@ describe("validation router", () => {
 		it.each([
 			{ failure: "the provider answers 503 (IntrospectHttpError 503 from the status)", fetchImpl: async () => new Response("", { status: 503 }) },
 			{ failure: "the provider answers 200 with a non-JSON body (IntrospectHttpError 502 raised by introspect itself)", fetchImpl: async () => new Response("<html>", { status: 200 }) },
-			{ failure: "fetch rejects", fetchImpl: async () => { throw new Error("socket hang up"); } },
-		])("answers 500 Internal Server Error when $failure", async ({ fetchImpl }) => {
+			{ failure: "fetch rejects", fetchImpl: async () => { throw new TypeError("fetch failed"); } },
+			{ failure: "the call times out", fetchImpl: async () => { throw new DOMException("The operation was aborted due to timeout", "TimeoutError"); } },
+		])("answers 502 Bad Gateway when $failure (#95 F42)", async ({ fetchImpl }) => {
 			const fetchMock = vi.fn(fetchImpl);
 			vi.stubGlobal("fetch", fetchMock);
 			const res = await request(app).get("/protected").set("Authorization", "Bearer t");
-			expect(res.status).toBe(500);
-			expect(res.body).toEqual({ code: 500, message: "Internal Server Error" });
+			expect(res.status).toBe(502);
+			expect(res.body).toEqual({ code: 502, message: "Bad Gateway" });
 			// Not about the caller's credential, so no challenge (#95 F29).
 			expect(res.headers["www-authenticate"]).toBeUndefined();
 			expect(upstreamCalls).toBe(0);
