@@ -19,7 +19,11 @@ import {
 	type InjectionInputs,
 	type InjectionOutcome,
 } from "../decision.mjs";
-import { SessionGrantError, type SessionGrantResult } from "../session-grant-client.mjs";
+import {
+	SessionGrantError,
+	type SessionGrantErrorCode,
+	type SessionGrantResult,
+} from "../session-grant-client.mjs";
 import { createSingleFlight } from "../single-flight.mjs";
 import { createTokenCache } from "../token-cache.mjs";
 
@@ -350,6 +354,36 @@ describe("decideInjection", () => {
 				level === "info" ? [] : ["injection.grant_fetch"],
 			);
 		});
+
+		// A supplied client is not bound by the union, and the codes that are
+		// also Object.prototype members are the ones a plain-object lookup
+		// answers with an inherited value: the fallback would not fire, the
+		// line would be logged with undefined fields, and the throw would
+		// escape the catch that exists to answer a refusal. Found by Copilot.
+		it.each(["constructor", "toString", "__proto__", "hasOwnProperty", "not_a_real_code"])(
+			"answers and logs a refusal for the undeclared code %j",
+			async (code) => {
+				const { deps, logger, grantClient } = makeDeps();
+				const err = new SessionGrantError(
+					code as SessionGrantErrorCode,
+					503,
+					"a supplied client invented this",
+				);
+				grantClient.exchange.mockRejectedValueOnce(err);
+
+				const outcome = await decideInjection(inputs({ cookieHeader: "sid=s1" }), deps);
+
+				expect(outcome).toEqual<InjectionOutcome>({
+					kind: "respond",
+					status: 503,
+					body: { error: code, error_description: err.message },
+					retryAfter: null,
+				});
+				expect(fieldsOf(logger.error)).toContainEqual(
+					expect.objectContaining({ event: "injection.provider_unavailable" }),
+				);
+			},
+		);
 
 		it("answers 502 provider_unavailable for an unclassified throw and logs it as a string", async () => {
 			const { deps, logger, grantClient } = makeDeps();

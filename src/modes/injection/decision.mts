@@ -138,17 +138,25 @@ interface SessionFailureLine {
  * used to decide the level as well, so an error whose code and status were not
  * paired was reported as one thing and answered as another.
  *
- * `satisfies` is what keeps this exhaustive: a new `SessionGrantErrorCode`
- * fails the build here rather than falling into the unknown case and being
- * reported as a provider outage it is not. The lookup is by `string` because a
- * supplied grant client (F4) is not bound by the union at runtime.
+ * `satisfies` on the literal is what keeps this exhaustive: a new
+ * `SessionGrantErrorCode` fails the build here rather than falling into the
+ * unknown case and being reported as a provider outage it is not.
+ *
+ * A `Map` rather than the object itself, because a supplied grant client (F4)
+ * is not bound by the union at runtime and the key is whatever it throws: a
+ * plain object answers `Object.prototype` members — `constructor`,
+ * `toString`, `__proto__` — with an inherited value that is truthy, so the
+ * fallback below would not fire and the line would be logged with `undefined`
+ * fields, throwing inside the `catch` that exists to answer a refusal.
  */
-const SESSION_FAILURE_LINES: Partial<Record<string, SessionFailureLine>> = {
-	session_unauthorized: { level: "info", event: "injection.session_unauthorized" },
-	provider_config_error: { level: "error", event: "injection.provider_config_error" },
-	provider_invalid_response: { level: "error", event: "injection.provider_invalid_response" },
-	provider_unavailable: { level: "error", event: "injection.provider_unavailable" },
-} satisfies Record<SessionGrantErrorCode, SessionFailureLine>;
+const SESSION_FAILURE_LINES = new Map<string, SessionFailureLine>(
+	Object.entries({
+		session_unauthorized: { level: "info", event: "injection.session_unauthorized" },
+		provider_config_error: { level: "error", event: "injection.provider_config_error" },
+		provider_invalid_response: { level: "error", event: "injection.provider_invalid_response" },
+		provider_unavailable: { level: "error", event: "injection.provider_unavailable" },
+	} satisfies Record<SessionGrantErrorCode, SessionFailureLine>),
+);
 
 /** A code no version of this proxy declared, from a supplied grant client. */
 const UNKNOWN_SESSION_FAILURE: SessionFailureLine = {
@@ -290,7 +298,7 @@ export const decideInjection = async (
 					err.code === "session_unauthorized" ? "session_required" : err.code,
 				error_description: err.message,
 			};
-			const { level, event } = SESSION_FAILURE_LINES[err.code] ?? UNKNOWN_SESSION_FAILURE;
+			const { level, event } = SESSION_FAILURE_LINES.get(err.code) ?? UNKNOWN_SESSION_FAILURE;
 			logger[level]({ requestId, event, error: err.message }, "grant failed");
 			return { kind: "respond", status: err.status, body, retryAfter: err.retryAfter };
 		}
