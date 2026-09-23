@@ -1,6 +1,6 @@
 # auth.proxy
 
-最終更新: 2026-09-23
+最終更新: 2026-09-24
 
 [![CI](https://github.com/o3co/auth.proxy/actions/workflows/ci.yml/badge.svg)](https://github.com/o3co/auth.proxy/actions/workflows/ci.yml)
 [![codecov](https://codecov.io/gh/o3co/auth.proxy/graph/badge.svg)](https://codecov.io/gh/o3co/auth.proxy)
@@ -155,7 +155,7 @@ UserSession の追跡が設定されている場合、プロバイダーの `ses
 
 #### 受信 Authorization ヘッダー
 
-プロキシが受信 `Authorization` ヘッダーを上書きするのは、セッションクッキーから実際にトークンを取得できたリクエストだけ（`injection.authorization_override` としてログされる）。トークンを発行しなかった 2 経路 — セッションクッキーが無い場合と、クッキーが文法チェックで拒否された場合 — では、リクエストは**受信 `Authorization` ヘッダーを含めてそのまま**転送される。
+プロキシが受信 `Authorization` ヘッダーを上書きするのは、セッションクッキーから実際にトークンを取得できたリクエストだけ（`injection.authorization_override` としてログされる。値が空の受信 `Authorization:` も含む）。トークンを発行しなかった 2 経路 — セッションクッキーが無い場合と、クッキーが文法チェックで拒否された場合 — では、リクエストは**受信 `Authorization` ヘッダーを含めてそのまま**転送される。
 
 **アップストリームサービスは渡されたトークンを自分で検証しなければならない。** 「プロキシからの接続に Bearer ヘッダーが載っていた」を「プロキシが発行したものだ」と読んではいけない。セッションクッキーを送らず自前の `Authorization` を送るだけのクライアントは、そのヘッダーを保ったままアップストリームに到達する。プロキシを経由しないリクエストと同じように、プロバイダーの鍵で署名・`iss`・`aud`・`exp` を検証するか、イントロスペクションすること。ヘッダーの出所は認証シグナルではない。
 

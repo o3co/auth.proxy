@@ -1,6 +1,6 @@
 # auth.proxy
 
-Last updated: 2026-09-23
+Last updated: 2026-09-24
 
 [![CI](https://github.com/o3co/auth.proxy/actions/workflows/ci.yml/badge.svg)](https://github.com/o3co/auth.proxy/actions/workflows/ci.yml)
 [![codecov](https://codecov.io/gh/o3co/auth.proxy/graph/badge.svg)](https://codecov.io/gh/o3co/auth.proxy)
@@ -173,7 +173,7 @@ The proxy is a transparent augmentation layer. It injects the Bearer but does NO
 
 #### Inbound Authorization headers
 
-The proxy overrides an inbound `Authorization` header only on the requests where a session cookie actually produced a token (logged as `injection.authorization_override`). On the two paths where it minted nothing — no session cookie at all, or a cookie the grammar check refused — the request is forwarded as-is, **inbound `Authorization` header included**.
+The proxy overrides an inbound `Authorization` header only on the requests where a session cookie actually produced a token (logged as `injection.authorization_override`, an inbound `Authorization:` with an empty value included). On the two paths where it minted nothing — no session cookie at all, or a cookie the grammar check refused — the request is forwarded as-is, **inbound `Authorization` header included**.
 
 **The upstream service must verify the token it is handed.** It must not read "a Bearer header arrived on the connection from the proxy" as "the proxy minted this": a client that sends its own `Authorization` and no session cookie reaches the upstream with that header intact. Verify signature, `iss`, `aud` and `exp` against the provider's keys, or introspect — exactly as for a request that never went through a proxy. Header provenance is not an authentication signal.
 
