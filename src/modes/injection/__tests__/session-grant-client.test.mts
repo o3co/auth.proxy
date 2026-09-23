@@ -277,11 +277,10 @@ describe("createSessionGrantClient.exchange", () => {
 		},
 	);
 
-	// #95 F37, the injection half of F28. These four branches answer from the
-	// status alone and never read the body — and an unread body holds its
-	// socket out of undici's pool until the response is collected. The 401 is
-	// the most frequent refusal in the repo: every expired session, every
-	// request, until the user signs in again.
+	// #95 F37, the injection half of F28. These branches answer from the
+	// status alone and never read the body — and an unread body larger than
+	// undici's read-ahead holds its socket out of the pool until the response
+	// is collected. (The 401 reads its body since F47; the 2xx joined in F38.)
 	const trackedBody = (status: number, onCancel: () => void = () => {}) => {
 		let cancelled = false;
 		const resp = new Response(
@@ -620,9 +619,11 @@ describe("createSessionGrantClient.exchange", () => {
 	});
 
 	// #95 F38: RFC 6749 §5.1's success is a 200. Any other 2xx — even one
-	// carrying a well-formed token — is an unexpected status, answered as the
-	// jwt-bearer client answers it, and never reported as a 200.
-	it.each([201, 202, 206])("refuses a %d carrying a token as an unexpected status", async (status) => {
+	// carrying a well-formed token — is an unexpected status, with the code,
+	// status and message the jwt-bearer client gives it, and never reported as
+	// a 200. Every 2xx that may carry a body here, and the two that may not
+	// below, so no single status can slip back.
+	it.each([201, 202, 203, 206, 207, 208, 226, 299])("refuses a %d carrying a token as an unexpected status", async (status) => {
 		fetchMock.mockResolvedValueOnce(
 			jsonResponse(status, { access_token: "tok-123", token_type: "Bearer", expires_in: 120 }),
 		);
@@ -636,15 +637,15 @@ describe("createSessionGrantClient.exchange", () => {
 		});
 	});
 
-	it("refuses a 204 as an unexpected status, not as a malformed 200", async () => {
-		fetchMock.mockResolvedValueOnce(new Response(null, { status: 204 }));
+	it.each([204, 205])("refuses a %d as an unexpected status, not as a malformed 200", async (status) => {
+		fetchMock.mockResolvedValueOnce(new Response(null, { status }));
 
 		await expect(
 			client().exchange({ sessionCookieValue: "c", requestId: "r" }),
 		).rejects.toMatchObject({
 			code: "provider_unavailable",
 			status: 502,
-			message: "unexpected provider response: 204",
+			message: `unexpected provider response: ${status}`,
 		});
 	});
 

@@ -116,6 +116,10 @@ Conversely, a provider `401` is `session_required` unless its `error` is `invali
 which means the proxy's own `auth.injection.clientId` was refused — a configuration failure that
 signing in again cannot fix, answered `502 provider_config_error` rather than a login prompt.
 
+Only a `200` is a successful token response on either injection path (RFC 6749 §5.1). Any other
+`2xx` — even one carrying a token — is `502 provider_unavailable`, "unexpected provider response", with
+the status in the message.
+
 A redirect from the token endpoint is not followed on either injection path: it is
 `502 provider_config_error`, with the status in the message. The endpoint is configuration, and a
 followed redirect cannot be reported honestly. A `307` or `308` to the same origin replays the whole
