@@ -13,6 +13,7 @@ import {
 	buildAuthHeader,
 	createIntrospectionClient,
 	IntrospectHttpError,
+	MAX_INTROSPECTION_BODY_BYTES,
 } from "../introspection-client.mjs";
 
 const jsonResponse = (status: number, body: unknown): Response =>
@@ -230,6 +231,93 @@ describe("createIntrospectionClient", () => {
 		});
 	});
 
+	// #95 F39: the injection clients have read their 200 at a bound since F35;
+	// this one buffered whatever the provider sent, per in-flight request.
+	describe("the bound on a 200 body", () => {
+		const bodyOfExactly = (bytes: number): string => {
+			const wrapper = '{"active":true,"pad":""}';
+			return `{"active":true,"pad":"${"a".repeat(bytes - wrapper.length)}"}`;
+		};
+
+		it("reads a body of exactly MAX_INTROSPECTION_BODY_BYTES", async () => {
+			const body = bodyOfExactly(MAX_INTROSPECTION_BODY_BYTES);
+			expect(Buffer.byteLength(body)).toBe(MAX_INTROSPECTION_BODY_BYTES);
+			fetchMock.mockResolvedValueOnce(new Response(body, { status: 200 }));
+
+			await expect(clientFor().introspect("t", "r")).resolves.toMatchObject({ active: true });
+		});
+
+		it("refuses one byte past it as a provider error, rather than buffering what follows", async () => {
+			const body = bodyOfExactly(MAX_INTROSPECTION_BODY_BYTES + 1);
+			fetchMock.mockResolvedValueOnce(new Response(body, { status: 200 }));
+
+			await expect(clientFor().introspect("t", "r")).rejects.toMatchObject({
+				name: "IntrospectHttpError",
+				status: 502,
+			});
+		});
+
+		// The bound is only worth having if it stops the read.
+		it("cancels the stream at the bound instead of reading what follows", async () => {
+			const chunkBytes = 8 * 1024;
+			const chunk = new TextEncoder().encode("a".repeat(chunkBytes));
+			let pulled = 0;
+			let cancelled = false;
+			fetchMock.mockResolvedValueOnce(
+				new Response(
+					new ReadableStream<Uint8Array>({
+						pull(controller) {
+							if (pulled === 64) {
+								controller.close();
+								return;
+							}
+							pulled += 1;
+							controller.enqueue(chunk);
+						},
+						cancel() {
+							cancelled = true;
+						},
+					}),
+					{ status: 200 },
+				),
+			);
+
+			await expect(clientFor().introspect("t", "r")).rejects.toMatchObject({ status: 502 });
+
+			expect(cancelled).toBe(true);
+			// One read past the bound detects it. The stream may also have
+			// pulled one chunk ahead to fill its own queue while the client was
+			// awaiting fetch — that slot is the stream's read-ahead, not the
+			// reader's — and nothing beyond it: 512 KiB was on offer.
+			expect(pulled).toBeLessThanOrEqual(MAX_INTROSPECTION_BODY_BYTES / chunkBytes + 2);
+		});
+
+		// What the bound is for, in absolute terms: a response carrying a
+		// generous claim set has to fit.
+		it("admits a response with 32 KiB of claims", async () => {
+			const claims = { active: true, sub: "user-1", ext: "c".repeat(32 * 1024) };
+			fetchMock.mockResolvedValueOnce(jsonResponse(200, claims));
+
+			await expect(clientFor().introspect("t", "r")).resolves.toEqual(claims);
+		});
+
+		// The ceiling as well as the floor: the boundary tests above derive
+		// their sizes from the constant, so without this it could be raised
+		// arbitrarily with a green suite.
+		it("is 64 KiB, the same allowance as a token response", () => {
+			expect(MAX_INTROSPECTION_BODY_BYTES).toBe(64 * 1024);
+		});
+
+		// resp.json(), which this used before F39, decodes as UTF-8 and drops a
+		// leading BOM. The bounded reader decodes the same way (F35), and a
+		// provider emitting one must keep working.
+		it("reads a body behind a UTF-8 BOM", async () => {
+			fetchMock.mockResolvedValueOnce(new Response('\uFEFF{"active":true}', { status: 200 }));
+
+			await expect(clientFor().introspect("t", "r")).resolves.toEqual({ active: true });
+		});
+	});
+
 	it("throws IntrospectHttpError with matching status on non-2xx response", async () => {
 		fetchMock.mockResolvedValueOnce(new Response("", { status: 503 }));
 
@@ -238,10 +326,12 @@ describe("createIntrospectionClient", () => {
 		await expect(p).rejects.toMatchObject({ status: 503 });
 	});
 
-	// Nothing here reads an error body, but leaving it unread keeps the socket
-	// out of undici's pool until the response is collected (#95 F28). The
-	// non-2xx path is the only one that throws before the body is consumed:
-	// every other refusal runs after `resp.json()`.
+	// Nothing here reads an error body (#95 F28). Past undici's 64 KiB
+	// read-ahead an unread one would hold its socket until the response is
+	// collected; within it undici has already pooled the socket, so this is
+	// defensive. The non-2xx path is the only one that throws before the body
+	// is dealt with: every other refusal runs after readBoundedJsonObject has
+	// read it to the end or cancelled it at the bound (#95 F39).
 	it.each([401, 503])(
 		"cancels the body of a %d response instead of leaving it unread",
 		async (status) => {

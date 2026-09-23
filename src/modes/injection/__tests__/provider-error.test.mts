@@ -1,7 +1,7 @@
 import { describe, expect, it } from "vitest";
 import {
 	INVALID_ERROR_CODE,
-	readBoundedJsonObject,
+	MAX_ERROR_BODY_BYTES,
 	sanitizeErrorCode,
 	sanitizeErrorDescription,
 } from "../provider-error.mjs";
@@ -70,56 +70,6 @@ describe("sanitizeErrorCode", () => {
 
 	it("ignores empty credentials rather than refusing every code", () => {
 		expect(sanitizeErrorCode("invalid_grant", ["", SECRET])).toBe("invalid_grant");
-	});
-});
-
-describe("readBoundedJsonObject", () => {
-	const body = (text: string, status = 503) => new Response(text, { status });
-
-	it("returns a JSON object body", async () => {
-		await expect(readBoundedJsonObject(body('{"error":"temporarily_unavailable"}'))).resolves.toEqual({
-			error: "temporarily_unavailable",
-		});
-	});
-
-	// The bytes are decoded as UTF-8, which drops a leading BOM — the same
-	// reading Response.text() gives, and what the success path needs since it
-	// reads through this too (#95 F35).
-	it("decodes as UTF-8, so a leading BOM does not cost the diagnostic", async () => {
-		await expect(readBoundedJsonObject(body('\uFEFF{"error":"invalid_grant"}'))).resolves.toEqual({
-			error: "invalid_grant",
-		});
-	});
-
-	it("tolerates a body that is not a JSON object", async () => {
-		for (const text of ["", "<html>busy</html>", "[1,2]", "null", '"text"', "{"]) {
-			await expect(readBoundedJsonObject(body(text)), text).resolves.toBeNull();
-		}
-		await expect(readBoundedJsonObject(new Response(null, { status: 503 }))).resolves.toBeNull();
-	});
-
-	it("gives up on a body larger than the limit", async () => {
-		const json = JSON.stringify({ error: "x", pad: "a".repeat(100) });
-		await expect(readBoundedJsonObject(body(json), json.length)).resolves.toEqual({
-			error: "x",
-			pad: "a".repeat(100),
-		});
-		await expect(readBoundedJsonObject(body(json), json.length - 1)).resolves.toBeNull();
-	});
-
-	it("bounds the default read at 16 KiB", async () => {
-		const json = JSON.stringify({ error: "x", pad: "a".repeat(16 * 1024) });
-		await expect(readBoundedJsonObject(body(json))).resolves.toBeNull();
-	});
-
-	it("tolerates a body stream that fails mid-read", async () => {
-		const stream = new ReadableStream<Uint8Array>({
-			start(controller) {
-				controller.enqueue(new TextEncoder().encode('{"error":'));
-				controller.error(new Error("connection reset"));
-			},
-		});
-		await expect(readBoundedJsonObject(new Response(stream, { status: 503 }))).resolves.toBeNull();
 	});
 });
 
@@ -197,5 +147,13 @@ describe("credential matching", () => {
 	it("ignores an empty credential rather than refusing everything", () => {
 		expect(sanitizeErrorCode("invalid_scope", [""])).toBe("invalid_scope");
 		expect(sanitizeErrorDescription("unknown scope", [""])).toBe("unknown scope");
+	});
+});
+
+// The error path's bound, now that the reader it is passed to lives in
+// src/response-body.mts and has no default of its own (#95 F39).
+describe("MAX_ERROR_BODY_BYTES", () => {
+	it("is 16 KiB", () => {
+		expect(MAX_ERROR_BODY_BYTES).toBe(16 * 1024);
 	});
 });

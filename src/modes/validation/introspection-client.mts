@@ -14,7 +14,7 @@
  * limitations under the License.
  */
 import { type ClientCredentials, clientSecretBasic } from "../../oauth/client-secret-basic.mjs";
-import { discardBody } from "../../response-body.mjs";
+import { discardBody, readBoundedJsonObject } from "../../response-body.mjs";
 
 export type { ClientCredentials };
 
@@ -40,6 +40,20 @@ export interface IntrospectionResult {
  * examined.
  */
 export type RefusedCredential = "client" | "token";
+
+/**
+ * How much of a 200 introspection response is read before giving up on it
+ * (#95 F39).
+ *
+ * The same allowance the injection path gives a token response
+ * (`MAX_TOKEN_BODY_BYTES`, F35), for the same reason: an introspection
+ * response is the answer itself, and a claim set can be generous. Nothing a
+ * provider legitimately sends comes near it, so it is reached only by a body
+ * that is not an introspection response at all. It is a memory bound, not a
+ * validity check — until F39 this path buffered whatever arrived, once per
+ * request in flight.
+ */
+export const MAX_INTROSPECTION_BODY_BYTES = 64 * 1024;
 
 export class IntrospectHttpError extends Error {
 	constructor(
@@ -72,7 +86,9 @@ export const buildAuthHeader = (credentials: ClientCredentials | null, token: st
  * @throws {IntrospectHttpError} the provider's status for a non-2xx — carrying
  * {@link RefusedCredential} on a 401, which says whether the provider refused
  * the inbound token or the proxy's own client authentication — and `502`
- * for a 200 whose body is not a valid RFC 7662 response. A `fetch` rejection
+ * for a 200 whose body is not a JSON object, is over the
+ * {@link MAX_INTROSPECTION_BODY_BYTES} bound, or is not a valid RFC 7662
+ * response. A `fetch` rejection
  * — timeout or network — propagates unwrapped. The same class carries one
  * more `502` raised outside this module: a malformed `exp` on an otherwise
  * valid response, which `createIntrospector` refuses once it has decided the
@@ -131,22 +147,20 @@ export const createIntrospectionClient = ({
 				);
 			}
 
-			let parsed: unknown;
-			try {
-				parsed = await resp.json();
-			} catch {
-				// Provider returned 200 with a non-JSON body — treat as provider bug, not auth decision.
-				throw new IntrospectHttpError(502, "introspect returned 200 with a non-JSON body");
+			// Read at most MAX_INTROSPECTION_BODY_BYTES of it (#95 F39). A body
+			// that is not a JSON object, or that does not stop, is the provider
+			// answering badly rather than an auth decision.
+			const parsed = await readBoundedJsonObject(resp, MAX_INTROSPECTION_BODY_BYTES);
+			if (parsed === null) {
+				throw new IntrospectHttpError(
+					502,
+					"introspect returned 200 with a body that is not a JSON object, or is over the size bound",
+				);
 			}
 
 			// RFC 7662 §2.2: `active` MUST be a boolean. Reject anything else so a provider
-			// returning {"active":"false"} or a non-object cannot bypass auth via truthy coercion.
-			if (
-				parsed === null ||
-				typeof parsed !== "object" ||
-				Array.isArray(parsed) ||
-				typeof (parsed as { active?: unknown }).active !== "boolean"
-			) {
+			// returning {"active":"false"} cannot bypass auth via truthy coercion.
+			if (typeof parsed.active !== "boolean") {
 				throw new IntrospectHttpError(
 					502,
 					"introspect returned 200 but the body is not a valid introspection response (RFC 7662)",
