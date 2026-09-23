@@ -196,7 +196,8 @@ export const createRouter = ({
 		.use((req: Request, _res: Response, next: NextFunction) => {
 			logger.info(
 				{
-					"x-request-id": req.headers["x-request-id"],
+					requestId: req.headers["x-request-id"],
+					event: "injection.incoming_request",
 					method: req.method,
 					path: req.path,
 				},

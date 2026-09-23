@@ -257,12 +257,14 @@ describe("decideValidation", () => {
 			});
 			// One line, not both: the generic `introspect failed` must not also
 			// fire, or an operator filtering on it sees the config error twice
-			// and under the wrong name.
+			// and under the wrong name. At error, because the proxy's own
+			// configuration is refused, not the caller's token (#134).
 			expect(logger.error).toHaveBeenCalledTimes(1);
 			expect(logger.error).toHaveBeenCalledWith(
-				{ "x-request-id": "rid-1", error: err },
+				{ requestId: "rid-1", event: "validation.provider_config_error", error: err },
 				"introspect refused the proxy's client credentials",
 			);
+			expect(logger.info).not.toHaveBeenCalled();
 		});
 
 		// #95 F43: a redirecting introspection endpoint is the deployment's
@@ -285,13 +287,17 @@ describe("decideValidation", () => {
 				});
 				expect(logger.error).toHaveBeenCalledTimes(1);
 				expect(logger.error).toHaveBeenCalledWith(
-					{ "x-request-id": "rid-1", error: err },
+					{ requestId: "rid-1", event: "validation.provider_config_error", error: err },
 					"introspect endpoint redirected",
 				);
 			},
 		);
 
-		it("still answers 401 Invalid Token when the refused credential was the inbound token", async () => {
+		// #134: a 401 about the caller's token is the caller's refusal, not the
+		// proxy failing, so it is logged at info — the level the injection path
+		// gives `injection.session_unauthorized`. Only the proxy's own failures
+		// are errors.
+		it("still answers 401 Invalid Token when the refused credential was the inbound token, logging it at info", async () => {
 			const { deps, introspect, logger } = makeDeps();
 			const err = new IntrospectHttpError(401, "introspect returned 401", "token");
 			introspect.mockRejectedValueOnce(err);
@@ -302,10 +308,12 @@ describe("decideValidation", () => {
 				body: { code: 401, message: "Invalid Token" },
 				challenge: 'Bearer error="invalid_token"',
 			});
-			expect(logger.error).toHaveBeenCalledWith(
-				{ "x-request-id": "rid-1", error: err },
+			expect(logger.info).toHaveBeenCalledTimes(1);
+			expect(logger.info).toHaveBeenCalledWith(
+				{ requestId: "rid-1", event: "validation.token_unauthorized", error: err },
 				"introspect failed",
 			);
+			expect(logger.error).not.toHaveBeenCalled();
 		});
 
 		// The class says only a 401 carries a mark, but nothing enforces it and
@@ -326,7 +334,9 @@ describe("decideValidation", () => {
 			});
 		});
 
-		it("answers 401 Invalid Token when the provider answers 401, logging the failure with the request id", async () => {
+		// A supplied introspector that marks nothing is read the way it always
+		// was: its 401 is about the token, and logged as the token's (#134).
+		it("answers 401 Invalid Token when the provider answers an unmarked 401, logging it at info with the request id", async () => {
 			const { deps, introspect, logger } = makeDeps();
 			const err = new IntrospectHttpError(401, "introspect failed: 401");
 			introspect.mockRejectedValueOnce(err);
@@ -337,10 +347,12 @@ describe("decideValidation", () => {
 				body: { code: 401, message: "Invalid Token" },
 				challenge: 'Bearer error="invalid_token"',
 			});
-			expect(logger.error).toHaveBeenCalledWith(
-				{ "x-request-id": "rid-1", error: err },
+			expect(logger.info).toHaveBeenCalledTimes(1);
+			expect(logger.info).toHaveBeenCalledWith(
+				{ requestId: "rid-1", event: "validation.token_unauthorized", error: err },
 				"introspect failed",
 			);
+			expect(logger.error).not.toHaveBeenCalled();
 		});
 
 		// #95 F42: what the provider did is a 502, as on the injection path;
@@ -351,7 +363,7 @@ describe("decideValidation", () => {
 			{ failure: "the provider's 400", err: new IntrospectHttpError(400, "introspect returned 400") },
 			{ failure: "a 200 that is not an introspection response", err: new IntrospectHttpError(502, "introspect returned 200 but …") },
 			{ failure: "a call that never answered", err: new IntrospectHttpError(502, "introspect call failed: timeout") },
-		])("answers 502 Bad Gateway on $failure, logging it", async ({ err }) => {
+		])("answers 502 Bad Gateway on $failure, logging it at error", async ({ err }) => {
 			const { deps, introspect, logger } = makeDeps();
 			introspect.mockRejectedValueOnce(err);
 			const outcome = await decideValidation(inputs("Bearer t"), deps);
@@ -361,16 +373,18 @@ describe("decideValidation", () => {
 				body: { code: 502, message: "Bad Gateway" },
 				challenge: null,
 			});
+			expect(logger.error).toHaveBeenCalledTimes(1);
 			expect(logger.error).toHaveBeenCalledWith(
-				{ "x-request-id": "rid-1", error: err },
+				{ requestId: "rid-1", event: "validation.provider_error", error: err },
 				"introspect failed",
 			);
+			expect(logger.info).not.toHaveBeenCalled();
 		});
 
 		it.each([
 			{ failure: "a rejection that is not an IntrospectHttpError", err: new Error("socket hang up") },
 			{ failure: "a thrown non-Error", err: "boom" },
-		])("answers 500 Internal Server Error on $failure, logging it", async ({ err }) => {
+		])("answers 500 Internal Server Error on $failure, logging it at error", async ({ err }) => {
 			const { deps, introspect, logger } = makeDeps();
 			introspect.mockRejectedValueOnce(err);
 			const outcome = await decideValidation(inputs("Bearer t"), deps);
@@ -380,8 +394,9 @@ describe("decideValidation", () => {
 				body: { code: 500, message: "Internal Server Error" },
 				challenge: null,
 			});
+			expect(logger.error).toHaveBeenCalledTimes(1);
 			expect(logger.error).toHaveBeenCalledWith(
-				{ "x-request-id": "rid-1", error: err },
+				{ requestId: "rid-1", event: "validation.unexpected_error", error: err },
 				"introspect failed",
 			);
 		});
@@ -409,11 +424,52 @@ describe("the failure line on the real logger", () => {
 
 		const entry = JSON.parse(lines.join("").trim());
 		expect(entry.msg).toBe("introspect failed");
+		// The one vocabulary both modes log in (#134): `requestId` and `event`,
+		// never the header name.
+		expect(entry.requestId).toBe("rid-1");
+		expect(entry.event).toBe("validation.provider_error");
+		expect(entry).not.toHaveProperty("x-request-id");
 		expect(entry.error).toMatchObject({
 			type: "IntrospectHttpError",
 			message: "introspect call failed: fetch failed",
 			status: 502,
 			cause: { message: "fetch failed", cause: { code: "ECONNREFUSED" } },
 		});
+	});
+
+	// #134: the level says whose failure it was. The caller's token refused by
+	// the provider is info, as `injection.session_unauthorized` is; the
+	// provider refusing the proxy's own client is the deployment's, so error.
+	// Read off the emitted line, where pino's numeric level is what a query
+	// matches (30 info, 50 error).
+	it.each([
+		{
+			refused: "the inbound token",
+			err: new IntrospectHttpError(401, "introspect returned 401", "token"),
+			level: 30,
+			event: "validation.token_unauthorized",
+		},
+		{
+			refused: "the proxy's own client",
+			err: new IntrospectHttpError(401, "introspect returned 401", "client"),
+			level: 50,
+			event: "validation.provider_config_error",
+		},
+	])("logs a provider 401 that refused $refused at level $level", async ({ err, level, event }) => {
+		const stream = new PassThrough();
+		const lines: string[] = [];
+		stream.on("data", (chunk: Buffer) => lines.push(chunk.toString()));
+		const logger = createProxyLogger({ destination: stream, level: "info" });
+		const introspect = vi.fn(async (): Promise<IntrospectionResult> => {
+			throw err;
+		});
+
+		await decideValidation(inputs("Bearer t"), { introspect, logger });
+		await new Promise((resolve) => setImmediate(resolve));
+
+		const entries = lines.join("").trim().split("\n").map((line) => JSON.parse(line));
+		expect(entries).toHaveLength(1);
+		expect(entries[0]).toMatchObject({ level, event, requestId: "rid-1" });
+		expect(entries[0].error).toMatchObject({ type: "IntrospectHttpError", status: 401 });
 	});
 });

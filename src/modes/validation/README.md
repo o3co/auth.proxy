@@ -68,7 +68,7 @@ In validation mode, an inbound `Authorization: Bearer <token>` is checked agains
    - `Bad Gateway` for everything else, which includes a timeout (#95 F42).
 
    Anything the proxy did not expect is a `500`. A caller should therefore retry a `502`, which is the provider failing and can recover, and not a `500`, which is the proxy's own. No `Retry-After` is passed through, so a caller that retries backs off on its own. The full table is the doc comment on [`decideValidation`](decision.mts). [`decision.test.mts`](__tests__/decision.test.mts) and [`router.test.mts`](__tests__/router.test.mts) pin this.
-9. **Failures are logged without the token.** The failure lines carry the request id and the error. The logger serialises the error through its allowlist ([`logger.mts`](../../logger.mts)), which drops fields that may echo the token, such as an undici parser error's `data`. [`decision.test.mts`](__tests__/decision.test.mts) and [`logger.test.mts`](../../__tests__/logger.test.mts) pin this.
+9. **Failures are logged without the token.** Each failure line carries `requestId`, a `validation.*` event and the error, at `info` when the provider refused the caller's token and at `error` otherwise — the vocabulary stated in the [`src` README](../../README.md). The logger serialises the error through its allowlist ([`logger.mts`](../../logger.mts)), which drops fields that may echo the token, such as an undici parser error's `data`. [`decision.test.mts`](__tests__/decision.test.mts) and [`logger.test.mts`](../../__tests__/logger.test.mts) pin this.
 10. **One seam, and the router owns what it builds.** `createRouter({ config, deps })` refuses any mode other than `"validation"`. `deps` can supply only the introspector and the logger. A supplied introspector replaces the client, the cache and the flight table together. It then owns what the bundled one guarantees and the decision does not: the boolean `active` check, the refusals in invariant 3, its own timeout and its own coalescing. Each router builds its own cache and its own flight table, and they live in its closure until the process exits. [`build-introspector.test.mts`](__tests__/build-introspector.test.mts) and [`router.test.mts`](__tests__/router.test.mts) pin this. That shutdown leaves the cache untouched is not tested.
 
 ## Dependencies
@@ -82,7 +82,3 @@ In validation mode, an inbound `Authorization: Bearer <token>` is checked agains
 - **Packages:** `express` and `node:crypto`.
 - **Never imported:** `src/modes/injection`. The dependency runs neither way: injection does not import this directory either.
 - **Inside the directory:** there are no import cycles.
-
-## Known issues
-
-- [#134](https://github.com/o3co/auth.proxy/issues/134): the two modes use different log field names and levels.

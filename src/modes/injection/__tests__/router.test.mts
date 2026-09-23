@@ -734,7 +734,10 @@ describe("injection router", () => {
 		const app = express();
 		app.use(createRouter({ config: makeConfig(upstream.baseURL), deps: { grantClient, logger: injected } }));
 
-		const res = await request(app).get("/any").set("Cookie", "sid=s1");
+		const res = await request(app)
+			.get("/any")
+			.set("Cookie", "sid=s1")
+			.set("x-request-id", "rid-in");
 
 		expect(res.status).toBe(204);
 		expect(upstream.received[0].headers.authorization).toBe("Bearer tok-injected-dep");
@@ -744,7 +747,11 @@ describe("injection router", () => {
 			requestId: expect.any(String),
 		});
 		expect(eventsOf(injected.info)).toContain("injection.grant_success");
-		expect(injected.info.mock.calls.map((call) => call[1])).toContain("incoming request");
+		// The same vocabulary as every other line, in both modes (#134).
+		expect(injected.info).toHaveBeenCalledWith(
+			{ requestId: "rid-in", event: "injection.incoming_request", method: "GET", path: "/any" },
+			"incoming request",
+		);
 		expect(singletonInfo).not.toHaveBeenCalled();
 		expect(singletonWarn).not.toHaveBeenCalled();
 	});

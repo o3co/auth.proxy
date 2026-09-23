@@ -139,7 +139,8 @@ export const createRouter = ({
 		.use((req: Request, _res: Response, next) => {
 			logger.info(
 				{
-					"x-request-id": req.headers["x-request-id"],
+					requestId: req.headers["x-request-id"],
+					event: "validation.incoming_request",
 					method: req.method,
 					path: req.path,
 				},
