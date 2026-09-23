@@ -404,6 +404,25 @@ describe("decideInjection", () => {
 			);
 		});
 
+		// #133: presence, not truthiness, as the exchange hand-off and the strip
+		// read it (#95 F40). An empty `Authorization:` is a header the client
+		// sent, and replacing it is an override like any other.
+		it("logs injection.authorization_override when an empty inbound Authorization is about to be replaced (#133)", async () => {
+			const { deps, logger, grantClient } = makeDeps();
+			grantClient.exchange.mockResolvedValueOnce(grant("tok-1"));
+			const outcome = await decideInjection(
+				inputs({ cookieHeader: "sid=s1", authorization: "" }),
+				deps,
+			);
+			expect(outcome).toEqual({ kind: "inject", token: "tok-1" });
+			expect(fieldsOf(logger.warn)).toContainEqual(
+				expect.objectContaining({
+					event: "injection.authorization_override",
+					metric: "auth_proxy_injection_authorization_override",
+				}),
+			);
+		});
+
 		it("uses the first well-formed same-name pair and logs the skipped one as a fallback", async () => {
 			const { deps, logger, grantClient } = makeDeps();
 			grantClient.exchange.mockResolvedValueOnce(grant("tok-good"));

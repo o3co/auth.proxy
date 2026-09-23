@@ -386,6 +386,23 @@ describe("injection router", () => {
 		expect(upstream.received[0].headers.authorization).toBe("Bearer tok-injected");
 	});
 
+	// #133, on the wire: with the exchange disabled, an empty Authorization
+	// reaches `inject`, and overwriting it is logged like any other value.
+	it("overrides an empty inbound Authorization with the injected Bearer and logs injection.authorization_override (#133)", async () => {
+		const warnSpy = vi.spyOn(logger, "warn");
+		fetchMock.mockResolvedValueOnce(okGrantResponse("tok-injected"));
+		const app = mountApp(makeConfig(upstream.baseURL));
+
+		const res = await request(app)
+			.get("/any")
+			.set("Cookie", "sid=s1")
+			.set("Authorization", "");
+
+		expect(res.status).toBe(204);
+		expect(upstream.received[0].headers.authorization).toBe("Bearer tok-injected");
+		expect(eventsOf(warnSpy)).toContain("injection.authorization_override");
+	});
+
 	it("forwards only the configured cookie to the provider (cookie-name filtering)", async () => {
 		fetchMock.mockResolvedValueOnce(okGrantResponse("tok-ok"));
 		const app = mountApp(makeConfig(upstream.baseURL));
