@@ -45,19 +45,26 @@ describe("decideValidation", () => {
 	});
 
 	describe("reject without consulting the provider", () => {
-		it.each(["Basic dXNlcjpwYXNz", "bearer t"])(
-			"answers 400 Invalid Token Type to %j (the scheme is case-sensitive)",
-			async (authorization) => {
-				const { deps, introspect } = makeDeps();
-				const outcome = await decideValidation(inputs(authorization), deps);
-				expect(outcome).toEqual<ValidationOutcome>({
-					kind: "reject",
-					status: 400,
-					body: { code: 400, message: "Invalid Token Type" },
-				});
-				expect(introspect).not.toHaveBeenCalled();
-			},
-		);
+		it.each([
+			["the scheme is case-sensitive", "Basic dXNlcjpwYXNz"],
+			["the scheme is case-sensitive", "bearer t"],
+			// The scheme is right and there is no credential behind it. What
+			// makes these worth pinning here rather than only on the parser:
+			// they are the headers a parser regression would turn into an empty
+			// token, and an empty token must not reach the provider as `token=`.
+			["the scheme carries no token", "Bearer"],
+			["the scheme carries no token", "Bearer "],
+			["a second space leaves the token empty", "Bearer  t"],
+		])("answers 400 Invalid Token Type to %j (%s)", async (_reason, authorization) => {
+			const { deps, introspect } = makeDeps();
+			const outcome = await decideValidation(inputs(authorization), deps);
+			expect(outcome).toEqual<ValidationOutcome>({
+				kind: "reject",
+				status: 400,
+				body: { code: 400, message: "Invalid Token Type" },
+			});
+			expect(introspect).not.toHaveBeenCalled();
+		});
 	});
 
 	describe("introspection", () => {
