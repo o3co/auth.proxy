@@ -260,7 +260,10 @@ export const decideInjection = async (
 	 * it, so the two cannot disagree — they did, and the line was written
 	 * first, so it said `forward` and the request was stripped (#95 F31).
 	 */
-	const willStripInbound = cfg.stripInboundAuthorization && Boolean(authorization);
+	// Presence, not truthiness (#95 F40): an empty `Authorization:` is a
+	// header the client sent, and Express keeps it as "". The exchange
+	// hand-off above has always read it this way; the strip now agrees.
+	const willStripInbound = cfg.stripInboundAuthorization && authorization !== undefined;
 	const forwardAction: ForwardAction = willStripInbound ? "forward_stripped" : "forward";
 
 	/**

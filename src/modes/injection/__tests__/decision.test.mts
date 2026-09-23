@@ -182,6 +182,31 @@ describe("decideInjection", () => {
 			expect(grantClient.exchange).not.toHaveBeenCalled();
 		});
 
+		// #95 F40. An `Authorization:` with an empty value is a header the client
+		// sent, and Express keeps it as "" rather than dropping it. The exchange
+		// hand-off has always counted it as present (`!== undefined`), while the
+		// strip read truthiness and let it through to the upstream. Both read
+		// presence the same way now.
+		it("strips an empty inbound Authorization like any other when stripping is on", async () => {
+			const { deps, logger } = makeDeps({ stripInboundAuthorization: true });
+
+			const outcome = await decideInjection(inputs({ authorization: "" }), deps);
+
+			expect(outcome).toEqual<InjectionOutcome>({ kind: "forward_stripped", reason: "no_cookie" });
+			expect(fieldsOf(logger.debug)).toContainEqual(
+				expect.objectContaining({ event: "injection.no_cookie", action: "forward_stripped" }),
+			);
+			expect(eventsOf(logger.warn)).toContain("injection.inbound_authorization_stripped");
+		});
+
+		it("forwards an absent Authorization as received even when stripping is on", async () => {
+			const { deps } = makeDeps({ stripInboundAuthorization: true });
+
+			expect(await decideInjection(inputs({ authorization: undefined }), deps)).toEqual({
+				kind: "forward",
+			});
+		});
+
 		it("forwards as received with an inbound Authorization when stripping is off", async () => {
 			const { deps, logger } = makeDeps();
 			const outcome = await decideInjection(inputs({ authorization: "Bearer own" }), deps);

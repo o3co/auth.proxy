@@ -601,6 +601,20 @@ describe("injection router", () => {
 			expect(fetchMock).not.toHaveBeenCalled();
 		});
 
+		// #95 F40, on the wire: an empty Authorization is a header the client
+		// sent, and with the flag on it does not reach the upstream either.
+		it("strips an empty inbound Authorization when the flag is on", async () => {
+			const app = mountApp(
+				makeConfig(upstream.baseURL, { stripInboundAuthorization: true }),
+			);
+
+			const res = await request(app).get("/any").set("Authorization", "");
+
+			expect(res.status).toBe(204);
+			expect(upstream.received[0].headers).not.toHaveProperty("authorization");
+			expect(fetchMock).not.toHaveBeenCalled();
+		});
+
 		it("strips an inbound Authorization when the cookie is absent and the flag is on", async () => {
 			const warnSpy = vi.spyOn(logger, "warn");
 			const app = mountApp(
