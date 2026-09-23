@@ -14,6 +14,7 @@
  * limitations under the License.
  */
 
+import { discardBody } from "../../response-body.mjs";
 import { readBoundedJsonObject, sanitizeErrorDescription } from "./provider-error.mjs";
 import { buildTokenUrl, parseJsonBody } from "./token-endpoint.mjs";
 
@@ -139,6 +140,7 @@ export const createSessionGrantClient = (
 			}
 
 			if (resp.status >= 300 && resp.status < 400) {
+				await discardBody(resp);
 				throw new SessionGrantError(
 					"provider_config_error",
 					502,
@@ -148,6 +150,13 @@ export const createSessionGrantClient = (
 			}
 
 			if (resp.status === 401) {
+				// The answer is the status: an expired or unknown session. Read
+				// nothing, but release the body (#95 F37). This is the most
+				// frequent refusal here — every request from a browser still
+				// holding an expired session cookie — which is why it is worth
+				// being explicit about, even though a normal-sized body costs
+				// nothing either way (see discardBody).
+				await discardBody(resp);
 				throw new SessionGrantError(
 					"session_unauthorized",
 					401,
@@ -181,6 +190,7 @@ export const createSessionGrantClient = (
 				);
 			}
 			if (resp.status >= 500) {
+				await discardBody(resp);
 				throw new SessionGrantError(
 					"provider_unavailable",
 					502,
@@ -189,6 +199,7 @@ export const createSessionGrantClient = (
 				);
 			}
 			// Unexpected 4xx.
+			await discardBody(resp);
 			throw new SessionGrantError(
 				"provider_unavailable",
 				502,

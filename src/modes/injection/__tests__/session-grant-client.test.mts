@@ -276,6 +276,78 @@ describe("createSessionGrantClient.exchange", () => {
 		},
 	);
 
+	// #95 F37, the injection half of F28. These four branches answer from the
+	// status alone and never read the body — and an unread body holds its
+	// socket out of undici's pool until the response is collected. The 401 is
+	// the most frequent refusal in the repo: every expired session, every
+	// request, until the user signs in again.
+	const trackedBody = (status: number, onCancel: () => void = () => {}) => {
+		let cancelled = false;
+		const resp = new Response(
+			new ReadableStream<Uint8Array>({
+				start(controller) {
+					controller.enqueue(new TextEncoder().encode('{"error":"x"}'));
+				},
+				cancel() {
+					cancelled = true;
+					onCancel();
+				},
+			}),
+			{ status, headers: status >= 300 && status < 400 ? { Location: "https://elsewhere.test/" } : {} },
+		);
+		return { resp, wasCancelled: () => cancelled };
+	};
+
+	it.each([
+		[302, "provider_config_error"],
+		[401, "session_unauthorized"],
+		[503, "provider_unavailable"],
+		[403, "provider_unavailable"],
+	])("cancels the body of a %d it answers without reading (%s)", async (status, code) => {
+		const { resp, wasCancelled } = trackedBody(status);
+		fetchMock.mockResolvedValueOnce(resp);
+
+		await expect(
+			createSessionGrantClient(baseCfg).exchange({ sessionCookieValue: "session-value-1", requestId: "r" }),
+		).rejects.toMatchObject({ code });
+
+		expect(wasCancelled()).toBe(true);
+		expect(resp.bodyUsed).toBe(true);
+	});
+
+	// The release is not the answer: a stream that is already errored rejects
+	// its own cancel, and that must not replace the refusal it came with.
+	// The case discardBody's docstring names: the connection reset before
+	// anything read the body, so the stream is already errored and its cancel
+	// rejects with the stored error.
+	it("keeps the refusal when the body stream is already errored", async () => {
+		fetchMock.mockResolvedValueOnce(
+			new Response(
+				new ReadableStream<Uint8Array>({
+					start(controller) {
+						controller.error(new Error("socket hang up"));
+					},
+				}),
+				{ status: 401 },
+			),
+		);
+
+		await expect(
+			createSessionGrantClient(baseCfg).exchange({ sessionCookieValue: "session-value-1", requestId: "r" }),
+		).rejects.toMatchObject({ code: "session_unauthorized", status: 401 });
+	});
+
+	it("keeps the refusal when cancelling the body fails", async () => {
+		const { resp } = trackedBody(401, () => {
+			throw new Error("socket hang up");
+		});
+		fetchMock.mockResolvedValueOnce(resp);
+
+		await expect(
+			createSessionGrantClient(baseCfg).exchange({ sessionCookieValue: "session-value-1", requestId: "r" }),
+		).rejects.toMatchObject({ code: "session_unauthorized", status: 401 });
+	});
+
 	it("throws session_unauthorized on provider 401 with Retry-After propagation", async () => {
 		fetchMock.mockResolvedValueOnce(
 			jsonResponse(401, { error: "invalid_grant" }, { "retry-after": "30" }),
