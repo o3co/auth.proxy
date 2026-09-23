@@ -461,7 +461,7 @@ describe("createIntrospectionClient", () => {
 	// #95 F42: a call that never answered is the provider failing, as a 5xx
 	// is, so it is an IntrospectHttpError too — the decision answers every one
 	// of those 502, and keeps 500 for what the proxy did not expect. The
-	// original stays reachable as the cause, for the log line.
+	// original stays reachable as the cause.
 	it.each([
 		["a timeout", new DOMException("The operation was aborted due to timeout", "TimeoutError")],
 		["a network error", new TypeError("fetch failed")],
@@ -476,5 +476,16 @@ describe("createIntrospectionClient", () => {
 		expect(thrown).toBeInstanceOf(IntrospectHttpError);
 		expect(thrown).toMatchObject({ status: 502, refusedCredential: null, cause: err });
 		expect((thrown as Error).message).toMatch(/^introspect call failed: /);
+	});
+
+	// Only the call is wrapped: a failure building the request is the proxy's
+	// own, and must reach the decision as the 500 it is, not a provider 502.
+	it("does not wrap a failure building the request", async () => {
+		const thrown = await clientFor({ timeoutMs: 2 ** 32 })
+			.introspect("t", "r")
+			.catch((e: unknown) => e);
+
+		expect(thrown).toBeInstanceOf(RangeError);
+		expect(fetchMock).not.toHaveBeenCalled();
 	});
 });

@@ -125,9 +125,10 @@ export const createIntrospectionClient = ({
 
 	return {
 		async introspect(token, requestId) {
-			let resp: Response;
-			try {
-				resp = await fetch(url, {
+			// Built before the call, so a failure building it — a `timeoutMs` that
+			// `AbortSignal.timeout` refuses, say — stays the proxy's own and is not
+			// reported as the provider's (#95 F42).
+			const init: RequestInit = {
 				method: "POST",
 				headers: {
 					"Content-Type": "application/x-www-form-urlencoded",
@@ -144,7 +145,10 @@ export const createIntrospectionClient = ({
 				// as the non-2xx it is, and the decision reports it.
 				redirect: "manual",
 				signal: AbortSignal.timeout(timeoutMs),
-			});
+			};
+			let resp: Response;
+			try {
+				resp = await fetch(url, init);
 			} catch (err) {
 				// The provider did not answer: a timeout, a refused connection, a
 				// DNS failure. That is the provider failing, as its 5xx is, so it is
