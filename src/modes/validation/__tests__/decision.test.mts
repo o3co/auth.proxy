@@ -197,7 +197,7 @@ describe("decideValidation", () => {
 		// #95 F43: a redirecting introspection endpoint is the deployment's
 		// configuration, not the caller's token and not an outage — reported
 		// like F7's refused client credentials.
-		it.each([301, 302, 307, 308])(
+		it.each([301, 302, 303, 307, 308])(
 			"answers 502 Provider Configuration Error when the endpoint redirects (%d)",
 			async (status) => {
 				const { deps, introspect, logger } = makeDeps();
