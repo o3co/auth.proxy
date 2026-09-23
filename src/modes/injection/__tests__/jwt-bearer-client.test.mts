@@ -6,6 +6,7 @@ import {
 	type JwtBearerClientConfig,
 	JwtBearerError,
 } from "../jwt-bearer-client.mjs";
+import { MAX_TOKEN_BODY_BYTES } from "../token-endpoint.mjs";
 
 const baseCfg: JwtBearerClientConfig = {
 	providerOrigin: "http://provider.example",
@@ -195,6 +196,23 @@ describe("createJwtBearerClient.exchange", () => {
 		}
 	});
 
+	// The other client's mirror of this is in session-grant-client.test.mts:
+	// the two reach the refusal through different gates (status === 200 vs
+	// resp.ok) and different error classes, so the bound is pinned on both.
+	it("throws provider_invalid_response on a 200 body over the bound", async () => {
+		fetchMock.mockResolvedValueOnce(
+			jsonResponse(200, {
+				access_token: "a".repeat(MAX_TOKEN_BODY_BYTES),
+				token_type: "Bearer",
+			}),
+		);
+
+		await expect(exchange()).rejects.toMatchObject({
+			code: "provider_invalid_response",
+			status: 502,
+		});
+	});
+
 	// Its own case rather than a row in the table above: the array is refused
 	// for the body it is, not for the access_token an array cannot carry, and
 	// the message is the only thing that tells those two routes apart (#95 F34).
@@ -204,7 +222,7 @@ describe("createJwtBearerClient.exchange", () => {
 		await expect(exchange()).rejects.toMatchObject({
 			code: "provider_invalid_response",
 			status: 502,
-			message: "provider returned 200 with a non-JSON or non-object JSON body",
+			message: "provider returned 200 with a body that is not a JSON object, or is over the size bound",
 		});
 	});
 

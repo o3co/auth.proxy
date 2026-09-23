@@ -143,7 +143,7 @@ export const createJwtBearerClient = (cfg: JwtBearerClientConfig): JwtBearerClie
 					throw new JwtBearerError(
 						"provider_invalid_response",
 						502,
-						"provider returned 200 with a non-JSON or non-object JSON body",
+						"provider returned 200 with a body that is not a JSON object, or is over the size bound",
 					);
 				}
 				if (typeof data.access_token !== "string" || data.access_token.length === 0) {
