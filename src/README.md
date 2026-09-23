@@ -34,12 +34,12 @@ No README of its own; this is its description.
 
 ### Where shared modules live
 
-Code both modes need sits outside `modes/`, because neither mode may import the other: at the `src/` root (the logger, coalescing, provider-body handling), in `oauth/` (how the proxy authenticates itself to the provider), in `router/` (route assembly) or in `express/` (inbound-header parsing). Each placement was decided with the change that made the code shared; there is no finer rule.
+Code both modes need sits outside `modes/`, because neither mode may import the other: at the `src/` root (the logger, coalescing, provider-body handling), in `oauth/` (how the proxy authenticates itself to the provider), in `router/` (route assembly) or in `express/` (inbound-header parsing).
 
 ## Dependencies
 
 - `modes/*` may import the `src/` root's shared modules, `express/`, `oauth/`, `router/upstream.mts` and `config/`. Neither mode imports the other.
-- Nothing under `express/`, `oauth/`, `router/` or `config/` imports a mode, and the root's shared modules import no mode. Only `app-internal.mts` imports a mode, to select its router.
+- Nothing under `express/`, `oauth/`, `router/` or `config/` imports a mode, and the root's shared modules import no mode. In production code, only `app-internal.mts` imports a mode, to select its router.
 - `express/` and `oauth/` import nothing else in `src/`.
 
 ## Invariants
@@ -48,7 +48,7 @@ Code both modes need sits outside `modes/`, because neither mode may import the 
 - **Shutdown drains; it does not wipe.** The process passes no cleanup to the shutdown, so the token caches die with the process. The shutdown guarantees are stated in the header of [`shutdown.mts`](shutdown.mts).
 - **State belongs to whoever built it.** Parsed configuration is immutable after boot and passed down as an argument; caches and coalescing tables live in the closure that built them, and a router never clears state it was handed rather than built.
 - **One logger.** Every module logs through the [`Logger`](logger.mts) interface; the mode routers default to the singleton and hand it to their decisions, and tests inject a fake through `deps`. Configuration comes from the HOCON parse in `app.mts`; the one environment read outside it is `LOG_LEVEL`, in `logger.mts`.
-- **An Error reaches a log line only through an allowlist (#95 F48).** Some errors carry bytes nobody chose to log — undici's `HTTPParserError.data` is the unparsed rest of the provider's response, which may echo the token the proxy just sent — so any value logged under the `error` key keeps only named fields, with URL credentials redacted; everything else is dropped. The allowlist covers the `error` key only; `shutdown.mts` logs its own failures, which are not provider errors, under `err`. The mechanics are in the header of [`logger.mts`](logger.mts), pinned by [`__tests__/logger.test.mts`](__tests__/logger.test.mts).
+- **An Error reaches a log line only through an allowlist (#95 F48).** Some errors carry bytes nobody chose to log — undici's `HTTPParserError.data` is the unparsed rest of the provider's response, which may echo the token the proxy just sent — so an `Error` logged under the `error` key keeps only named fields, with URL credentials redacted; everything else on it is dropped. A value under `error` that is not an `Error` passes through unchanged: injection logs `String(err)` there for a throw it could not classify, whatever that message holds. The allowlist covers the `error` key only; `shutdown.mts` logs its own failures, which are not provider errors, under `err`. The mechanics are in the header of [`logger.mts`](logger.mts), pinned by [`__tests__/logger.test.mts`](__tests__/logger.test.mts).
 - **A provider failure never stops the process.** A configuration error stops it before it listens; a provider failure is answered per mode; SIGTERM / SIGINT start the drain.
 
 ## Known issues
