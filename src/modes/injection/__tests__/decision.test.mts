@@ -182,6 +182,23 @@ describe("decideInjection", () => {
 			expect(grantClient.exchange).not.toHaveBeenCalled();
 		});
 
+		// #95 F40. An `Authorization:` with an empty value is a header the client
+		// sent, and Express keeps it as "" rather than dropping it. The exchange
+		// hand-off has always counted it as present (`!== undefined`), while the
+		// strip read truthiness and let it through to the upstream. Both read
+		// presence the same way now.
+		it("strips an empty inbound Authorization like any other when stripping is on", async () => {
+			const { deps, logger } = makeDeps({ stripInboundAuthorization: true });
+
+			const outcome = await decideInjection(inputs({ authorization: "" }), deps);
+
+			expect(outcome).toEqual<InjectionOutcome>({ kind: "forward_stripped", reason: "no_cookie" });
+			expect(fieldsOf(logger.debug)).toContainEqual(
+				expect.objectContaining({ event: "injection.no_cookie", action: "forward_stripped" }),
+			);
+			expect(eventsOf(logger.warn)).toContain("injection.inbound_authorization_stripped");
+		});
+
 		it("forwards as received with an inbound Authorization when stripping is off", async () => {
 			const { deps, logger } = makeDeps();
 			const outcome = await decideInjection(inputs({ authorization: "Bearer own" }), deps);
@@ -255,17 +272,27 @@ describe("decideInjection", () => {
 			)?.[1];
 
 		it.each([
-			["no_cookie, at debug", {}, (l: FakeLogger) => l.debug, "injection.no_cookie"],
+			["no_cookie, at debug", {}, (l: FakeLogger) => l.debug, "injection.no_cookie", "Bearer own"],
 			[
 				"cookie_rejected, at warn",
 				{ cookieHeader: "sid=" },
 				(l: FakeLogger) => l.warn,
 				"injection.cookie_rejected",
+				"Bearer own",
 			],
-		])("reports forward_stripped on %s, not the forward it is not", async (_l, extra, spy, event) => {
+			// #95 F40: present and empty is stripped too.
+			["no_cookie, empty header", {}, (l: FakeLogger) => l.debug, "injection.no_cookie", ""],
+			[
+				"cookie_rejected, empty header",
+				{ cookieHeader: "sid=" },
+				(l: FakeLogger) => l.warn,
+				"injection.cookie_rejected",
+				"",
+			],
+		])("reports forward_stripped on %s, not the forward it is not", async (_l, extra, spy, event, authorization) => {
 			const { deps, logger } = makeDeps({ stripInboundAuthorization: true });
 
-			await decideInjection(inputs({ ...extra, authorization: "Bearer own" }), deps);
+			await decideInjection(inputs({ ...extra, authorization }), deps);
 
 			expect(fieldsOf(spy(logger))).toContainEqual(
 				expect.objectContaining({ event, action: "forward_stripped" }),
