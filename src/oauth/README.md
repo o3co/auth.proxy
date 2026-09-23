@@ -31,7 +31,7 @@ The session grant is **not** a caller: there the proxy is a public client and se
 
 ## Failure and lifecycle
 
-A pure function has neither. A wrong or unregistered credential surfaces as a provider `401`, which validation mode answers as `401 Invalid Token` and the exchange as `502 provider_config_error` — see [`src/modes/validation`](../modes/validation/README.md) for why those differ today.
+A pure function has neither. A wrong or unregistered credential surfaces as a provider `401`, and both callers now read it the same way: the exchange as `502 provider_config_error`, validation as `502 Provider Configuration Error` (#95 F7). Validation answers `401 Invalid Token` for a provider `401` only when it sent no Basic header at all — without client credentials the inbound token is the introspection credential, so that `401` is about the caller rather than about this module's output. See [`src/modes/validation`](../modes/validation/README.md).
 
 ## Contract tests
 

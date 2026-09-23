@@ -68,7 +68,10 @@ const reject = (status: number, message: string): ValidationOutcome => ({
  *   - no Authorization                        forward, the provider not consulted
  *   - not `Bearer <token>`                    400 Invalid Token Type
  *   - active: false                           401 Invalid Token
- *   - the provider answers 401                401 Invalid Token
+ *   - the provider answers 401                401 Invalid Token, unless it was
+ *                                             the proxy's own client
+ *                                             authentication that was refused:
+ *                                             502 Provider Configuration Error
  *   - any other failure                       500 Internal Server Error
  *   - active: true                            forward
  *
@@ -102,7 +105,28 @@ export const decideValidation = async (
 			return reject(401, "Invalid Token");
 		}
 	} catch (e) {
+		// The status is checked beside the mark: the class documents that only a
+		// 401 carries one, but nothing stops a supplied introspector constructing
+		// an out-of-contract error, and this branch answers a different status.
+		// A 401 that refused the proxy's own client authentication is not a
+		// statement about the caller's token — the provider never examined it
+		// (#95 F7). It is the deployment's own configuration, so it is reported
+		// as a provider-side failure and logged as the actionable thing it is,
+		// the way the injection path already reports `provider_config_error`.
+		if (
+			e instanceof IntrospectHttpError &&
+			e.status === 401 &&
+			e.refusedCredential === "client"
+		) {
+			logger.error(
+				{ "x-request-id": requestId, error: e },
+				"introspect refused the proxy's client credentials",
+			);
+			return reject(502, "Provider Configuration Error");
+		}
 		logger.error({ "x-request-id": requestId, error: e }, "introspect failed");
+		// Every other 401 is about the token: the bundled client marks it, and a
+		// supplied introspector that marks nothing is read the way it always was.
 		if (e instanceof IntrospectHttpError && e.status === 401) {
 			return reject(401, "Invalid Token");
 		}
