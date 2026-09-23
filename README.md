@@ -1,5 +1,7 @@
 # auth.proxy
 
+Last updated: 2026-09-23
+
 [![CI](https://github.com/o3co/auth.proxy/actions/workflows/ci.yml/badge.svg)](https://github.com/o3co/auth.proxy/actions/workflows/ci.yml)
 [![codecov](https://codecov.io/gh/o3co/auth.proxy/graph/badge.svg)](https://codecov.io/gh/o3co/auth.proxy)
 [![License](https://img.shields.io/badge/license-Apache--2.0-blue)](LICENSE)
@@ -8,17 +10,46 @@
 
 Reverse proxy that sits between clients and downstream services. Operates in one of two mutually exclusive modes selected at deploy time via `auth.mode`.
 
+## Responsibility
+
+**Role.** auth.proxy is an *optional* gate at the perimeter of the auth stack, not one of its three layers: [auth.provider](https://github.com/o3co/auth.provider) authenticates and issues tokens, [auth.policy-verifier](https://github.com/o3co/auth.policy-verifier) makes authorization decisions, and the downstream service — or [protobuf.interceptors](https://github.com/o3co/protobuf.interceptors) inside it — enforces them. Besides the upstream it forwards to, auth.provider is the only service the proxy calls.
+
+One deployment runs one of two modes:
+
+- **[Validation](#validation-mode-authmode--validation)** — in front of a resource server. It checks an inbound `Authorization: Bearer` token against auth.provider's introspection endpoint, caches the answer, and forwards or refuses the request.
+- **[Injection](#injection-mode-authmode--injection)** — in front of a browser-facing (BFF) service. It exchanges the browser's session cookie at auth.provider's token endpoint for an access token and injects it as `Authorization: Bearer`, so the browser never holds the token; opt-in, it also [exchanges an external JWT](#external-credential-exchange-authinjectionexchange) for a first-party token.
+
+**Owns:**
+
+- the per-request decision — forward, refuse, or inject — and the wire shape of its refusals (including the RFC 6750 `WWW-Authenticate` challenge in validation mode);
+- its calls to the provider: `POST /oauth/introspect`, and `POST /oauth/token` for the session grant and the jwt-bearer exchange, with its own client authentication ([`client_secret_basic`](#introspection-client-identity));
+- per-instance, in-memory caches of provider answers, and the single-flight that coalesces concurrent misses;
+- its configuration schema, logging and graceful shutdown.
+
+**Does not own:**
+
+- issuing tokens, login and sessions, issuer trust, identity mapping, and what introspection calls `active` — [auth.provider](https://github.com/o3co/auth.provider);
+- authorization decisions — [auth.policy-verifier](https://github.com/o3co/auth.policy-verifier) — and their enforcement, which stays in the downstream service;
+- verifying the token the upstream is handed: the upstream must still verify it (see [Inbound Authorization headers](#inbound-authorization-headers));
+- CSRF protection (see [CSRF responsibility boundary](#csrf-responsibility-boundary));
+- propagating a revocation to tokens already issued or cached (see [Revocation and the access-token lifetime](#revocation-and-the-access-token-lifetime));
+- the provider's rate-limit budget (see [Provider rate limiting](#provider-rate-limiting)).
+
+**Why a separate service.** The stack's [architecture](https://github.com/o3co/auth/blob/develop/docs/architecture.md#migration-path) runs each component as a standalone HTTP service that talks to the others only through endpoint URLs in configuration: the proxy needs only the provider's endpoint, and can be replaced by any token-validating reverse proxy (e.g. Envoy with ext_authz) with no application code change. Being in front of the service is what lets downstream services receive pre-validated requests without implementing auth logic themselves, and lets injection mode keep access tokens out of the browser (the OWASP Token Handler Pattern). Being optional, a deployment can leave it out.
+
+**Source map.** How the code is laid out, who owns which state, and which test pins each invariant: [`src/README.md`](src/README.md) (the source map), [`config/README.md`](config/README.md) (the configuration schema), and the module READMEs — [`src/express`](src/express/README.md), [`src/oauth`](src/oauth/README.md), [`src/modes/injection`](src/modes/injection/README.md), [`src/modes/validation`](src/modes/validation/README.md).
+
 ## Operating modes
 
 `auth.mode` is required — must be set explicitly to `"validation"` or `"injection"`. Omission or a typo causes the proxy to fail to start. Set it via HOCON (`auth.mode = "validation"`) or the `AUTH_MODE` environment variable.
 
 ### Validation mode (`auth.mode = "validation"`)
 
-Validates inbound `Authorization: Bearer <token>` headers against the provider's introspection endpoint. Requests without a Bearer header are forwarded unchanged (public endpoints remain reachable).
+Validates inbound `Authorization: Bearer <token>` headers against the provider's introspection endpoint. A request with no `Authorization` header, or an empty one, is forwarded unchanged (public endpoints remain reachable). A request whose `Authorization` is anything other than `Bearer <token>` — another scheme, a lowercase `bearer`, a `Bearer` with no usable token — is refused `400 Invalid Token Type` (see the challenge table below).
 
 Flow:
 
-1. Detects `Authorization: Bearer <token>` header (passes through if absent).
+1. Detects `Authorization: Bearer <token>` header (passes through if there is no `Authorization` header, or an empty one; any other `Authorization` is `400`).
 2. Checks in-memory cache keyed by SHA-256 of the token.
 3. On cache miss, calls provider's `POST /oauth/introspect`. A redirect from it is not followed — the endpoint is configuration — and is answered `502 Provider Configuration Error`. Concurrent misses on the same token coalesce into a single provider call (single-flight), as they do in injection mode.
 4. Returns `401` if `active: false`; forwards the request if `active: true`.
@@ -212,7 +243,7 @@ It is not [RFC 8693](https://www.rfc-editor.org/rfc/rfc8693.html) token exchange
 | 403 | `exchange_not_permitted` | The provider answered `invalid_scope`, `invalid_target` or `unauthorized_client`. |
 | 502 | `provider_config_error` | The provider answered `401` (the proxy's own client authentication), any other `400`, or a redirect (redirects are not followed). |
 | 502 | `provider_unavailable` | Provider `5xx` or `429`, network error, timeout, or an unexpected status. The provider's `Retry-After` is passed through. |
-| 502 | `provider_invalid_response` | A `200` without an `access_token`, or with a `token_type` other than `Bearer` (e.g. `DPoP`). |
+| 502 | `provider_invalid_response` | A `200` whose body is not a JSON object (empty, not JSON, or an array) or exceeds the 64 KiB bound, one without an `access_token`, or one with a `token_type` other than `Bearer` (e.g. `DPoP`). |
 
 Each outcome is logged as an `injection.exchange_*` event (`exchange_fetch`, `exchange_success`, `exchange_cache_hit`, `exchange_credential_ambiguous` at warn, `exchange_credential_unsupported` with a `reason` of `scheme` or `format`, `exchange_issuer_refused`, `exchange_rejected`, `exchange_not_permitted` at warn, `exchange_provider_config_error` / `exchange_provider_unavailable` / `exchange_provider_invalid_response` at error, with the provider's `error` code where there is one). The assertion, the issued token, the client secret and the unverified `iss` are never logged. The provider's `error` is logged only when it is shaped like an RFC 6749 error code — no whitespace, at most 64 characters, nothing JWT-shaped, not echoing the assertion or secret — and as `invalid_error_code` otherwise; its `error_description` is not logged.
 
@@ -231,6 +262,8 @@ where `sent` is the instant the token request went out. `ttlSeconds` and `expire
 #### Threat model — process memory
 
 Active access tokens reside in process memory. An attacker with read access to proxy process memory can extract all cached tokens. Standard host-security practices apply (container isolation, minimal image, no unnecessary `ptrace` capabilities).
+
+Graceful shutdown does not clear the caches: the drain closes the listener and lets in-flight requests finish within `drainTimeoutMs`, after which the remaining connections are force-closed, and the cached tokens stay in memory until the process exits (#95 F21).
 
 ### Provider rate limiting
 
@@ -288,6 +321,7 @@ Shared environment variables:
 | `HTTP_BODY_LIMIT_SIZE` | Request body size limit (default: 10mb). |
 | `UPSTREAM_BASEURL` | Upstream service base URL. |
 | `CORS_ORIGIN_PATTERN` | CORS origin regex pattern (optional). |
+| `LOG_LEVEL` | pino log level — `trace`, `debug`, `info`, `warn`, `error`, `fatal` or `silent` (default: `info`). Read directly from the environment when the logger is created, not through the HOCON config. Output is NDJSON on stdout. |
 
 Validation mode:
 

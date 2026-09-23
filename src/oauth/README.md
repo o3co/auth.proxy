@@ -1,10 +1,22 @@
 # `src/oauth`
 
+Last updated: 2026-09-23
+
 One place for how this proxy authenticates *itself* to the provider: `client_secret_basic`. The provider-side requirements — which client to register, what audience to pin, what the alternative trades away — are in the root README under [Introspection client identity](../../README.md#introspection-client-identity) and, for the exchange, under [External credential exchange](../../README.md#external-credential-exchange-authinjectionexchange) ("Client authentication"). The boundary review behind this file is [#95](https://github.com/o3co/auth.proxy/issues/95).
 
 ## Responsibility
 
-[`client-secret-basic.mts`](client-secret-basic.mts): a pure function from a credential pair to an `Authorization` header value. [`clientSecretBasic`](client-secret-basic.mts), input type [`ClientCredentials`](client-secret-basic.mts). No I/O, no configuration, no logging, no state.
+**Role.** A contract module the two confidential-client paths call to build their `Authorization` header to the provider: validation's introspection client and the exchange's jwt-bearer client (see [Dependencies](#dependencies)). It uses nothing.
+
+**Owns:** [`client-secret-basic.mts`](client-secret-basic.mts): a pure function from a credential pair to an `Authorization` header value — [`clientSecretBasic`](client-secret-basic.mts), input type [`ClientCredentials`](client-secret-basic.mts) — and its RFC 6749 §2.3.1 encoding. No I/O, no configuration, no logging, no state.
+
+**Does not own:** whether client credentials are configured and which header a call sends without them ([`buildAuthHeader`](../modes/validation/introspection-client.mts)); holding the built header (each client's closure); keeping the secret out of logs (the callers and [`provider-error.mts`](../modes/injection/provider-error.mts)); what a provider `401` means (each mode's decision).
+
+**Why separate.** Both modes need the same encoding, and neither may import the other; the function was extracted from validation's introspection client when the exchange became the second caller (#91), so the encoding is written once.
+
+| File | Kind |
+| --- | --- |
+| [`client-secret-basic.mts`](client-secret-basic.mts) | contract |
 
 ## Public contract
 
@@ -27,11 +39,11 @@ The session grant is **not** a caller: there the proxy is a public client and se
 
 **Encoding (RFC 6749 §2.3.1).** Each half is `application/x-www-form-urlencoded`-encoded *before* the two are joined with `:` and base64'd (the doc comment on [`clientSecretBasic`](client-secret-basic.mts)). Without that, a `:` inside either half re-splits the credential and the provider reads a different pair than the one configured. `encodeURIComponent` escapes `:` and every character the form-urlencoded decoder would read as a separator or escape (`&`, `=`, `+`, `%`, and the space it writes as `%20`), leaving only `-_.!~*'()` and alphanumerics bare, and the provider decodes with the matching form-urlencoded decoder, so a credential containing reserved characters round-trips byte for byte.
 
-**Not logged, within a bound.** Neither caller rebuilds the configured header per request: [`createJwtBearerClient`](../modes/injection/jwt-bearer-client.mts) holds it in its closure, and so does [`createIntrospectionClient`](../modes/validation/introspection-client.mts) since #95 F5 — the Basic form is a function of configuration alone. Validation's other path has nothing to hold: without client credentials the credential *is* the request's own token, so that header is built per call ([`buildAuthHeader`](../modes/validation/introspection-client.mts)). The jwt-bearer client checks the provider's `error` values against the secret before recording them (its [`sanitizeErrorCode`](../modes/injection/provider-error.mts) calls); validation's decision logs the thrown error, never the request it sent (the `catch` in [`decideValidation`](../modes/validation/decision.mts)). The check is a substring match at any length since #95 F30 (`echoesCredential` in [`provider-error.mts`](../modes/injection/provider-error.mts)); below eight characters it used to require an exact echo, so a short client secret could reach a log inside a provider's error text. A short secret now costs the provider's diagnostic instead, which is the cheaper of the two.
+**Not logged, within a bound.** Neither caller rebuilds the configured header per request: [`createJwtBearerClient`](../modes/injection/jwt-bearer-client.mts) holds it in its closure, and so does [`createIntrospectionClient`](../modes/validation/introspection-client.mts) (#95 F5) — the Basic form is a function of configuration alone. Validation's other path has nothing to hold: without client credentials the credential *is* the request's own token, so that header is built per call ([`buildAuthHeader`](../modes/validation/introspection-client.mts)). The jwt-bearer client checks the provider's `error` values against the secret before recording them (its [`sanitizeErrorCode`](../modes/injection/provider-error.mts) calls); validation's decision logs the thrown error, never the request it sent (the `catch` in [`decideValidation`](../modes/validation/decision.mts)). The check is a substring match at any length, however short the secret (`echoesCredential` in [`provider-error.mts`](../modes/injection/provider-error.mts); #95 F30): a value containing the secret is not recorded as received, so a short secret can cost the provider's diagnostic but cannot reach a log inside the provider's error text.
 
 ## Failure and lifecycle
 
-A pure function has neither. A wrong or unregistered credential surfaces as a provider `401`, and both callers now read it the same way: the exchange as `502 provider_config_error`, validation as `502 Provider Configuration Error` (#95 F7). Validation answers `401 Invalid Token` for a provider `401` only when it sent no Basic header at all — without client credentials the inbound token is the introspection credential, so that `401` is about the caller rather than about this module's output. See [`src/modes/validation`](../modes/validation/README.md).
+A pure function has neither. A wrong or unregistered credential surfaces as a provider `401`, and both callers read it the same way: the exchange as `502 provider_config_error`, validation as `502 Provider Configuration Error` (#95 F7). Validation answers `401 Invalid Token` for a provider `401` only when it sent no Basic header at all — without client credentials the inbound token is the introspection credential, so that `401` is about the caller rather than about this module's output. See [`src/modes/validation`](../modes/validation/README.md).
 
 ## Contract tests
 
