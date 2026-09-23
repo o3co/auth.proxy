@@ -6,17 +6,17 @@ Transport helpers for the Express layer. They read and normalise inbound headers
 
 | File | Owns |
 | --- | --- |
-| [`bearer.mts`](bearer.mts) | reading an `Authorization: Bearer <token>` header: [`extractBearerToken`](bearer.mts), result [`BearerToken`](bearer.mts). No state. |
+| [`bearer.mts`](bearer.mts) | reading an `Authorization: Bearer <token>` header: [`extractBearerToken`](bearer.mts), answering the token itself or `null`. No state. |
 | [`requestId.mts`](requestId.mts) | correlating a request across the proxy's logs, its provider call and its upstream call: [`createRequestIdMiddleware`](requestId.mts), options [`RequestIdOptions`](requestId.mts). No state beyond `req` / `res`. |
 
 ## Public contract
 
-- `extractBearerToken(header) → BearerToken | null`: `null` for an absent header, another scheme, or no token.
+- `extractBearerToken(header) → string | null`: the credential with the scheme stripped, or `null` for an absent header, another scheme, or no token.
 - `createRequestIdMiddleware(options?) → RequestHandler`: reuses an inbound id, generates one otherwise, writes it back into `req.headers` and echoes it on the response.
 
 ## Inputs and outputs
 
-- `bearer.mts` — in: the header string; out: `{ token }`. Validation is its only caller; what that path forwards is `req.headers`, which it does not touch, so the header as received was never worth carrying alongside the token (F15).
+- `bearer.mts` — in: the header string; out: the token, or `null`. Validation is its only caller; what that path forwards is `req.headers`, which it does not touch, so the header as received was never worth carrying alongside the token (F15), and once it was gone, neither was the one-field record around the token (#95 F36).
 - `requestId.mts` — in: `req.headers[<header>]` (`string | string[]`); out: the same key normalised to one non-empty string, and the response header. Default header `x-request-id`, compared lowercased as Node stores it (`headerKey` in [`createRequestIdMiddleware`](requestId.mts)).
 
 ## Dependencies

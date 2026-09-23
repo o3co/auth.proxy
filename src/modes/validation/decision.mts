@@ -84,13 +84,17 @@ export const decideValidation = async (
 		return { kind: "forward" };
 	}
 
-	const bearer = extractBearerToken(authorization);
-	if (!bearer) {
+	const token = extractBearerToken(authorization);
+	// Truthiness rather than `=== null`, matching the `!authorization` check
+	// above it: the empty string is the only other falsy value a `string | null`
+	// can hold, it is not a credential, and refusing it here is the safe
+	// direction if the parser ever stops ruling it out (#95 F36).
+	if (!token) {
 		return reject(400, "Invalid Token Type");
 	}
 
 	try {
-		const result = await introspect(bearer.token, requestId);
+		const result = await introspect(token, requestId);
 		// `=== true`, not truthiness: the concrete `introspect` already refuses a
 		// non-boolean `active`, but a supplied introspector may not, and
 		// `{ active: "false" }` must not forward.

@@ -13,9 +13,7 @@ import { extractBearerToken } from "../bearer.mjs";
 
 describe("extractBearerToken", () => {
 	it("extracts the token from a well-formed header", () => {
-		expect(extractBearerToken("Bearer abc123")).toEqual({
-			token: "abc123",
-		});
+		expect(extractBearerToken("Bearer abc123")).toBe("abc123");
 	});
 
 	it("returns null when the header is absent", () => {
@@ -45,8 +43,6 @@ describe("extractBearerToken", () => {
 	});
 
 	it("keeps only the first token when the header carries trailing content", () => {
-		expect(extractBearerToken("Bearer abc123 extra")).toEqual({
-			token: "abc123",
-		});
+		expect(extractBearerToken("Bearer abc123 extra")).toBe("abc123");
 	});
 });
