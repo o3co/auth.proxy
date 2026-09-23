@@ -52,6 +52,11 @@ export interface SessionGrantClientConfig {
 }
 
 export interface SessionGrantClient {
+	/**
+	 * No signal parameter, deliberately (#95 F10): the only cancellation is
+	 * `AbortSignal.timeout(cfg.timeoutMs)`, and a caller's disconnect must not
+	 * abort a grant other waiters are coalesced onto.
+	 */
 	exchange(args: {
 		sessionCookieValue: string;
 		requestId: string;

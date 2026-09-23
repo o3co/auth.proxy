@@ -1,7 +1,8 @@
 // SPDX-FileCopyrightText: 2026 1o1 Co. Ltd.
 // SPDX-License-Identifier: Apache-2.0
 
-import { createServer, type IncomingHttpHeaders, type Server } from "node:http";
+import { once } from "node:events";
+import { createServer, request as httpRequest, type IncomingHttpHeaders, type Server } from "node:http";
 import type { AddressInfo } from "node:net";
 import express from "express";
 import request from "supertest";
@@ -29,6 +30,26 @@ const makeConfig = (
 	upstream: { baseURL: `http://127.0.0.1:${upstreamPort}` },
 });
 
+/** A raw request, so the socket can be destroyed the way a client leaving does. */
+const httpGet = (port: number, token: string) => {
+	const req = httpRequest(
+		{ host: "127.0.0.1", port, path: "/protected", headers: { Authorization: `Bearer ${token}` } },
+		() => {},
+	);
+	// Resolves with the reset rather than rejecting: destroying the socket is
+	// the point of the caller that goes away, and an unhandled rejection would
+	// fail the run for the thing under test.
+	const done = new Promise<{ status: number | null }>((resolve) => {
+		req.on("response", (res) => {
+			res.resume();
+			res.on("end", () => resolve({ status: res.statusCode ?? 0 }));
+		});
+		req.on("error", () => resolve({ status: null }));
+	});
+	req.end();
+	return { destroy: () => req.destroy(), done };
+};
+
 describe("validation router", () => {
 	let upstream: Server;
 	let upstreamCalls: number;
@@ -55,6 +76,85 @@ describe("validation router", () => {
 		vi.restoreAllMocks();
 		upstream.closeAllConnections();
 		await new Promise<void>((resolve, reject) => upstream.close((err) => err ? reject(err) : resolve()));
+	});
+
+	// #95 F10. The only cancellation is the provider timeout: no client takes a
+	// caller's signal, so a disconnect cannot abort a flight other waiters
+	// share. Proven rather than asserted about the code: the caller that
+	// disconnects is the one that started the flight.
+	it("a disconnect does not abort the flight its waiters share, and the answer is still cached", async () => {
+		let releaseProvider!: () => void;
+		let announceAsked!: () => void;
+		const providerAsked = new Promise<void>((resolve) => {
+			announceAsked = resolve;
+		});
+		const answered = new Promise<Response>((resolve) => {
+			releaseProvider = () => resolve(Response.json({ active: true }));
+		});
+		// The mock honours init.signal, so this test can tell the difference it
+		// claims to: if anything ever wired a caller's disconnect to the
+		// outbound call, the flight would reject here instead of answering.
+		const fetchMock = vi.fn(async (_url: string, init?: RequestInit) => {
+			announceAsked();
+			return await Promise.race([
+				answered,
+				new Promise<never>((_, reject) => {
+					init?.signal?.addEventListener("abort", () =>
+						reject(new DOMException("The operation was aborted", "AbortError")),
+					);
+				}),
+			]);
+		});
+		vi.stubGlobal("fetch", fetchMock);
+
+		const server = app.listen(0, "127.0.0.1");
+		await once(server, "listening");
+		const port = (server.address() as AddressInfo).port;
+		// A causal join signal instead of a sleep. Express is the server's first
+		// "request" listener, and nothing between it and the flight awaits —
+		// the cache read and SingleFlight.run's table check are synchronous — so
+		// by the time this later listener sees the second request, the waiter
+		// has joined the leader's flight.
+		let arrived = 0;
+		let waiterJoined!: () => void;
+		const joined = new Promise<void>((resolve) => {
+			waiterJoined = resolve;
+		});
+		server.on("request", () => {
+			arrived += 1;
+			if (arrived === 2) waiterJoined();
+		});
+		try {
+			// The leader, which goes away mid-flight.
+			const leader = httpGet(port, "one-token");
+			await providerAsked;
+			leader.destroy();
+			expect(await leader.done).toEqual({ status: null });
+
+			// A waiter that arrives while the flight is still open. Asserted to be
+			// still waiting at the release, too: a waiter served from the cache
+			// instead would satisfy every other assertion in this test.
+			const waiter = httpGet(port, "one-token");
+			let waiterSettled = false;
+			void waiter.done.then(() => {
+				waiterSettled = true;
+			});
+			await joined;
+			await new Promise((r) => setImmediate(r));
+			expect(waiterSettled).toBe(false);
+			releaseProvider();
+
+			expect((await waiter.done).status).toBe(200);
+			expect(fetchMock).toHaveBeenCalledTimes(1);
+
+			// And the entry the abandoned flight produced is in the cache.
+			const later = httpGet(port, "one-token");
+			expect((await later.done).status).toBe(200);
+			expect(fetchMock).toHaveBeenCalledTimes(1);
+		} finally {
+			server.closeAllConnections();
+			await new Promise<void>((resolve) => server.close(() => resolve()));
+		}
 	});
 
 	it("forwards a live token, then refuses it when its warm cache reaches exp", async () => {
