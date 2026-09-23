@@ -66,4 +66,34 @@ describe("createProxyLogger", () => {
 		expect(entry.status).toBe(401);
 		expect(entry.msg).toBe("rejected");
 	});
+
+	// #95 F48: pino serialises an Error only under `err`; validation logs its
+	// failures under `error`, where JSON.stringify kept the enumerable fields
+	// alone — no message, no stack, no cause.
+	it("serialises an Error under `error` with its message, stack and cause chain", async () => {
+		// The shape of a refused introspection call since F42: the wrapper, then
+		// undici's `fetch failed`, then the socket's own error.
+		const refused = Object.assign(new Error("connect ECONNREFUSED 127.0.0.1:1"), {
+			code: "ECONNREFUSED",
+		});
+		const cause = new TypeError("fetch failed", { cause: refused });
+		const entry = await firstLine((logger) =>
+			logger.error({ error: new Error("introspect call failed", { cause }) }, "introspect failed"),
+		);
+		expect(entry.error).toMatchObject({
+			type: "Error",
+			message: "introspect call failed",
+			cause: {
+				type: "TypeError",
+				message: "fetch failed",
+				cause: { message: "connect ECONNREFUSED 127.0.0.1:1", code: "ECONNREFUSED" },
+			},
+		});
+		expect(entry.error.stack).toContain("introspect call failed");
+	});
+
+	it("keeps a string `error` as it is, which is how injection logs", async () => {
+		const entry = await firstLine((logger) => logger.error({ error: "session expired" }, "grant failed"));
+		expect(entry.error).toBe("session expired");
+	});
 });

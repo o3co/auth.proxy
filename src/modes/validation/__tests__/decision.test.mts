@@ -8,8 +8,9 @@
  * `fetch`; the wire shape of each outcome and the real introspection call are
  * pinned by `router.test.mts` and `introspect.test.mts`.
  */
+import { PassThrough } from "node:stream";
 import { describe, expect, it, vi } from "vitest";
-import type { Logger } from "../../../logger.mjs";
+import { createProxyLogger, type Logger } from "../../../logger.mjs";
 import {
 	decideValidation,
 	type ValidationDeps,
@@ -313,6 +314,36 @@ describe("decideValidation", () => {
 				{ "x-request-id": "rid-1", error: err },
 				"introspect failed",
 			);
+		});
+	});
+});
+
+// #95 F48: the fake logger above records the Error object, so it could not see
+// that the real one wrote `"error":{…}` with no message, stack or cause. This
+// one reads the line the proxy actually emits.
+describe("the failure line on the real logger", () => {
+	it("carries the error's message, status and cause", async () => {
+		const stream = new PassThrough();
+		const lines: string[] = [];
+		stream.on("data", (chunk: Buffer) => lines.push(chunk.toString()));
+		const logger = createProxyLogger({ destination: stream, level: "error" });
+		const refused = Object.assign(new Error("connect ECONNREFUSED 127.0.0.1:1"), {
+			code: "ECONNREFUSED",
+		});
+		const introspect = vi.fn(async (): Promise<IntrospectionResult> => {
+			throw new IntrospectHttpError(502, "introspect call failed: fetch failed", null, new TypeError("fetch failed", { cause: refused }));
+		});
+
+		await decideValidation(inputs("Bearer t"), { introspect, logger });
+		await new Promise((resolve) => setImmediate(resolve));
+
+		const entry = JSON.parse(lines.join("").trim());
+		expect(entry.msg).toBe("introspect failed");
+		expect(entry.error).toMatchObject({
+			type: "IntrospectHttpError",
+			message: "introspect call failed: fetch failed",
+			status: 502,
+			cause: { message: "fetch failed", cause: { code: "ECONNREFUSED" } },
 		});
 	});
 });

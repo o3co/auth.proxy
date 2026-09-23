@@ -45,7 +45,18 @@ export interface ProxyLoggerOptions {
  */
 export function createProxyLogger(options?: ProxyLoggerOptions): pino.Logger {
 	const level = options?.level ?? process.env.LOG_LEVEL ?? "info";
-	const config = { name: "proxy", level };
+	const config = {
+		name: "proxy",
+		level,
+		// pino serialises an Error only under `err`; the validation path logs
+		// its failures under `error`, where an Error became `{}` plus whatever
+		// fields it declared — no message, no stack, no cause (#95 F48). The
+		// serialiser passes a non-Error through, so injection's string `error`
+		// fields are untouched. `errWithCause` rather than `err`, so the chain
+		// stays structured: undici's reason (`ECONNREFUSED`, with its `code`)
+		// sits two causes down a failed introspection call.
+		serializers: { error: pino.stdSerializers.errWithCause },
+	};
 	return options?.destination ? pino(config, options.destination) : pino(config);
 }
 
