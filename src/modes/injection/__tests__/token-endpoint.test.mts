@@ -52,11 +52,17 @@ describe("parseJsonBody", () => {
 		await expect(parseJsonBody(responseOf(body))).resolves.toBeNull();
 	});
 
-	it("passes a JSON array through, since it reads `typeof === object` and nothing narrower", async () => {
-		// Not a shape any provider sends for an error body, and a caller reading
-		// `.error` off it gets `undefined` and treats the body as unusable — but
-		// this is what the function does, so it is what the test says.
-		await expect(parseJsonBody(responseOf("[1,2,3]"))).resolves.toEqual([1, 2, 3]);
+	it.each([
+		["an array of objects", '[{"error":"invalid_grant"}]'],
+		["an array of scalars", "[1,2,3]"],
+		["an empty array", "[]"],
+	])("answers null for %s, which the declared return type excludes (#95 F34)", async (_label, body) => {
+		// A JSON array is `typeof === "object"`, so it used to come back as it
+		// stood, typed as a Record the caller could read `.error` off. No
+		// provider sends one; what made it worth removing is that the type said
+		// it could not happen and the two callers disagreed about whether it
+		// could.
+		await expect(parseJsonBody(responseOf(body))).resolves.toBeNull();
 	});
 
 	it("never throws on a body the provider cut short", async () => {

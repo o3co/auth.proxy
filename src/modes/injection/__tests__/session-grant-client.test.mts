@@ -180,6 +180,22 @@ describe("createSessionGrantClient.exchange", () => {
 		});
 	});
 
+	// The array case reaches the same refusal as any other body that is not an
+	// object, rather than falling through to the access_token check with a
+	// message about a missing claim (#95 F34).
+	it("throws provider_invalid_response on 200 with a JSON array body", async () => {
+		fetchMock.mockResolvedValueOnce(jsonResponse(200, [{ access_token: "tok" }]));
+		const client = createSessionGrantClient(baseCfg);
+
+		await expect(
+			client.exchange({ sessionCookieValue: "c", requestId: "r" }),
+		).rejects.toMatchObject({
+			code: "provider_invalid_response",
+			status: 502,
+			message: "provider returned 200 with a non-JSON or non-object JSON body",
+		});
+	});
+
 	it("throws provider_invalid_response on 200 with non-JSON body", async () => {
 		fetchMock.mockResolvedValueOnce(
 			new Response("not json at all", {
