@@ -99,6 +99,10 @@ describe("validation router", () => {
 			const res = await request(app).get("/protected").set("Authorization", "Basic dXNlcjpwYXNz");
 			expect(res.status).toBe(400);
 			expect(res.body).toEqual({ code: 400, message: "Invalid Token Type" });
+			// Asserted by name rather than left implicit: RFC 6750 §3.1 keeps an
+			// error code off a request that attempted an unsupported method, and
+			// the challenge that would fit needs a realm (#95 F29, F45).
+			expect(res.headers["www-authenticate"]).toBeUndefined();
 			expect(upstreamCalls).toBe(0);
 			expect(fetchMock).not.toHaveBeenCalled();
 		});
@@ -109,6 +113,8 @@ describe("validation router", () => {
 			const res = await request(app).get("/protected").set("Authorization", "Bearer t");
 			expect(res.status).toBe(401);
 			expect(res.body).toEqual({ code: 401, message: "Invalid Token" });
+			// RFC 6750 §3, on the wire (#95 F29).
+			expect(res.headers["www-authenticate"]).toBe('Bearer error="invalid_token"');
 			expect(upstreamCalls).toBe(0);
 			// The mapping was reached through introspection, not around it.
 			expect(fetchMock).toHaveBeenCalledTimes(1);
@@ -133,6 +139,8 @@ describe("validation router", () => {
 
 			expect(res.status).toBe(502);
 			expect(res.body).toEqual({ code: 502, message: "Provider Configuration Error" });
+			// The proxy's own credential was refused, not the caller's (#95 F29).
+			expect(res.headers["www-authenticate"]).toBeUndefined();
 			expect(upstreamCalls).toBe(0);
 			expect(fetchMock).toHaveBeenCalledTimes(1);
 			// The request it refused was the one carrying Basic, not the token.
@@ -150,6 +158,8 @@ describe("validation router", () => {
 			const res = await request(app).get("/protected").set("Authorization", "Bearer t");
 			expect(res.status).toBe(500);
 			expect(res.body).toEqual({ code: 500, message: "Internal Server Error" });
+			// Not about the caller's credential, so no challenge (#95 F29).
+			expect(res.headers["www-authenticate"]).toBeUndefined();
 			expect(upstreamCalls).toBe(0);
 			expect(fetchMock).toHaveBeenCalledTimes(1);
 		});
