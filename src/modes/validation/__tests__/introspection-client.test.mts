@@ -299,7 +299,13 @@ describe("createIntrospectionClient", () => {
 			fetchMock.mockResolvedValueOnce(jsonResponse(200, claims));
 
 			await expect(clientFor().introspect("t", "r")).resolves.toEqual(claims);
-			expect(MAX_INTROSPECTION_BODY_BYTES).toBeGreaterThan(32 * 1024);
+		});
+
+		// The ceiling as well as the floor: the boundary tests above derive
+		// their sizes from the constant, so without this it could be raised
+		// arbitrarily with a green suite.
+		it("is 64 KiB, the same allowance as a token response", () => {
+			expect(MAX_INTROSPECTION_BODY_BYTES).toBe(64 * 1024);
 		});
 
 		// resp.json(), which this used before F39, decodes as UTF-8 and drops a
@@ -320,10 +326,12 @@ describe("createIntrospectionClient", () => {
 		await expect(p).rejects.toMatchObject({ status: 503 });
 	});
 
-	// Nothing here reads an error body, but leaving it unread keeps the socket
-	// out of undici's pool until the response is collected (#95 F28). The
-	// non-2xx path is the only one that throws before the body is consumed:
-	// every other refusal runs after `resp.json()`.
+	// Nothing here reads an error body (#95 F28). Past undici's 64 KiB
+	// read-ahead an unread one would hold its socket until the response is
+	// collected; within it undici has already pooled the socket, so this is
+	// defensive. The non-2xx path is the only one that throws before the body
+	// is dealt with: every other refusal runs after readBoundedJsonObject has
+	// read it to the end or cancelled it at the bound (#95 F39).
 	it.each([401, 503])(
 		"cancels the body of a %d response instead of leaving it unread",
 		async (status) => {

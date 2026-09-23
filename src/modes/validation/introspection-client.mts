@@ -86,8 +86,9 @@ export const buildAuthHeader = (credentials: ClientCredentials | null, token: st
  * @throws {IntrospectHttpError} the provider's status for a non-2xx — carrying
  * {@link RefusedCredential} on a 401, which says whether the provider refused
  * the inbound token or the proxy's own client authentication — and `502`
- * for a 200 whose body is not a JSON object, is over
- * {@link MAX_INTROSPECTION_BODY_BYTES}, or is not a valid RFC 7662 response. A `fetch` rejection
+ * for a 200 whose body is not a JSON object, is over the
+ * {@link MAX_INTROSPECTION_BODY_BYTES} bound, or is not a valid RFC 7662
+ * response. A `fetch` rejection
  * — timeout or network — propagates unwrapped. The same class carries one
  * more `502` raised outside this module: a malformed `exp` on an otherwise
  * valid response, which `createIntrospector` refuses once it has decided the

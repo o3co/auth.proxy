@@ -47,7 +47,6 @@ describe("readBoundedJsonObject", () => {
 		await expect(readBoundedJsonObject(body(json), json.length - 1)).resolves.toBeNull();
 	});
 
-
 	it("tolerates a body stream that fails mid-read", async () => {
 		const stream = new ReadableStream<Uint8Array>({
 			start(controller) {
