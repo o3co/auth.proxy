@@ -9,7 +9,6 @@
  * `exchange-router.test.mts`; the exchange decision is `exchange-decision.test.mts`
  * and is only handed off to from here.
  */
-import { createHash } from "node:crypto";
 import { describe, expect, it, vi } from "vitest";
 import type { AppConfig } from "../../../../config/application.schema.mjs";
 import type { Logger } from "../../../logger.mjs";
@@ -18,7 +17,9 @@ import {
 	type InjectionDeps,
 	type InjectionInputs,
 	type InjectionOutcome,
+	sessionCacheKey,
 } from "../decision.mjs";
+import { exchangeCacheKey } from "../exchange.mjs";
 import {
 	SessionGrantError,
 	type SessionGrantErrorCode,
@@ -26,6 +27,7 @@ import {
 } from "../session-grant-client.mjs";
 import { createSingleFlight } from "../single-flight.mjs";
 import { createTokenCache } from "../token-cache.mjs";
+import { buildTokenUrl } from "../token-endpoint.mjs";
 
 type InjectionCfg = Extract<AppConfig["auth"], { mode: "injection" }>["injection"];
 
@@ -80,7 +82,85 @@ const fieldsOf = (spy: ReturnType<typeof vi.fn>): LogFields[] =>
 		.filter((first): first is LogFields => typeof first === "object" && first !== null);
 const eventsOf = (spy: ReturnType<typeof vi.fn>): unknown[] =>
 	fieldsOf(spy).map((fields) => fields.event);
-const sha256Hex = (s: string): string => createHash("sha256").update(s).digest("hex");
+const keyFor = (cookieValue: string, cfgOverrides: Partial<InjectionCfg> = {}): string =>
+	sessionCacheKey({ ...baseCfg, ...cfgOverrides }, cookieValue);
+
+// The cache and the flight table may be supplied (#95 F4), so one instance can
+// serve two routers. Until F33 the key was the cookie hash alone, and the
+// second router served the first router's token: a different provider, client,
+// scope or cookie name asks the provider a different question about the same
+// cookie value, and got the wrong answer back.
+describe("sessionCacheKey", () => {
+	it("never contains the cookie value", () => {
+		expect(keyFor("s3cret-session")).not.toContain("s3cret-session");
+		expect(keyFor("s3cret-session")).toMatch(/^[0-9a-f]{64}$/);
+	});
+
+	it("is stable for the same context and value", () => {
+		expect(keyFor("s1")).toBe(keyFor("s1"));
+	});
+
+	// The field whose loss is not a stale token but another caller's: without
+	// it every session in one context shares one entry, and the second
+	// browser is served the first one's token.
+	it("changes with the cookie value, which is the whole point of a per-session entry", () => {
+		expect(keyFor("s1")).not.toBe(keyFor("s2"));
+		expect(keyFor("")).not.toBe(keyFor("s1"));
+	});
+
+	// A caller may hand the same TokenCache to deps.tokenCache and
+	// deps.exchange.tokenCache (#95 F2, F4), and then one cookie value that
+	// happens to equal an assertion must not read the other's entry. The grant
+	// type leading each array is the namespace that says so; the arrays also
+	// differ in shape, so dropping it alone would not collide — it is the
+	// label, not the whole guard.
+	it("cannot collide with an exchange entry for the same credential text", () => {
+		const context = {
+			tokenEndpoint: buildTokenUrl(baseCfg.providerOrigin),
+			clientId: baseCfg.clientId,
+			scope: baseCfg.scope,
+			audience: null,
+			resource: null,
+		};
+		expect(keyFor("same-text")).not.toBe(exchangeCacheKey(context, "same-text"));
+	});
+
+	it.each([
+		["providerOrigin", { providerOrigin: "http://other.example" }],
+		["clientId", { clientId: "another-spa" }],
+		["scope", { scope: "api.read" }],
+		["sessionCookieName", { sessionCookieName: "other_sid" }],
+	])("changes when %s changes, so two routers cannot share an entry", (_field, overrides) => {
+		expect(keyFor("s1", overrides)).not.toBe(keyFor("s1"));
+	});
+
+	it("does not change with the cache policy, which does not decide which token comes back", () => {
+		expect(
+			keyFor("s1", { tokenCache: { ...baseCfg.tokenCache, ttlSeconds: 1 } }),
+		).toBe(keyFor("s1"));
+	});
+
+	// The fields are hashed as a JSON array, not joined, so no field's text can
+	// shift into its neighbour's. Each pair below collides under some plausible
+	// separator — none, "|", "," — and a field carrying the encoding itself
+	// cannot forge one, because JSON escapes it.
+	it.each([
+		["no separator", { clientId: "ab", scope: "cd" }, { clientId: "a", scope: "bcd" }],
+		["a pipe", { clientId: "a|b", scope: "c" }, { clientId: "a", scope: "b|c" }],
+		["a comma", { clientId: "a,b", scope: "c" }, { clientId: "a", scope: "b,c" }],
+		["JSON's own", { clientId: 'a","b', scope: "c" }, { clientId: "a", scope: 'b","c' }],
+		["the value's edge", { clientId: "a", scope: "b" }, { clientId: "a", scope: "b" }],
+	])("does not let a field shift into its neighbour across %s", (label, left, right) => {
+		// The last row shifts the boundary between the last field and the value
+		// instead, which no context override can express.
+		const [leftKey, rightKey] =
+			label === "the value's edge"
+				? [keyFor("1s", left), keyFor("s1", right)]
+				: [keyFor("s", left), keyFor("s", right)];
+
+		expect(leftKey).not.toBe(rightKey);
+	});
+});
 
 describe("decideInjection", () => {
 	describe("forward: no session cookie, or one the grammar refuses", () => {
@@ -251,7 +331,7 @@ describe("decideInjection", () => {
 			const { deps, logger, grantClient } = makeDeps();
 			grantClient.exchange.mockResolvedValueOnce(grant("tok-1"));
 			await decideInjection(inputs({ cookieHeader: "sid=s1" }), deps);
-			expect(deps.tokenCache.get(sha256Hex("s1"))).toBe("tok-1");
+			expect(deps.tokenCache.get(keyFor("s1"))).toBe("tok-1");
 			const second = await decideInjection(inputs({ cookieHeader: "sid=s1" }), deps);
 			expect(second).toEqual({ kind: "inject", token: "tok-1" });
 			expect(grantClient.exchange).toHaveBeenCalledTimes(1);
@@ -260,7 +340,7 @@ describe("decideInjection", () => {
 
 		it("serves a pre-existing cache entry without any grant call", async () => {
 			const { deps, grantClient } = makeDeps();
-			deps.tokenCache.set(sha256Hex("s1"), "tok-cached", Date.now() + 60_000);
+			deps.tokenCache.set(keyFor("s1"), "tok-cached", Date.now() + 60_000);
 			expect(await decideInjection(inputs({ cookieHeader: "sid=s1" }), deps)).toEqual({
 				kind: "inject",
 				token: "tok-cached",

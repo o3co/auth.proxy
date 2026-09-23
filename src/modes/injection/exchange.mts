@@ -116,11 +116,14 @@ export interface ExchangeDeps {
 	client: JwtBearerClient;
 	/**
 	 * The exchange path's own instances — the session path's never see an
-	 * exchange entry, and vice versa. Both are keyed by `exchangeCacheKey`,
-	 * which carries the context but neither the client nor the cache policy,
-	 * so an instance supplied through `createRouter({ deps })` may be shared
-	 * only between routers whose context, client and cache policy are
-	 * identical (#95 F33).
+	 * exchange entry, and vice versa, which the grant type leading each key
+	 * says even when a caller hands both paths one instance. `exchangeCacheKey`
+	 * carries the context (endpoint, client id, scope, audience, resource), so
+	 * routers differing in any of those may share one. Three things it cannot
+	 * carry, and which the caller must therefore match: `clientSecret`, which
+	 * is not part of the context; the supplied `client`, which cannot be
+	 * hashed; and the cache policy, which decides how long an entry lives
+	 * rather than which token comes back (#95 F33).
 	 */
 	tokenCache: TokenCache;
 	/** Same key space, same sharing contract as `tokenCache`. */

@@ -1,4 +1,3 @@
-import { createHash } from "node:crypto";
 import type { IncomingMessage, Server, ServerResponse } from "node:http";
 import http from "node:http";
 import type { AddressInfo } from "node:net";
@@ -8,6 +7,7 @@ import { afterEach, beforeEach, describe, expect, it, type MockInstance, vi } fr
 import type { AppConfig } from "../../../../config/application.schema.mjs";
 import type { Logger } from "../../../logger.mjs";
 import logger from "../../../logger.mjs";
+import { sessionCacheKey } from "../decision.mjs";
 import { createRouter } from "../router.mjs";
 import { createSingleFlight, type SingleFlight } from "../single-flight.mjs";
 import { createTokenCache } from "../token-cache.mjs";
@@ -50,6 +50,12 @@ const startUpstream = async (): Promise<UpstreamRecorder> => {
 		},
 		close: () => new Promise<void>((resolve) => server.close(() => resolve())),
 	};
+};
+
+/** Narrows the union so a test can read the grant context it just built. */
+const injectionOf = (config: AppConfig) => {
+	if (config.auth.mode !== "injection") throw new Error("not an injection config");
+	return config.auth.injection;
 };
 
 const makeConfig = (
@@ -604,10 +610,13 @@ describe("injection router", () => {
 
 	it("accepts an injected tokenCache: a pre-seeded entry is a hit with no grant client call (#95 F4)", async () => {
 		const tokenCache = createTokenCache({ maxEntries: 10 });
-		tokenCache.set(createHash("sha256").update("s1").digest("hex"), "tok-seeded", Date.now() + 60_000);
+		const config = makeConfig(upstream.baseURL);
+		// Seeded under the router's own grant context, which is what the key
+		// carries since #95 F33 — the cookie hash alone no longer finds it.
+		tokenCache.set(sessionCacheKey(injectionOf(config), "s1"), "tok-seeded", Date.now() + 60_000);
 		const grantClient = { exchange: vi.fn() };
 		const app = express();
-		app.use(createRouter({ config: makeConfig(upstream.baseURL), deps: { tokenCache, grantClient } }));
+		app.use(createRouter({ config, deps: { tokenCache, grantClient } }));
 
 		const res = await request(app).get("/any").set("Cookie", "sid=s1");
 
@@ -624,8 +633,9 @@ describe("injection router", () => {
 			_sizeForTesting: real._sizeForTesting,
 		};
 		fetchMock.mockResolvedValueOnce(okGrantResponse("tok-flight"));
+		const config = makeConfig(upstream.baseURL);
 		const app = express();
-		app.use(createRouter({ config: makeConfig(upstream.baseURL), deps: { singleFlight } }));
+		app.use(createRouter({ config, deps: { singleFlight } }));
 
 		const res = await request(app).get("/any").set("Cookie", "sid=s1");
 
@@ -633,7 +643,7 @@ describe("injection router", () => {
 		expect(upstream.received[0].headers.authorization).toBe("Bearer tok-flight");
 		expect(singleFlight.run).toHaveBeenCalledTimes(1);
 		expect(singleFlight.run).toHaveBeenCalledWith(
-			createHash("sha256").update("s1").digest("hex"),
+			sessionCacheKey(injectionOf(config), "s1"),
 			expect.any(Function),
 		);
 	});
