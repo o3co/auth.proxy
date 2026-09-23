@@ -295,6 +295,40 @@ describe("createIntrospectionClient", () => {
 		});
 	});
 
+	// RFC 7662 section 2.3: the introspection request is authenticated. Which
+	// credential it carried decides what the provider's 401 is about, and only
+	// this module knows which one it sent (#95 F7).
+	it("marks a 401 as the proxy's own client credentials when they are configured", async () => {
+		fetchMock.mockResolvedValueOnce(new Response("", { status: 401 }));
+
+		await expect(
+			clientFor({ credentials: { clientId: "my-proxy", clientSecret: "s3cret" } }).introspect(
+				"t",
+				"r",
+			),
+		).rejects.toMatchObject({ status: 401, refusedCredential: "client" });
+	});
+
+	it("marks a 401 as the inbound token when there are no client credentials", async () => {
+		fetchMock.mockResolvedValueOnce(new Response("", { status: 401 }));
+
+		await expect(clientFor().introspect("t", "r")).rejects.toMatchObject({
+			status: 401,
+			refusedCredential: "token",
+		});
+	});
+
+	it.each([403, 500, 503])("marks nothing on a %d, which is not about a credential", async (status) => {
+		fetchMock.mockResolvedValueOnce(new Response("", { status }));
+
+		await expect(
+			clientFor({ credentials: { clientId: "my-proxy", clientSecret: "s3cret" } }).introspect(
+				"t",
+				"r",
+			),
+		).rejects.toMatchObject({ status, refusedCredential: null });
+	});
+
 	it("propagates fetch rejection (network error / AbortError)", async () => {
 		const abortErr = new DOMException("The operation was aborted", "AbortError");
 		fetchMock.mockRejectedValueOnce(abortErr);

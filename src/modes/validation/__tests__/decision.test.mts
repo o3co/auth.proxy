@@ -100,6 +100,65 @@ describe("decideValidation", () => {
 			expect(logger.error).not.toHaveBeenCalled();
 		});
 
+		// Without client credentials the inbound token IS the introspection
+		// credential, so the provider's 401 is about it. With them the proxy
+		// authenticates as itself, and a 401 means the provider refused the
+		// proxy — an operator's configuration, not the caller's token (#95 F7).
+		it("answers 502 when the provider refused the proxy's own client credentials", async () => {
+			const { deps, introspect, logger } = makeDeps();
+			const err = new IntrospectHttpError(401, "introspect returned 401", "client");
+			introspect.mockRejectedValueOnce(err);
+
+			const outcome = await decideValidation(inputs("Bearer t"), deps);
+
+			expect(outcome).toEqual<ValidationOutcome>({
+				kind: "reject",
+				status: 502,
+				body: { code: 502, message: "Provider Configuration Error" },
+			});
+			// One line, not both: the generic `introspect failed` must not also
+			// fire, or an operator filtering on it sees the config error twice
+			// and under the wrong name.
+			expect(logger.error).toHaveBeenCalledTimes(1);
+			expect(logger.error).toHaveBeenCalledWith(
+				{ "x-request-id": "rid-1", error: err },
+				"introspect refused the proxy's client credentials",
+			);
+		});
+
+		it("still answers 401 Invalid Token when the refused credential was the inbound token", async () => {
+			const { deps, introspect, logger } = makeDeps();
+			const err = new IntrospectHttpError(401, "introspect returned 401", "token");
+			introspect.mockRejectedValueOnce(err);
+
+			await expect(decideValidation(inputs("Bearer t"), deps)).resolves.toEqual({
+				kind: "reject",
+				status: 401,
+				body: { code: 401, message: "Invalid Token" },
+			});
+			expect(logger.error).toHaveBeenCalledWith(
+				{ "x-request-id": "rid-1", error: err },
+				"introspect failed",
+			);
+		});
+
+		// The class says only a 401 carries a mark, but nothing enforces it and
+		// `deps.introspect` is injectable: an out-of-contract error must not
+		// reach the 502 branch, whose whole meaning is "the provider refused our
+		// client authentication".
+		it("ignores a client mark on a status that is not 401", async () => {
+			const { deps, introspect } = makeDeps();
+			introspect.mockRejectedValueOnce(
+				new IntrospectHttpError(503, "introspect returned 503", "client"),
+			);
+
+			await expect(decideValidation(inputs("Bearer t"), deps)).resolves.toEqual({
+				kind: "reject",
+				status: 500,
+				body: { code: 500, message: "Internal Server Error" },
+			});
+		});
+
 		it("answers 401 Invalid Token when the provider answers 401, logging the failure with the request id", async () => {
 			const { deps, introspect, logger } = makeDeps();
 			const err = new IntrospectHttpError(401, "introspect failed: 401");

@@ -11,13 +11,19 @@ import type { Logger } from "../../../logger.mjs";
 import logger from "../../../logger.mjs";
 import { createRouter } from "../router.mjs";
 
-const makeConfig = (upstreamPort: number): AppConfig => ({
+const makeConfig = (
+	upstreamPort: number,
+	client: { clientId: string | null; clientSecret: string | null } = {
+		clientId: null,
+		clientSecret: null,
+	},
+): AppConfig => ({
 	http: {
 		hostname: "127.0.0.1", port: 0, pathPrefix: "/",
 		bodyLimitSize: "10mb", cors: { origin: { pattern: null } },
 	},
 	auth: { mode: "validation", validation: {
-		client: { clientId: null, clientSecret: null },
+		client,
 		introspect: { url: "http://provider.test/introspect", cacheTtlSec: 30, cacheMaxEntries: 100, timeoutMs: 5000 },
 	} },
 	upstream: { baseURL: `http://127.0.0.1:${upstreamPort}` },
@@ -106,6 +112,32 @@ describe("validation router", () => {
 			expect(upstreamCalls).toBe(0);
 			// The mapping was reached through introspection, not around it.
 			expect(fetchMock).toHaveBeenCalledTimes(1);
+		});
+
+		// The same provider answer, read differently because the request carried
+		// a different credential (#95 F7). With client credentials configured
+		// the proxy authenticated as itself, so the 401 refused the proxy and
+		// the caller's token was never examined.
+		it("answers 502 Provider Configuration Error to a provider 401 when client credentials are configured", async () => {
+			const configured = makeConfig(upstreamPort, {
+				clientId: "my-proxy",
+				clientSecret: "s3cret",
+			});
+			const configuredApp = express().use(createRouter({ config: configured }));
+			const fetchMock = vi.fn(
+				async (_url: string, _init: RequestInit) => new Response("", { status: 401 }),
+			);
+			vi.stubGlobal("fetch", fetchMock);
+
+			const res = await request(configuredApp).get("/protected").set("Authorization", "Bearer t");
+
+			expect(res.status).toBe(502);
+			expect(res.body).toEqual({ code: 502, message: "Provider Configuration Error" });
+			expect(upstreamCalls).toBe(0);
+			expect(fetchMock).toHaveBeenCalledTimes(1);
+			// The request it refused was the one carrying Basic, not the token.
+			const headers = fetchMock.mock.calls[0][1].headers as Record<string, string>;
+			expect(headers.Authorization).toMatch(/^Basic /);
 		});
 
 		it.each([

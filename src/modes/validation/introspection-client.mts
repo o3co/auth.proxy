@@ -27,10 +27,25 @@ export interface IntrospectionResult {
 	[key: string]: unknown;
 }
 
+/**
+ * Which credential the provider refused, on a 401 and nowhere else (#95 F7).
+ *
+ * RFC 7662 §2.3 requires the introspection request to be authenticated, so a
+ * 401 answers whichever credential this module presented — and only this
+ * module knows which that was. `token` means the inbound token was the
+ * credential and the provider refused it, which is a statement about the
+ * caller. `client` means the proxy authenticated as itself and was refused,
+ * which is a statement about the deployment: the caller's token was never
+ * examined.
+ */
+export type RefusedCredential = "client" | "token";
+
 export class IntrospectHttpError extends Error {
 	constructor(
 		public readonly status: number,
 		message: string,
+		/** Set on a 401 by the bundled client; `null` on every other status. */
+		public readonly refusedCredential: RefusedCredential | null = null,
 	) {
 		super(message);
 		this.name = "IntrospectHttpError";
@@ -53,7 +68,9 @@ export const buildAuthHeader = (credentials: ClientCredentials | null, token: st
  * `Introspector`, and `createRouter` builds the bundled implementation or
  * takes another.
  *
- * @throws {IntrospectHttpError} the provider's status for a non-2xx, `502`
+ * @throws {IntrospectHttpError} the provider's status for a non-2xx — carrying
+ * {@link RefusedCredential} on a 401, which says whether the provider refused
+ * the inbound token or the proxy's own client authentication — and `502`
  * for a 200 whose body is not a valid RFC 7662 response. A `fetch` rejection
  * — timeout or network — propagates unwrapped. The same class carries one
  * more `502` raised outside this module: a malformed `exp` on an otherwise
@@ -101,7 +118,14 @@ export const createIntrospectionClient = ({
 				// (#95 F28). Cancelling is the release; a cancel that itself fails
 				// must not replace the status this call is here to report.
 				await resp.body?.cancel().catch(() => undefined);
-				throw new IntrospectHttpError(resp.status, `introspect returned ${resp.status}`);
+				throw new IntrospectHttpError(
+					resp.status,
+					`introspect returned ${resp.status}`,
+					// Only a 401 answers a credential, and which one depends on
+					// what this request carried (#95 F7). Every other status is
+					// about the request or the provider, not a credential.
+					resp.status === 401 ? (credentials !== null ? "client" : "token") : null,
+				);
 			}
 
 			let parsed: unknown;
