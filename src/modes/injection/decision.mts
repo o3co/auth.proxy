@@ -93,18 +93,30 @@ export type InjectionOutcome =
 	| { kind: "exchange"; args: ExchangeArgs };
 
 /**
+ * What a forward without injection does to the inbound `Authorization`, as the
+ * lines reporting it name it. Derived from {@link InjectionOutcome} rather
+ * than spelled again, so renaming an outcome cannot leave a log field behind
+ * (#95 F31).
+ */
+type ForwardAction = Extract<InjectionOutcome["kind"], "forward" | "forward_stripped">;
+
+/**
  * A session cookie pair the proxy refuses to forward (#23). Unlike the absent
  * case this deserves an operator's attention, so it is a distinct event at warn
  * (#73). Only the bounded reason class is logged, never the value bytes.
- * `action` tells the two outcomes apart: `forward` — every same-name pair was
- * refused and the request goes upstream anonymously; `fallback` — a malformed
- * pair was skipped and a later well-formed same-name pair is used (#74).
+ * `action` names what became of the request, in the outcome's own vocabulary:
+ * `forward` — every same-name pair was refused and the request goes upstream
+ * with whatever `Authorization` it arrived with, which is none unless the
+ * client presented its own; `forward_stripped` — the same, with that header
+ * removed because `stripInboundAuthorization` is on; `fallback` — a malformed
+ * pair was skipped and a later well-formed same-name pair is used (#74), so
+ * the request goes on to attempt the mint rather than forwarding here.
  */
 const logCookieRejected = (
 	logger: Logger,
 	requestId: string,
 	reason: CookieRejectReason,
-	action: "forward" | "fallback",
+	action: ForwardAction | "fallback",
 ): void => {
 	logger.warn(
 		{
@@ -114,9 +126,9 @@ const logCookieRejected = (
 			action,
 			metric: "auth_proxy_injection_cookie_rejected",
 		},
-		action === "forward"
-			? "session cookie rejected, forwarding without Authorization"
-			: "malformed session cookie pair skipped, using the next well-formed pair",
+		action === "fallback"
+			? "malformed session cookie pair skipped, using the next well-formed pair"
+			: "session cookie rejected, forwarding without a minted Authorization",
 	);
 };
 
@@ -150,6 +162,15 @@ export const decideInjection = async (
 	}
 
 	/**
+	 * Whether a forward without injection takes the inbound `Authorization`
+	 * with it. One predicate, read by the outcome and by the lines that report
+	 * it, so the two cannot disagree — they did, and the line was written
+	 * first, so it said `forward` and the request was stripped (#95 F31).
+	 */
+	const willStripInbound = cfg.stripInboundAuthorization && Boolean(authorization);
+	const forwardAction: ForwardAction = willStripInbound ? "forward_stripped" : "forward";
+
+	/**
 	 * The two paths that forward without the proxy having minted anything.
 	 * `inject` overwrites an inbound `Authorization` on every path that DID
 	 * mint, so these are the only ones where a client's own header survives
@@ -162,7 +183,7 @@ export const decideInjection = async (
 	 * middleware, before the upstream stage — see the comment there.
 	 */
 	const forwardWithoutInjection = (reason: ForwardWithoutInjectionReason): InjectionOutcome => {
-		if (cfg.stripInboundAuthorization && authorization) {
+		if (willStripInbound) {
 			logger.warn(
 				{
 					requestId,
@@ -179,14 +200,14 @@ export const decideInjection = async (
 
 	if (extraction.kind === "absent") {
 		logger.debug(
-			{ requestId, event: "injection.no_cookie", action: "forward" },
+			{ requestId, event: "injection.no_cookie", action: forwardAction },
 			"no session cookie",
 		);
 		return forwardWithoutInjection("no_cookie");
 	}
 
 	if (extraction.kind === "rejected") {
-		logCookieRejected(logger, requestId, extraction.reason, "forward");
+		logCookieRejected(logger, requestId, extraction.reason, forwardAction);
 		return forwardWithoutInjection("cookie_rejected");
 	}
 

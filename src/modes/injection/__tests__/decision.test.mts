@@ -156,6 +156,79 @@ describe("decideInjection", () => {
 				"injection.inbound_authorization_stripped",
 			]);
 		});
+
+	});
+
+	// Both lines used to say action: "forward" and then strip anyway (#95 F31):
+	// they are written before forwardWithoutInjection runs, and it is what
+	// decides between the two outcomes.
+	describe("action on the two lines that report a forward without injection", () => {
+		const messageOf = (spy: ReturnType<typeof vi.fn>, event: string): unknown =>
+			spy.mock.calls.find(
+				([fields]) =>
+					typeof fields === "object" && fields !== null && (fields as LogFields).event === event,
+			)?.[1];
+
+		it.each([
+			["no_cookie, at debug", {}, (l: FakeLogger) => l.debug, "injection.no_cookie"],
+			[
+				"cookie_rejected, at warn",
+				{ cookieHeader: "sid=" },
+				(l: FakeLogger) => l.warn,
+				"injection.cookie_rejected",
+			],
+		])("reports forward_stripped on %s, not the forward it is not", async (_l, extra, spy, event) => {
+			const { deps, logger } = makeDeps({ stripInboundAuthorization: true });
+
+			await decideInjection(inputs({ ...extra, authorization: "Bearer own" }), deps);
+
+			expect(fieldsOf(spy(logger))).toContainEqual(
+				expect.objectContaining({ event, action: "forward_stripped" }),
+			);
+		});
+
+		// The strip is what the action reports, so it must not claim one when
+		// only half the condition holds — on either line.
+		it.each([
+			["stripping is on with no Authorization to strip", { stripInboundAuthorization: true }, {}],
+			["an Authorization is present but stripping is off", {}, { authorization: "Bearer own" }],
+		])("still reports forward on both lines when %s", async (_label, cfg, extra) => {
+			const { deps, logger } = makeDeps(cfg);
+
+			await decideInjection(inputs(extra), deps);
+			await decideInjection(inputs({ ...extra, cookieHeader: "sid=" }), deps);
+
+			expect(fieldsOf(logger.debug)).toContainEqual(
+				expect.objectContaining({ event: "injection.no_cookie", action: "forward" }),
+			);
+			expect(fieldsOf(logger.warn)).toContainEqual(
+				expect.objectContaining({ event: "injection.cookie_rejected", action: "forward" }),
+			);
+		});
+
+		// The message is selected from the same three values, so it has to be
+		// pinned too: keyed on the wrong one, a stripped request is reported as
+		// a malformed pair that was skipped, which did not happen.
+		it("says what happened to the header on a stripped refusal, not that a pair was skipped", async () => {
+			const { deps, logger } = makeDeps({ stripInboundAuthorization: true });
+
+			await decideInjection(inputs({ cookieHeader: "sid=", authorization: "Bearer own" }), deps);
+
+			expect(messageOf(logger.warn, "injection.cookie_rejected")).toBe(
+				"session cookie rejected, forwarding without a minted Authorization",
+			);
+		});
+
+		it("keeps the fallback line's own message, which is about the skipped pair", async () => {
+			const { deps, grantClient, logger } = makeDeps();
+			grantClient.exchange.mockResolvedValueOnce(grant("tok-1"));
+
+			await decideInjection(inputs({ cookieHeader: "sid=bad,val; sid=good" }), deps);
+
+			expect(messageOf(logger.warn, "injection.cookie_rejected")).toBe(
+				"malformed session cookie pair skipped, using the next well-formed pair",
+			);
+		});
 	});
 
 	describe("inject: a session cookie the grammar accepts", () => {
