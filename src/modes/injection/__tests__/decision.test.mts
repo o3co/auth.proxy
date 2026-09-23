@@ -12,6 +12,7 @@
 import { describe, expect, it, vi } from "vitest";
 import type { AppConfig } from "../../../../config/application.schema.mjs";
 import type { Logger } from "../../../logger.mjs";
+import { createSingleFlight } from "../../../single-flight.mjs";
 import {
 	decideInjection,
 	type InjectionDeps,
@@ -25,7 +26,6 @@ import {
 	type SessionGrantErrorCode,
 	type SessionGrantResult,
 } from "../session-grant-client.mjs";
-import { createSingleFlight } from "../single-flight.mjs";
 import { createTokenCache } from "../token-cache.mjs";
 import { buildTokenUrl } from "../token-endpoint.mjs";
 

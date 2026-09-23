@@ -7,9 +7,9 @@ import { afterEach, beforeEach, describe, expect, it, type MockInstance, vi } fr
 import type { AppConfig } from "../../../../config/application.schema.mjs";
 import type { Logger } from "../../../logger.mjs";
 import logger from "../../../logger.mjs";
+import { createSingleFlight, type SingleFlight } from "../../../single-flight.mjs";
 import { sessionCacheKey } from "../decision.mjs";
 import { createRouter } from "../router.mjs";
-import { createSingleFlight, type SingleFlight } from "../single-flight.mjs";
 import { createTokenCache } from "../token-cache.mjs";
 
 type UpstreamRecorder = {

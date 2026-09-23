@@ -16,6 +16,7 @@
 import crypto from "node:crypto";
 import type { AppConfig } from "../../../config/application.schema.mjs";
 import type { Logger } from "../../logger.mjs";
+import type { SingleFlight } from "../../single-flight.mjs";
 import { computeCacheExpiresAt } from "./cache-expiry.mjs";
 import {
 	type CookieExtraction,
@@ -29,7 +30,6 @@ import {
 	SessionGrantError,
 	type SessionGrantErrorCode,
 } from "./session-grant-client.mjs";
-import type { SingleFlight } from "./single-flight.mjs";
 import type { TokenCache } from "./token-cache.mjs";
 import { buildTokenUrl } from "./token-endpoint.mjs";
 
