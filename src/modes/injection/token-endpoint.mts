@@ -30,13 +30,16 @@ export const buildTokenUrl = (providerOrigin: string): string => {
 
 /**
  * A response body as an object, or `null` when it is not one — empty, not
- * JSON, or JSON that is not an object. Never throws: a provider that answers
- * an error with HTML, or cuts the body short, is answering badly rather than
- * saying something the caller must parse.
+ * JSON, or JSON that is not an object, arrays included. Never throws: a
+ * provider that answers an error with HTML, or cuts the body short, is
+ * answering badly rather than saying something the caller must parse.
  *
- * `typeof === "object"` is the whole test, so a JSON array comes back as it
- * is. No provider sends one for an error body, and a caller reading `error`
- * off it gets `undefined` and treats the body as unusable.
+ * An array is `typeof === "object"` and used to come back as it stood,
+ * declared as a `Record` a caller would read a claim off and find nothing
+ * (#95 F34). Every caller treats a body it cannot read claims off as the
+ * provider answering badly, so the array is `null` here and every caller
+ * reaches that refusal by the same route — the same rule
+ * `readBoundedJsonObject` applies to an error body in `provider-error.mts`.
  */
 export const parseJsonBody = async (resp: Response): Promise<Record<string, unknown> | null> => {
 	try {
@@ -44,8 +47,8 @@ export const parseJsonBody = async (resp: Response): Promise<Record<string, unkn
 		// A fast path, not what makes this total: `JSON.parse("")` throws and the
 		// `catch` below answers `null` for it just the same.
 		if (text.length === 0) return null;
-		const parsed = JSON.parse(text);
-		return typeof parsed === "object" && parsed !== null
+		const parsed: unknown = JSON.parse(text);
+		return typeof parsed === "object" && parsed !== null && !Array.isArray(parsed)
 			? (parsed as Record<string, unknown>)
 			: null;
 	} catch {

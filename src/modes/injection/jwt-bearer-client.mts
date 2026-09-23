@@ -139,7 +139,7 @@ export const createJwtBearerClient = (cfg: JwtBearerClientConfig): JwtBearerClie
 
 			if (resp.status === 200) {
 				const data = await parseJsonBody(resp);
-				if (data === null || Array.isArray(data)) {
+				if (data === null) {
 					throw new JwtBearerError(
 						"provider_invalid_response",
 						502,

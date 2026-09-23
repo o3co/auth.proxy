@@ -182,7 +182,6 @@ describe("createJwtBearerClient.exchange", () => {
 			["a missing access_token", jsonResponse(200, { token_type: "Bearer" })],
 			["an empty access_token", okResponse({ access_token: "" })],
 			["a non-JSON body", new Response("nope", { status: 200 })],
-			["a JSON array body", jsonResponse(200, [])],
 		] as const;
 
 		for (const [label, response] of invalid) {
@@ -194,6 +193,19 @@ describe("createJwtBearerClient.exchange", () => {
 				});
 			});
 		}
+	});
+
+	// Its own case rather than a row in the table above: the array is refused
+	// for the body it is, not for the access_token an array cannot carry, and
+	// the message is the only thing that tells those two routes apart (#95 F34).
+	it("throws provider_invalid_response on a JSON array body, naming the body rather than a missing claim", async () => {
+		fetchMock.mockResolvedValueOnce(jsonResponse(200, [{ access_token: "tok", token_type: "Bearer" }]));
+
+		await expect(exchange()).rejects.toMatchObject({
+			code: "provider_invalid_response",
+			status: 502,
+			message: "provider returned 200 with a non-JSON or non-object JSON body",
+		});
 	});
 
 	describe("provider refusals", () => {
