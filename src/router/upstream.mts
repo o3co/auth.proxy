@@ -29,19 +29,27 @@ export interface UpstreamStageConfig {
  * a mode's decision, so both routers mount this one function instead of each
  * carrying its own copy (#95 F18).
  *
- * What reaches upstream is decided before this stage, on `req.headers`.
- * express-http-proxy copies every inbound header except `connection` and
- * `host` onto the outbound request and sets `connection: close` before any
- * decorator runs (`reqHeaders` in `express-http-proxy/lib/requestOptions.js`).
- * So this decorator does not choose what is forwarded. It re-sets
- * `Authorization` in canonical casing beside the lowercase copy the library
- * already made — Node's `setHeader` dedups header names case-insensitively
- * and the last write wins, so only the casing on the wire changes — and it
- * re-sets `x-request-id` to the value already there, a wire no-op. That is
- * why `stripInboundAuthorization` deletes the header from `req.headers` in
- * `src/modes/injection/decision.mts` (see the comment above
- * `forwardWithoutInjection`) rather than acting here. Whether to drop this
- * decorator is tracked with F14 on #95.
+ * What the decorator does. It sets `Authorization`, in canonical casing, to
+ * the inbound value, and re-sets `x-request-id` to the value it already has.
+ *
+ * What it does not do: choose what is forwarded. What reaches upstream is
+ * decided before this stage, on `req.headers`. express-http-proxy copies every
+ * inbound header except `connection` and `host` onto the outbound request and
+ * sets `connection: close` before any decorator runs (`reqHeaders` in
+ * `express-http-proxy/lib/requestOptions.js`). Node lower-cases every inbound
+ * header name in `req.headers`, so that copy already carries `authorization`.
+ * Node's `setHeader` dedups header names case-insensitively and the last
+ * write wins, so the decorator's `Authorization` replaces the name, not the
+ * value: `Authorization` is sent once, and the `x-request-id` write changes
+ * nothing on the wire. That is why `stripInboundAuthorization` deletes the
+ * header from `req.headers` in `src/modes/injection/decision.mts` (see the
+ * comment above `forwardWithoutInjection`) rather than acting here.
+ *
+ * Why it is kept (#132): for header-name casing compatibility. HTTP header
+ * names are case-insensitive (RFC 9110 §5.1), so a conforming upstream sees no
+ * difference; without the decorator an upstream would receive `authorization`
+ * in lower case, and one that matches the name case-sensitively would miss it.
+ * The casing on the wire is pinned by `__tests__/upstream-wire.test.mts`.
  */
 export const createUpstreamProxy = (config: UpstreamStageConfig): RequestHandler =>
 	proxy(config.upstream.baseURL, {
