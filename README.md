@@ -20,7 +20,7 @@ Flow:
 
 1. Detects `Authorization: Bearer <token>` header (passes through if absent).
 2. Checks in-memory cache keyed by SHA-256 of the token.
-3. On cache miss, calls provider's `POST /oauth/introspect`. Concurrent misses on the same token coalesce into a single provider call (single-flight), as they do in injection mode.
+3. On cache miss, calls provider's `POST /oauth/introspect`. A redirect from it is not followed — the endpoint is configuration — and is answered `502 Provider Configuration Error`. Concurrent misses on the same token coalesce into a single provider call (single-flight), as they do in injection mode.
 4. Returns `401` if `active: false`; forwards the request if `active: true`.
 
 A `401` carries `WWW-Authenticate: Bearer error="invalid_token"`, the RFC 6750 §3 challenge for a request that presented an access token the proxy would not accept. No other refusal carries one: a `400` attempted an authentication method this proxy does not support, which §3.1 says SHOULD NOT carry an error code, and a `500` or `502` is the proxy's or the provider's failure rather than a statement about the caller's credential. Injection mode answers no challenge on any path, deliberately: its caller holds a session cookie, not a Bearer token.

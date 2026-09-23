@@ -419,6 +419,45 @@ describe("createIntrospectionClient", () => {
 		).rejects.toMatchObject({ status, refusedCredential: null });
 	});
 
+	// #95 F43, the validation counterpart of F8. The introspection endpoint is
+	// configuration; a followed redirect re-sends the credential this request
+	// carries (the inbound token, or the proxy's Basic header) to a path
+	// nothing configured on a same-origin 307/308, and loses it cross-origin.
+	it("asks fetch not to follow a redirect", async () => {
+		fetchMock.mockResolvedValueOnce(jsonResponse(200, { active: true }));
+
+		await clientFor().introspect("t", "r");
+
+		expect(getFetchCall(fetchMock).init.redirect).toBe("manual");
+	});
+
+	it.each([301, 302, 303, 307, 308])(
+		"carries a %d as the provider's status, and releases its body",
+		async (status) => {
+			let cancelled = false;
+			fetchMock.mockResolvedValueOnce(
+				new Response(
+					new ReadableStream<Uint8Array>({
+						start(controller) {
+							controller.enqueue(new TextEncoder().encode("moved"));
+						},
+						cancel() {
+							cancelled = true;
+						},
+					}),
+					{ status, headers: { Location: "https://elsewhere.test/introspect" } },
+				),
+			);
+
+			await expect(clientFor().introspect("t", "r")).rejects.toMatchObject({
+				name: "IntrospectHttpError",
+				status,
+				refusedCredential: null,
+			});
+			expect(cancelled).toBe(true);
+		},
+	);
+
 	it("propagates fetch rejection (network error / AbortError)", async () => {
 		const abortErr = new DOMException("The operation was aborted", "AbortError");
 		fetchMock.mockRejectedValueOnce(abortErr);

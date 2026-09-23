@@ -248,6 +248,23 @@ describe("validation router", () => {
 			expect(headers.Authorization).toMatch(/^Basic /);
 		});
 
+		// #95 F43, on the wire.
+		it("answers 502 Provider Configuration Error when the introspection endpoint redirects", async () => {
+			const fetchMock = vi.fn(
+				async (_url: string, _init: RequestInit) =>
+					new Response("", { status: 302, headers: { Location: "https://elsewhere.test/" } }),
+			);
+			vi.stubGlobal("fetch", fetchMock);
+
+			const res = await request(app).get("/protected").set("Authorization", "Bearer t");
+
+			expect(res.status).toBe(502);
+			expect(res.body).toEqual({ code: 502, message: "Provider Configuration Error" });
+			expect(res.headers["www-authenticate"]).toBeUndefined();
+			expect(upstreamCalls).toBe(0);
+			expect(fetchMock.mock.calls[0][1].redirect).toBe("manual");
+		});
+
 		it.each([
 			{ failure: "the provider answers 503 (IntrospectHttpError 503 from the status)", fetchImpl: async () => new Response("", { status: 503 }) },
 			{ failure: "the provider answers 200 with a non-JSON body (IntrospectHttpError 502 raised by introspect itself)", fetchImpl: async () => new Response("<html>", { status: 200 }) },
