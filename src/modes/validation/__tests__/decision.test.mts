@@ -194,6 +194,32 @@ describe("decideValidation", () => {
 			);
 		});
 
+		// #95 F43: a redirecting introspection endpoint is the deployment's
+		// configuration, not the caller's token and not an outage — reported
+		// like F7's refused client credentials.
+		it.each([301, 302, 303, 307, 308])(
+			"answers 502 Provider Configuration Error when the endpoint redirects (%d)",
+			async (status) => {
+				const { deps, introspect, logger } = makeDeps();
+				const err = new IntrospectHttpError(status, `introspect returned ${status}`);
+				introspect.mockRejectedValueOnce(err);
+
+				const outcome = await decideValidation(inputs("Bearer t"), deps);
+
+				expect(outcome).toEqual<ValidationOutcome>({
+					kind: "reject",
+					status: 502,
+					body: { code: 502, message: "Provider Configuration Error" },
+					challenge: null,
+				});
+				expect(logger.error).toHaveBeenCalledTimes(1);
+				expect(logger.error).toHaveBeenCalledWith(
+					{ "x-request-id": "rid-1", error: err },
+					"introspect endpoint redirected",
+				);
+			},
+		);
+
 		it("still answers 401 Invalid Token when the refused credential was the inbound token", async () => {
 			const { deps, introspect, logger } = makeDeps();
 			const err = new IntrospectHttpError(401, "introspect returned 401", "token");

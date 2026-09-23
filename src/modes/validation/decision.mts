@@ -109,6 +109,7 @@ const reject = (
  *                                             the proxy's own client
  *                                             authentication that was refused:
  *                                             502 Provider Configuration Error
+ *   - the endpoint redirects                  502 Provider Configuration Error
  *   - any other failure                       500 Internal Server Error
  *   - active: true                            forward
  *
@@ -167,6 +168,13 @@ export const decideValidation = async (
 				{ "x-request-id": requestId, error: e },
 				"introspect refused the proxy's client credentials",
 			);
+			return reject(502, "Provider Configuration Error", null);
+		}
+		// A redirecting introspection endpoint is the same kind of thing: the
+		// deployment's configuration, reported as such (#95 F43). The client
+		// asks fetch not to follow, so the 3xx arrives with its own status.
+		if (e instanceof IntrospectHttpError && e.status >= 300 && e.status < 400) {
+			logger.error({ "x-request-id": requestId, error: e }, "introspect endpoint redirected");
 			return reject(502, "Provider Configuration Error", null);
 		}
 		logger.error({ "x-request-id": requestId, error: e }, "introspect failed");
