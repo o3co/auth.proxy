@@ -336,7 +336,16 @@ describe("validation router", () => {
 			expect(introspect).toHaveBeenCalledWith("t", "rid-abc");
 			expect(res.headers["x-request-id"]).toBe("rid-abc");
 			expect(fetchMock).not.toHaveBeenCalled();
-			expect(injected.info.mock.calls.map((call) => call[1])).toContain("incoming request");
+			// The same vocabulary as every other line, in both modes (#134).
+			expect(injected.info).toHaveBeenCalledWith(
+				{
+					requestId: "rid-abc",
+					event: "validation.incoming_request",
+					method: "GET",
+					path: "/protected",
+				},
+				"incoming request",
+			);
 			expect(singletonInfo).not.toHaveBeenCalled();
 			expect(singletonError).not.toHaveBeenCalled();
 		});
@@ -351,13 +360,16 @@ describe("validation router", () => {
 			const own = express();
 			own.use(createRouter({ config: makeConfig(upstreamPort), deps: { introspect, logger: injected } }));
 
-			const res = await request(own).get("/protected").set("Authorization", "Bearer t");
+			const res = await request(own)
+				.get("/protected")
+				.set("Authorization", "Bearer t")
+				.set("x-request-id", "rid-fail");
 
 			expect(res.status).toBe(500);
 			expect(res.body).toEqual({ code: 500, message: "Internal Server Error" });
 			expect(upstreamCalls).toBe(0);
 			expect(injected.error).toHaveBeenCalledWith(
-				{ "x-request-id": expect.any(String), error: err },
+				{ requestId: "rid-fail", event: "validation.unexpected_error", error: err },
 				"introspect failed",
 			);
 			expect(singletonError).not.toHaveBeenCalled();
