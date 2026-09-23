@@ -61,6 +61,44 @@ describe("proxy config — validation mode", () => {
 		expect(config.auth.validation.client.clientSecret).toBeNull();
 	});
 
+	// #95 F45: the RFC 6750 realm, optional. It goes into a quoted-string in
+	// `WWW-Authenticate`, so only what needs no escaping is accepted.
+	describe("auth.validation.realm", () => {
+		const realmOf = (env: Record<string, string>) => {
+			const config = validate(
+				parseFile(confPath, { env: { AUTH_MODE: "validation", ...env } }),
+				AppConfigSchema,
+			);
+			if (config.auth.mode !== "validation") throw new Error("narrow");
+			return config.auth.validation.realm;
+		};
+
+		it("is unset by default", () => {
+			expect(realmOf({})).toBeNull();
+		});
+
+		it("is read from VALIDATION_REALM", () => {
+			expect(realmOf({ VALIDATION_REALM: "orders api" })).toBe("orders api");
+		});
+
+		it("treats an empty VALIDATION_REALM as unset", () => {
+			expect(realmOf({ VALIDATION_REALM: "" })).toBeNull();
+		});
+
+		it("accepts 256 characters, spaces inside, and a single character", () => {
+			expect(realmOf({ VALIDATION_REALM: "x".repeat(256) })).toHaveLength(256);
+			expect(realmOf({ VALIDATION_REALM: "orders, api=v1" })).toBe("orders, api=v1");
+			expect(realmOf({ VALIDATION_REALM: "a" })).toBe("a");
+		});
+
+		it.each(['a"b', "a\\b", "a\u0001b", "a\u00e9b", "a\nb", "a\n", "a\r\n", " ", " a", "a ", "x".repeat(257)])(
+			"refuses %j, which a quoted-string would need to escape or cannot carry",
+			(realm) => {
+				expect(() => realmOf({ VALIDATION_REALM: realm })).toThrow(/auth\.validation\.realm/);
+			},
+		);
+	});
+
 	it("rejects when only clientId is set", () => {
 		const raw = parseFile(confPath, {
 			env: { AUTH_MODE: "validation", CLIENT_ID: "my-proxy" },

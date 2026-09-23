@@ -27,3 +27,15 @@ export function extractBearerToken(header: string | undefined): string | null {
 	if (type !== "Bearer" || !token) return null;
 	return token;
 }
+
+/**
+ * Whether a header {@link extractBearerToken} refused named the `Bearer`
+ * scheme by this module's own rule — so it was a malformed Bearer credential
+ * (`Bearer`, `Bearer  t`), not another method (#95 F45). RFC 6750 §3.1
+ * answers the two differently: `invalid_request` for the first, no error
+ * code for the second. A lowercase `bearer` is the second here, since
+ * `extractBearerToken` does not admit it.
+ */
+export function namesBearerScheme(header: string): boolean {
+	return header.split(" ")[0] === "Bearer";
+}

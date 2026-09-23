@@ -14,7 +14,7 @@
  * limitations under the License.
  */
 
-import { extractBearerToken } from "../../express/bearer.mjs";
+import { extractBearerToken, namesBearerScheme } from "../../express/bearer.mjs";
 import type { Logger } from "../../logger.mjs";
 import { IntrospectHttpError, type IntrospectionResult } from "./introspection-client.mjs";
 
@@ -49,23 +49,45 @@ export interface ValidationDeps {
 	logger: Logger;
 }
 
+/** What the decision reads from configuration (#95 F45). */
+export interface ValidationPolicy {
+	/**
+	 * `auth.validation.realm`: the RFC 6750 §3 `realm` for every challenge, or
+	 * `null` for none. The schema admits only what a quoted-string carries
+	 * without escaping.
+	 */
+	realm: string | null;
+}
+
+const NO_REALM: ValidationPolicy = { realm: null };
+
 /**
- * The `WWW-Authenticate` challenge for a token this path will not accept
- * (#95 F29).
+ * The `WWW-Authenticate` value for a refusal about the caller's credential,
+ * or `null` when there is nothing to send (#95 F29, F45).
  *
  * RFC 6750 §3 makes the header a MUST when a protected-resource request
- * carries no credentials or carries a token that does not enable access, and
- * a SHOULD to name the `error` **when the request included an access token**.
- * Only this refusal meets that second condition: the caller presented a
- * Bearer token and it was not accepted, which §3.1 calls `invalid_token`.
+ * carries no usable credentials or a token that does not enable access, and
+ * says the `Bearer` scheme "MUST be followed by one or more auth-param
+ * values". It is a SHOULD to name the `error` only **when the request
+ * included an access token** — `invalid_token` (the 401) or, for a Bearer
+ * credential too malformed to read, `invalid_request` (§3.1). A request using
+ * another method gets no error code (§3.1's last paragraph); its challenge is
+ * `realm` alone, as in §3.1's own example, and without a configured realm
+ * there is no auth-param left to send, so no header at all.
  *
- * No `realm` — it is OPTIONAL, and nothing configures a name to put in it, so
- * the `error` is the one auth-param that §3's "MUST be followed by one or
- * more auth-param values" needs. No `error_description`: §3 makes it a MAY,
- * the body already carries the wording, and the same string in two places
- * invites them to drift.
+ * No `error_description`: §3 makes it a MAY, the body already carries the
+ * wording, and the same string in two places invites them to drift.
  */
-const INVALID_TOKEN_CHALLENGE = 'Bearer error="invalid_token"';
+const challengeFor = (
+	{ realm }: ValidationPolicy,
+	error: "invalid_token" | "invalid_request" | null,
+): string | null => {
+	const params = [
+		...(realm !== null ? [`realm="${realm}"`] : []),
+		...(error !== null ? [`error="${error}"`] : []),
+	];
+	return params.length > 0 ? `Bearer ${params.join(", ")}` : null;
+};
 
 /**
  * The decision, as data. The middleware in `router.mts` applies it: `forward`
@@ -103,7 +125,10 @@ const reject = (
  * sees Express; `router.mts` reads the headers and applies the outcome.
  *
  *   - no Authorization                        forward, the provider not consulted
- *   - not `Bearer <token>`                    400 Invalid Token Type
+ *   - not `Bearer <token>`                    400 Invalid Token Type — with
+ *                                             `error="invalid_request"` when it
+ *                                             named Bearer, the realm alone when
+ *                                             it used another method (#95 F45)
  *   - active: false                           401 Invalid Token
  *   - the provider answers 401                401 Invalid Token, unless it was
  *                                             the proxy's own client
@@ -120,11 +145,16 @@ const reject = (
  * What is forwarded is decided by `req.headers`, which the middleware never
  * modifies on this path: the first SP-delimited word is introspected, the
  * inbound bytes go upstream (F14).
+ *
+ * Every challenge carries `policy.realm` when one is configured.
  */
 export const decideValidation = async (
 	{ requestId, authorization }: ValidationInputs,
 	{ introspect, logger }: ValidationDeps,
+	policy: ValidationPolicy = NO_REALM,
 ): Promise<ValidationOutcome> => {
+	const invalidToken = challengeFor(policy, "invalid_token");
+
 	if (!authorization) {
 		return { kind: "forward" };
 	}
@@ -135,15 +165,16 @@ export const decideValidation = async (
 	// can hold, it is not a credential, and refusing it here is the safe
 	// direction if the parser ever stops ruling it out (#95 F36).
 	if (!token) {
-		// No challenge. RFC 6750 §3.1's last paragraph: a request that
-		// "attempted using an unsupported authentication method" SHOULD NOT
-		// carry an error code — and §3's SHOULD to name one is conditioned on
-		// the request having included an access token, which a Basic header or
-		// a `Bearer` with nothing after it did not. What the RFC does offer for
-		// this case is `Bearer realm="…"`, and there is no configured name to
-		// put in a realm. Tracked as F45 on #95, which also has to split the
-		// three requests this one branch answers.
-		return reject(400, "Invalid Token Type", null);
+		// One status, two challenges (#95 F45). A `Bearer` with no usable token
+		// after it is §3.1's "otherwise malformed" request: `invalid_request`.
+		// Another method — `Basic`, or a lowercase `bearer` this parser does not
+		// admit — "SHOULD NOT" carry an error code (§3.1's last paragraph), so it
+		// gets the realm alone, or nothing when none is configured.
+		return reject(
+			400,
+			"Invalid Token Type",
+			challengeFor(policy, namesBearerScheme(authorization) ? "invalid_request" : null),
+		);
 	}
 
 	try {
@@ -152,7 +183,7 @@ export const decideValidation = async (
 		// non-boolean `active`, but a supplied introspector may not, and
 		// `{ active: "false" }` must not forward.
 		if (result.active !== true) {
-			return reject(401, "Invalid Token", INVALID_TOKEN_CHALLENGE);
+			return reject(401, "Invalid Token", invalidToken);
 		}
 	} catch (e) {
 		// The status is checked beside the mark: the class documents that only a
@@ -185,7 +216,7 @@ export const decideValidation = async (
 		// Every other 401 is about the token: the bundled client marks it, and a
 		// supplied introspector that marks nothing is read the way it always was.
 		if (e instanceof IntrospectHttpError && e.status === 401) {
-			return reject(401, "Invalid Token", INVALID_TOKEN_CHALLENGE);
+			return reject(401, "Invalid Token", invalidToken);
 		}
 		// The rest of IntrospectHttpError is the provider failing, and a gateway
 		// reports its upstream's failure as 502 (RFC 9110 §15.6.3) — the status

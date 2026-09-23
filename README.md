@@ -23,7 +23,15 @@ Flow:
 3. On cache miss, calls provider's `POST /oauth/introspect`. A redirect from it is not followed — the endpoint is configuration — and is answered `502 Provider Configuration Error`. Concurrent misses on the same token coalesce into a single provider call (single-flight), as they do in injection mode.
 4. Returns `401` if `active: false`; forwards the request if `active: true`.
 
-A `401` carries `WWW-Authenticate: Bearer error="invalid_token"`, the RFC 6750 §3 challenge for a request that presented an access token the proxy would not accept. No other refusal carries one: a `400` attempted an authentication method this proxy does not support, which §3.1 says SHOULD NOT carry an error code, and a `500` or `502` is the proxy's or the provider's failure rather than a statement about the caller's credential. Injection mode answers no challenge on any path, deliberately: its caller holds a session cookie, not a Bearer token.
+Challenges, without and with `VALIDATION_REALM` (here `api`):
+
+| Refusal | No realm | Realm set |
+| --- | --- | --- |
+| `401`: an access token the proxy would not accept (RFC 6750 §3) | `Bearer error="invalid_token"` | `Bearer realm="api", error="invalid_token"` |
+| `400`: a `Bearer` credential too malformed to read (`Bearer`, `Bearer  t`) | `Bearer error="invalid_request"` | `Bearer realm="api", error="invalid_request"` |
+| `400`: another method (`Basic …`, or a lowercase `bearer`, which this proxy does not admit) — no error code, as §3.1 says | none | `Bearer realm="api"` |
+
+A `500` or `502` carries none, because it is the proxy's or the provider's failure rather than a statement about the caller's credential. Injection mode answers no challenge on any path, deliberately: its caller holds a session cookie, not a Bearer token.
 
 Two limits worth knowing. A browser cannot read the header cross-origin — `WWW-Authenticate` is not CORS-safelisted and this proxy sets no `Access-Control-Expose-Headers` — so a SPA on another origin sees the status and the body only. And `invalid_token` invites a client to fetch a new token and retry (§3.1), which cannot help in the audience case described below: a token the provider calls `active: false` because its `aud` does not name this proxy's client is refused the same way however fresh it is.
 
@@ -288,6 +296,7 @@ Validation mode:
 | `CLIENT_ID` | Client ID for introspection auth (optional; must be set together with `CLIENT_SECRET`). |
 | `CLIENT_SECRET` | Client secret for introspection auth (optional; must be set together with `CLIENT_ID`). |
 | `INTROSPECT_URL` | Introspection endpoint URL. |
+| `VALIDATION_REALM` | RFC 6750 `realm` for `WWW-Authenticate` (optional; at most 256 printable ASCII characters, without `"`, `\` or surrounding spaces). Unset, a request using another auth scheme gets no challenge. |
 | `INTROSPECT_CACHE_TTL_SEC` | Cache TTL in seconds (default: 30). |
 | `INTROSPECT_CACHE_MAX_ENTRIES` | Cache max entries (default: 10000). |
 | `INTROSPECT_TIMEOUT_MS` | Introspection HTTP timeout (default: 5000). |

@@ -34,18 +34,20 @@ const inputs = (authorization: string | undefined, requestId = "rid-1"): Validat
 });
 
 // RFC 6750 §3 makes `WWW-Authenticate` a MUST on a refusal and a SHOULD to
-// name the `error` when the request included an access token. Only one of
-// this path's four refusals meets that second condition (#95 F29) — the other
-// three are stated here rather than left to be read off the outcome tables
-// below, which is what F27's `toEqual` on the body used to leave implicit.
+// name the `error` when the request included an access token: the 401's
+// `invalid_token` (#95 F29) and a malformed Bearer's `invalid_request` (F45).
+// Every refusal's challenge is stated here rather than left to be read off the
+// outcome tables below, which is what F27's `toEqual` on the body used to
+// leave implicit.
 describe("the RFC 6750 challenge", () => {
 	const rejectionOf = async (
 		authorization: string | undefined,
 		arrange: (introspect: ReturnType<typeof makeDeps>["introspect"]) => void = () => {},
+		realm: string | null = null,
 	) => {
 		const { deps, introspect } = makeDeps();
 		arrange(introspect);
-		const outcome = await decideValidation(inputs(authorization), deps);
+		const outcome = await decideValidation(inputs(authorization), deps, { realm });
 		if (outcome.kind !== "reject") throw new Error(`expected a reject, got ${outcome.kind}`);
 		return outcome;
 	};
@@ -70,15 +72,84 @@ describe("the RFC 6750 challenge", () => {
 
 	// §3.1's last paragraph: a request that "attempted using an unsupported
 	// authentication method" SHOULD NOT carry an error code, and §3's SHOULD is
-	// conditioned on an access token having been included. Answering
-	// `Bearer realm="…"` instead needs a name nothing configures, so this
-	// refusal carries no challenge at all — tracked as F45 on #95.
-	it.each(["Basic dXNlcjpwYXNz", "bearer t", "Bearer", "Bearer  t"])(
-		"carries no challenge for %j, which included no access token",
+	// conditioned on an access token having been included. What §3 offers
+	// instead is `Bearer realm="…"`, and with no realm configured there is no
+	// auth-param to satisfy its "one or more", so no challenge at all (#95 F45).
+	// A lowercase `bearer` is refused by this proxy's own stricter rule
+	// (`extractBearerToken`), so it is read as another method, not as malformed.
+	it.each(["Basic dXNlcjpwYXNz", "bearer t", "Token t"])(
+		"carries no challenge for %j when no realm is configured",
 		async (authorization) => {
 			expect((await rejectionOf(authorization)).challenge).toBeNull();
 		},
 	);
+
+	// A `Bearer` with no usable token after it is §3.1's "otherwise malformed"
+	// request: `invalid_request`, which is also the auth-param §3 needs (#95 F45).
+	it.each(["Bearer", "Bearer ", "Bearer  t"])(
+		"names invalid_request for the malformed Bearer %j",
+		async (authorization) => {
+			const outcome = await rejectionOf(authorization);
+
+			expect(outcome.status).toBe(400);
+			expect(outcome.challenge).toBe('Bearer error="invalid_request"');
+		},
+	);
+
+	describe("with auth.validation.realm configured (#95 F45)", () => {
+		it.each(["Basic dXNlcjpwYXNz", "bearer t"])(
+			"answers %j with the realm alone, as §3.1's own example does",
+			async (authorization) => {
+				expect((await rejectionOf(authorization, () => {}, "api")).challenge).toBe(
+					'Bearer realm="api"',
+				);
+			},
+		);
+
+		it("puts the realm before the error on a malformed Bearer", async () => {
+			expect((await rejectionOf("Bearer", () => {}, "api")).challenge).toBe(
+				'Bearer realm="api", error="invalid_request"',
+			);
+		});
+
+		it("puts the realm before the error on the 401", async () => {
+			const outcome = await rejectionOf(
+				"Bearer t",
+				(introspect) => {
+					introspect.mockResolvedValueOnce({ active: false });
+				},
+				"api",
+			);
+
+			expect(outcome.challenge).toBe('Bearer realm="api", error="invalid_token"');
+		});
+
+		it("puts the realm before the error on the provider's own 401 too", async () => {
+			const outcome = await rejectionOf(
+				"Bearer t",
+				(introspect) => {
+					introspect.mockRejectedValueOnce(
+						new IntrospectHttpError(401, "introspect returned 401", "token"),
+					);
+				},
+				"api",
+			);
+
+			expect(outcome.challenge).toBe('Bearer realm="api", error="invalid_token"');
+		});
+
+		it("still challenges nothing on a provider failure", async () => {
+			const outcome = await rejectionOf(
+				"Bearer t",
+				(introspect) => {
+					introspect.mockRejectedValueOnce(new IntrospectHttpError(503, "introspect returned 503"));
+				},
+				"api",
+			);
+
+			expect(outcome.challenge).toBeNull();
+		});
+	});
 
 	// A failure of the proxy or the provider is not a statement about the
 	// caller's credential, so there is nothing to challenge them with: a
@@ -123,11 +194,10 @@ describe("decideValidation", () => {
 		])("answers 400 Invalid Token Type to %j (%s)", async (_reason, authorization) => {
 			const { deps, introspect } = makeDeps();
 			const outcome = await decideValidation(inputs(authorization), deps);
-			expect(outcome).toEqual<ValidationOutcome>({
+			expect(outcome).toMatchObject({
 				kind: "reject",
 				status: 400,
 				body: { code: 400, message: "Invalid Token Type" },
-				challenge: null,
 			});
 			expect(introspect).not.toHaveBeenCalled();
 		});

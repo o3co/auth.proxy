@@ -206,6 +206,23 @@ export const AppConfigSchema = z.object({
 								"auth.validation.client.clientId and auth.validation.client.clientSecret must both be set or both be unset",
 						},
 					),
+				// RFC 6750 §3's `realm`, for `WWW-Authenticate` (#95 F45). Unset, the
+				// challenges carry none. It is sent inside a quoted-string, so only
+				// printable ASCII that needs no escaping is accepted — no `"`, no
+				// `\`, no control character — and the header cannot be split by it.
+				// No surrounding space (an environment value is not trimmed), and at
+				// most 256 characters: it goes out on every challenge, and a front
+				// proxy's header buffer is finite.
+				realm: optionalString().refine(
+					(v) =>
+						v === null ||
+						(/^[\x21\x23-\x5B\x5D-\x7E]([\x20\x21\x23-\x5B\x5D-\x7E]*[\x21\x23-\x5B\x5D-\x7E])?$/.test(v) &&
+							v.length <= 256),
+					{
+						message:
+							'auth.validation.realm must be at most 256 printable ASCII characters, without `"` or `\\` and without surrounding spaces (it is sent as an RFC 6750 quoted-string)',
+					},
+				),
 				introspect: z.object({
 					url: z.string(),
 					cacheTtlSec: z.coerce.number().default(30),
