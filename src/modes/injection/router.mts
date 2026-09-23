@@ -13,6 +13,17 @@
  * See the License for the specific language governing permissions and
  * limitations under the License.
  */
+
+/**
+ * The injection-mode router: request id, the `incoming request` line, the
+ * injection middleware, then the shared upstream stage.
+ *
+ * `createRouter` builds the session path's cache, flight table and grant
+ * client and — with the exchange on — the exchange's context, client, cache
+ * and flight table, or takes them from `deps` (#95 F2, F4); the exchange
+ * context is always derived from config, never supplied.
+ */
+
 import type { NextFunction, Request, Response } from "express";
 import express from "express";
 import type { AppConfig } from "../../../config/application.schema.mjs";

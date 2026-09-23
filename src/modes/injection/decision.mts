@@ -13,6 +13,15 @@
  * See the License for the specific language governing permissions and
  * limitations under the License.
  */
+
+/**
+ * The session decision, `decideInjection`: whether an injection-mode request
+ * is forwarded as received, forwarded with the inbound `Authorization`
+ * stripped, given a token minted from its session cookie, refused, or handed
+ * to the exchange. Also the outcome both decisions answer in, and the session
+ * path's cache key.
+ */
+
 import crypto from "node:crypto";
 import type { AppConfig } from "../../../config/application.schema.mjs";
 import type { Logger } from "../../logger.mjs";
@@ -97,6 +106,10 @@ export interface InjectionDeps {
 	 * the key, and so still the caller's to match: the `grantClient`, which
 	 * cannot be hashed, and the cache policy, which decides how long an entry
 	 * lives rather than which token comes back.
+	 *
+	 * Sharing costs capacity: a cookie takes one entry per grant context
+	 * rather than one in total, all against the same `maxEntries`, so a cache
+	 * shared across N routers wants resizing.
 	 */
 	tokenCache: TokenCache;
 	singleFlight: SingleFlight<string>;

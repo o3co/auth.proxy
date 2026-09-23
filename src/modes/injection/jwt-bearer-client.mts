@@ -13,6 +13,14 @@
  * See the License for the specific language governing permissions and
  * limitations under the License.
  */
+
+/**
+ * The token-endpoint client for the exchange: one RFC 7523 jwt-bearer grant
+ * per call, authenticated with `client_secret_basic`. Declares the client's
+ * contract and its error class beside the bundled client, with the code each
+ * failure maps to.
+ */
+
 import { clientSecretBasic } from "../../oauth/client-secret-basic.mjs";
 import { discardBody, readBoundedJsonObject } from "../../response-body.mjs";
 import { MAX_ERROR_BODY_BYTES, sanitizeErrorCode } from "./provider-error.mjs";

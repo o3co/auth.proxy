@@ -14,6 +14,13 @@
  * limitations under the License.
  */
 
+/**
+ * What the two token clients do with a provider's error text: reduce the
+ * provider-controlled `error` and `error_description` to something safe to log
+ * or relay, and bound how much of an error body is read. Both clients use it;
+ * it belongs to neither, like `token-endpoint.mts`.
+ */
+
 /** Recorded in place of a provider `error` value that failed validation. */
 export const INVALID_ERROR_CODE = "invalid_error_code";
 

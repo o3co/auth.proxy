@@ -37,7 +37,7 @@
 
 **別サービスである理由。** スタックの[アーキテクチャ](https://github.com/o3co/auth/blob/develop/docs/architecture.md#migration-path)では、各コンポーネントは独立した HTTP サービスとして動作し、互いには設定上のエンドポイント URL だけでつながる。プロキシに必要なのはプロバイダーのエンドポイントだけで、アプリケーションコードを変えずに任意のトークン検証リバースプロキシ（例: Envoy の ext_authz）に置き換えられる。サービスの前段にいるからこそ、ダウンストリームサービスは自前で認証ロジックを実装せずに検証済みリクエストを受け取れ、インジェクションモードはアクセストークンをブラウザから遠ざけられる（OWASP Token Handler Pattern）。任意のコンポーネントなので、デプロイから外すこともできる。
 
-**ソースマップ。** コードの構成、どの状態を誰が持つか、各不変条件をどのテストが固定しているか: [`src/README.md`](src/README.md)（ソースマップ）、[`config/README.md`](config/README.md)（設定スキーマ）、各モジュールの README — [`src/express`](src/express/README.md)、[`src/oauth`](src/oauth/README.md)、[`src/modes/injection`](src/modes/injection/README.md)、[`src/modes/validation`](src/modes/validation/README.md)。（いずれも英語のみ。）
+**ソースマップ。** 各ソースディレクトリの README は、そのディレクトリの責務・役割・不変条件を述べる。個々のファイルが何をするかは、そのファイルのヘッダコメントにある。入口は [`src/README.md`](src/README.md)（ソースツリー）、[`config/README.md`](config/README.md)（設定スキーマ）、各モジュールの README — [`src/express`](src/express/README.md)、[`src/oauth`](src/oauth/README.md)、[`src/modes/injection`](src/modes/injection/README.md)、[`src/modes/validation`](src/modes/validation/README.md)。（いずれも英語のみ。）
 
 ## 動作モード
 

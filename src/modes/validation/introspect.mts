@@ -13,6 +13,14 @@
  * See the License for the specific language governing permissions and
  * limitations under the License.
  */
+
+/**
+ * The bundled `Introspector`: `createIntrospector` puts the cache and the
+ * flight table in front of the introspection client and reads what the
+ * provider answered — what this path refuses beyond the provider, and what it
+ * caches for how long.
+ */
+
 import crypto from "node:crypto";
 import type { SingleFlight } from "../../single-flight.mjs";
 import type { Introspector } from "./decision.mjs";
@@ -37,6 +45,12 @@ export interface IntrospectorConfig {
 	 * Concurrent misses on one token share one provider call (#95 F6). Keyed
 	 * by the same digest as the cache, so the flight and the entry it becomes
 	 * are the same thing under two names.
+	 *
+	 * Time is the table's only bound: a slot lives as long as its provider
+	 * call, which the bundled client aborts at `timeoutMs` and a disconnect
+	 * does not cut short, so the table holds at most the distinct tokens that
+	 * missed within one `timeoutMs` — bounded by `timeoutMs` and inbound
+	 * concurrency.
 	 */
 	singleFlight: SingleFlight<IntrospectionResult>;
 	/** `auth.validation.introspect.cacheTtlSec`; `0` or less disables the cache on both sides, but not the flight. */

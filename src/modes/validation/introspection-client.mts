@@ -13,6 +13,14 @@
  * See the License for the specific language governing permissions and
  * limitations under the License.
  */
+
+/**
+ * The introspection endpoint as the one call this path makes to it: the
+ * `IntrospectionClient` contract, the `IntrospectHttpError` it throws, and the
+ * bundled client, which validates a response only as far as RFC 7662
+ * requires.
+ */
+
 import { type ClientCredentials, clientSecretBasic } from "../../oauth/client-secret-basic.mjs";
 import { discardBody, readBoundedJsonObject } from "../../response-body.mjs";
 

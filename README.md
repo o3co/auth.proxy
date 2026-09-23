@@ -37,7 +37,7 @@ One deployment runs one of two modes:
 
 **Why a separate service.** The stack's [architecture](https://github.com/o3co/auth/blob/develop/docs/architecture.md#migration-path) runs each component as a standalone HTTP service that talks to the others only through endpoint URLs in configuration: the proxy needs only the provider's endpoint, and can be replaced by any token-validating reverse proxy (e.g. Envoy with ext_authz) with no application code change. Being in front of the service is what lets downstream services receive pre-validated requests without implementing auth logic themselves, and lets injection mode keep access tokens out of the browser (the OWASP Token Handler Pattern). Being optional, a deployment can leave it out.
 
-**Source map.** How the code is laid out, who owns which state, and which test pins each invariant: [`src/README.md`](src/README.md) (the source map), [`config/README.md`](config/README.md) (the configuration schema), and the module READMEs — [`src/express`](src/express/README.md), [`src/oauth`](src/oauth/README.md), [`src/modes/injection`](src/modes/injection/README.md), [`src/modes/validation`](src/modes/validation/README.md).
+**Source map.** Each source directory's README states its responsibility, role and invariants; what a single file does is in that file's header comment. Start at [`src/README.md`](src/README.md) (the source tree), [`config/README.md`](config/README.md) (the configuration schema), and the module READMEs — [`src/express`](src/express/README.md), [`src/oauth`](src/oauth/README.md), [`src/modes/injection`](src/modes/injection/README.md), [`src/modes/validation`](src/modes/validation/README.md).
 
 ## Operating modes
 

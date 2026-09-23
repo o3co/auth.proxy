@@ -14,6 +14,38 @@
  * limitations under the License.
  */
 
+/**
+ * The token-endpoint client for the session grant: one
+ * `POST {providerOrigin}/oauth/token` per call with `grant_type=session`, as a
+ * public client — `client_id` in the body, the session cookie as the only
+ * cookie, no `Authorization`. No retry, no redirect followed, and only a `200`
+ * is success (RFC 6749 section 5.1).
+ *
+ * How each answer maps to a {@link SessionGrantErrorCode}:
+ *
+ *   - `session_unauthorized` (401)       a 401, or a 400 `invalid_grant` — an
+ *                                        expired or unknown session. A 401
+ *                                        body past `MAX_ERROR_BODY_BYTES` is
+ *                                        abandoned and read as this.
+ *   - `provider_config_error` (502)      a 401 `invalid_client` (the proxy's
+ *                                        own `clientId`, #95 F47), any other
+ *                                        400, or a redirect
+ *   - `provider_unavailable` (502)       5xx, network error, a timeout before
+ *                                        the response headers arrive, an
+ *                                        unexpected 4xx or a 2xx other than 200
+ *   - `provider_invalid_response` (502)  a 200 that is not a JSON object, is
+ *                                        over `MAX_TOKEN_BODY_BYTES`, or lacks
+ *                                        an `access_token`
+ *
+ * A timeout while a body is being read is not `provider_unavailable`:
+ * `readBoundedJsonObject` answers `null` for it, so the status decides — a 200
+ * is `provider_invalid_response`, a 400 `provider_config_error`, and a 401
+ * `session_unauthorized`.
+ *
+ * A body answered from the status alone is released with `discardBody`;
+ * every other is read bounded.
+ */
+
 import { discardBody, readBoundedJsonObject } from "../../response-body.mjs";
 import { MAX_ERROR_BODY_BYTES, sanitizeErrorDescription } from "./provider-error.mjs";
 import { buildTokenUrl, parseJsonBody } from "./token-endpoint.mjs";

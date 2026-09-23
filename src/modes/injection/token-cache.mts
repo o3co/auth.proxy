@@ -14,6 +14,20 @@
  * limitations under the License.
  */
 
+/**
+ * Where an issued token is held until it expires: the store behind the
+ * session path's cache and, separately, the exchange path's. The flight table
+ * the router pairs with each is `SingleFlight`, from `src/single-flight.mts`.
+ */
+
+/**
+ * The token store's interface.
+ *
+ * `get` deletes an expired entry it declines to serve, and `set` re-inserts
+ * the key, so a refreshed entry moves to the newest position. Validation's
+ * `IntrospectionCache` has the same shape with different `get` / `set`
+ * behaviour; the differences are recorded in its doc comment.
+ */
 export interface TokenCache {
 	get(key: string): string | null;
 	set(key: string, token: string, expiresAt: number): void;

@@ -2,6 +2,12 @@
 // SPDX-License-Identifier: Apache-2.0
 
 /**
+ * The `Authorization: Bearer` grammar the validation path reads with:
+ * `extractBearerToken` answers the token a header carries, and
+ * `namesBearerScheme` whether a header it refused still named `Bearer`.
+ */
+
+/**
  * Parses an `Authorization` header, answering the credential it carries with
  * the scheme stripped, or null for anything that is not a `Bearer` credential.
  *
@@ -18,8 +24,8 @@
  * decision with its own tests.
  *
  * What is returned is the first SP-delimited word, which is not always what is
- * forwarded: the upstream receives the header as received. See "Inputs and
- * outputs" in `src/modes/validation/README.md`.
+ * forwarded: the upstream receives the header as received (an invariant of
+ * `src/modes/validation`, stated in its README).
  */
 export function extractBearerToken(header: string | undefined): string | null {
 	if (!header) return null;

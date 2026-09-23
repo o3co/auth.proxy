@@ -15,6 +15,12 @@
  */
 
 /**
+ * The exchange's `Authorization` grammar: reads an inbound header as a
+ * `Bearer` JWS compact JWT and takes its `iss` and `exp` unverified, or says
+ * why it is not one.
+ */
+
+/**
  * Why a credential was not accepted for exchange — a bounded class, so it can
  * be logged without the header bytes:
  *

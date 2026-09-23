@@ -13,4 +13,10 @@
  * See the License for the specific language governing permissions and
  * limitations under the License.
  */
+
+/**
+ * What `app.mts` mounts from this directory: the healthcheck only. The
+ * upstream stage (`upstream.mts`) is imported by the two mode routers directly.
+ */
+
 export * as Healthcheck from "./Healthcheck.mjs";

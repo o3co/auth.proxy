@@ -13,6 +13,28 @@
  * See the License for the specific language governing permissions and
  * limitations under the License.
  */
+
+/**
+ * The configuration schema: validates the parsed `application.conf` and
+ * produces the `AppConfig` the code reads. It never reads the environment —
+ * `${?NAME}` is substituted by the HOCON parse in `src/app.mts`, as a string,
+ * which is why numbers are coerced and booleans and lists have their own
+ * parsers below.
+ *
+ * Defaults are declared twice, as a `.default()` here and as a literal in
+ * `application.conf`, and the two must agree (#95 F23). Keys whose default
+ * lives only in the conf (validated here, no `.default()`):
+ * `auth.validation.introspect.url`, `auth.injection.providerOrigin`,
+ * `auth.injection.sessionCookieName`, `upstream.baseURL`. Keys the conf sets to
+ * a placeholder this schema refuses, so they are effectively required:
+ * `auth.mode` (`null`; the union has no default), `auth.injection.clientId`
+ * and `auth.injection.scope` (`""`; `.min(1)`).
+ *
+ * `auth` is a discriminated union on `mode`: the other mode's section is not
+ * validated, so the shipped conf passes in validation mode although
+ * `auth.injection.clientId` is `""`.
+ */
+
 import { z } from "zod";
 
 /**
@@ -128,6 +150,10 @@ export type ExchangeConfig =
  * `scope`, `audience` and `resource` are sent only when set. `allowedIssuers`
  * is an optional prefilter on the unverified `iss` — empty means off; trust in
  * an issuer is the provider's decision, never the proxy's.
+ *
+ * Every field is parsed and validated before the transform, so an invalid
+ * entry (in `allowedIssuers`, say) fails the configuration even when the
+ * exchange is disabled.
  */
 const exchangeSchema = z
 	.object({

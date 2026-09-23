@@ -13,6 +13,14 @@
  * See the License for the specific language governing permissions and
  * limitations under the License.
  */
+
+/**
+ * The external credential exchange: `decideExchange`, the decision for a
+ * request the session decision hands off, with the exchange path's context,
+ * cache key and cache expiry. The provider call itself is the client in
+ * `jwt-bearer-client.mts`.
+ */
+
 import crypto from "node:crypto";
 import type { ExchangeConfig } from "../../../config/application.schema.mjs";
 import type { Logger } from "../../logger.mjs";

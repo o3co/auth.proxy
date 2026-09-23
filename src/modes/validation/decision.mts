@@ -14,6 +14,13 @@
  * limitations under the License.
  */
 
+/**
+ * The validation decision, `decideValidation`: whether a request's Bearer
+ * token is forwarded or refused, and a refusal's status, body and
+ * `WWW-Authenticate` challenge. Also declares the `Introspector` seam it
+ * consults and the policy it reads.
+ */
+
 import { extractBearerToken, namesBearerScheme } from "../../express/bearer.mjs";
 import type { Logger } from "../../logger.mjs";
 import { IntrospectHttpError, type IntrospectionResult } from "./introspection-client.mjs";

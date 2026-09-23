@@ -14,6 +14,14 @@
  * limitations under the License.
  */
 
+/**
+ * The composition root: the process entry point, which runs at import — there
+ * is no exported factory. It parses and validates `../config/application.conf`
+ * once, then mounts, in this order, the healthcheck and CORS at the root and
+ * the mode router under `http.pathPrefix`, listens, and installs graceful
+ * shutdown.
+ */
+
 import { parseFile } from "@o3co/ts.hocon";
 import { validate } from "@o3co/ts.hocon/zod";
 import cors from "cors";

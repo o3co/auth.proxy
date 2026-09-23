@@ -14,6 +14,11 @@
  * limitations under the License.
  */
 
+/**
+ * Client authentication at the provider by `client_secret_basic`: the
+ * credential pair as configured, and the `Authorization` value built from it.
+ */
+
 export interface ClientCredentials {
 	clientId: string;
 	clientSecret: string;
