@@ -10,7 +10,7 @@ importers:
     dependencies:
       '@o3co/ts.hocon':
         specifier: ^1.13.0
-        version: 1.13.0(zod@4.6.2)
+        version: 1.13.0(zod@4.6.5)
       cors:
         specifier: 2.8.x
         version: 2.8.6
@@ -27,8 +27,8 @@ importers:
         specifier: ^10.3.1
         version: 10.3.1
       zod:
-        specifier: ^4.6.2
-        version: 4.6.2
+        specifier: ^4.6.5
+        version: 4.6.5
     devDependencies:
       '@biomejs/biome':
         specifier: ^2.5.13
@@ -1209,8 +1209,8 @@ packages:
   wrappy@1.0.2:
     resolution: {integrity: sha512-l4Sp/DRseor9wL6EvV2+TuQn63dMkPjZ/sp9XkghTEbV9KlPS1xUsZ3u7/IQO4wxtcFB4bgpQPRcR3QCvezPcQ==}
 
-  zod@4.6.2:
-    resolution: {integrity: sha512-lh5RCAGFa1Cm2hjtNwLQhSs/AsqdWnTQaBER9fEwN/88pSh7KOtJavtBx/0VlkN/uFd61SwYmljLMDAsHlvzBQ==}
+  zod@4.6.5:
+    resolution: {integrity: sha512-v5l/aFXZQeai4awLbOpSoHecE9UiMrnfx75tEXLjNonXVARxQ5mOeipTjROUchszUNCqnE+hqAMujRsRHsut2Q==}
 
 snapshots:
 
@@ -1363,9 +1363,9 @@ snapshots:
 
   '@noble/hashes@1.8.0': {}
 
-  '@o3co/ts.hocon@1.13.0(zod@4.6.2)':
+  '@o3co/ts.hocon@1.13.0(zod@4.6.5)':
     optionalDependencies:
-      zod: 4.6.2
+      zod: 4.6.5
 
   '@oxc-project/types@0.133.0': {}
 
@@ -2197,4 +2197,4 @@ snapshots:
 
   wrappy@1.0.2: {}
 
-  zod@4.6.2: {}
+  zod@4.6.5: {}
