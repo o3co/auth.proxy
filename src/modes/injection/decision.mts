@@ -316,7 +316,9 @@ export const decideInjection = async (
 	const cached = tokenCache.get(cacheKey);
 
 	const inject = (token: string): InjectionOutcome => {
-		if (authorization) {
+		// Presence, as the hand-off and the strip read it (#95 F40, #133): an
+		// empty `Authorization:` overwritten here is an override too.
+		if (authorization !== undefined) {
 			logger.warn(
 				{
 					requestId,
