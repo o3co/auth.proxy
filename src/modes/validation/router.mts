@@ -50,6 +50,12 @@ const validationMiddleware =
 			case "forward":
 				return next();
 			case "reject":
+				// Before the body because headers must precede the send. Which
+				// refusals carry one at all is the decision's, not this
+				// switch's — see `INVALID_TOKEN_CHALLENGE` in `decision.mts`.
+				if (outcome.challenge !== null) {
+					res.setHeader("WWW-Authenticate", outcome.challenge);
+				}
 				res.status(outcome.status).json(outcome.body);
 				return;
 			default: {

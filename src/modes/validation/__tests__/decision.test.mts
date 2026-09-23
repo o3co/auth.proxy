@@ -33,6 +33,71 @@ const inputs = (authorization: string | undefined, requestId = "rid-1"): Validat
 	authorization,
 });
 
+// RFC 6750 §3 makes `WWW-Authenticate` a MUST on a refusal and a SHOULD to
+// name the `error` when the request included an access token. Only one of
+// this path's four refusals meets that second condition (#95 F29) — the other
+// three are stated here rather than left to be read off the outcome tables
+// below, which is what F27's `toEqual` on the body used to leave implicit.
+describe("the RFC 6750 challenge", () => {
+	const rejectionOf = async (
+		authorization: string | undefined,
+		arrange: (introspect: ReturnType<typeof makeDeps>["introspect"]) => void = () => {},
+	) => {
+		const { deps, introspect } = makeDeps();
+		arrange(introspect);
+		const outcome = await decideValidation(inputs(authorization), deps);
+		if (outcome.kind !== "reject") throw new Error(`expected a reject, got ${outcome.kind}`);
+		return outcome;
+	};
+
+	it("names invalid_token when the provider says the token is not live", async () => {
+		const outcome = await rejectionOf("Bearer t", (introspect) => {
+			introspect.mockResolvedValueOnce({ active: false });
+		});
+
+		expect(outcome.challenge).toBe('Bearer error="invalid_token"');
+	});
+
+	it("names invalid_token when the provider refuses the token itself", async () => {
+		const outcome = await rejectionOf("Bearer t", (introspect) => {
+			introspect.mockRejectedValueOnce(
+				new IntrospectHttpError(401, "introspect returned 401", "token"),
+			);
+		});
+
+		expect(outcome.challenge).toBe('Bearer error="invalid_token"');
+	});
+
+	// §3.1's last paragraph: a request that "attempted using an unsupported
+	// authentication method" SHOULD NOT carry an error code, and §3's SHOULD is
+	// conditioned on an access token having been included. Answering
+	// `Bearer realm="…"` instead needs a name nothing configures, so this
+	// refusal carries no challenge at all — tracked as F45 on #95.
+	it.each(["Basic dXNlcjpwYXNz", "bearer t", "Bearer", "Bearer  t"])(
+		"carries no challenge for %j, which included no access token",
+		async (authorization) => {
+			expect((await rejectionOf(authorization)).challenge).toBeNull();
+		},
+	);
+
+	// A failure of the proxy or the provider is not a statement about the
+	// caller's credential, so there is nothing to challenge them with: a
+	// client that re-authenticated would be answering the wrong question.
+	it.each([
+		[
+			"the proxy's own client credentials were refused",
+			new IntrospectHttpError(401, "introspect returned 401", "client"),
+		],
+		["the provider is unavailable", new IntrospectHttpError(503, "introspect returned 503")],
+	])("carries no challenge when %s", async (_label, err) => {
+		const outcome = await rejectionOf("Bearer t", (introspect) => {
+			introspect.mockRejectedValueOnce(err);
+		});
+
+		expect(outcome.challenge).toBeNull();
+	});
+});
+
 describe("decideValidation", () => {
 	describe("forward without consulting the provider", () => {
 		it.each([undefined, ""])("forwards when Authorization is %j", async (authorization) => {
@@ -62,6 +127,7 @@ describe("decideValidation", () => {
 				kind: "reject",
 				status: 400,
 				body: { code: 400, message: "Invalid Token Type" },
+				challenge: null,
 			});
 			expect(introspect).not.toHaveBeenCalled();
 		});
@@ -96,6 +162,7 @@ describe("decideValidation", () => {
 				kind: "reject",
 				status: 401,
 				body: { code: 401, message: "Invalid Token" },
+				challenge: 'Bearer error="invalid_token"',
 			});
 			expect(logger.error).not.toHaveBeenCalled();
 		});
@@ -115,6 +182,7 @@ describe("decideValidation", () => {
 				kind: "reject",
 				status: 502,
 				body: { code: 502, message: "Provider Configuration Error" },
+				challenge: null,
 			});
 			// One line, not both: the generic `introspect failed` must not also
 			// fire, or an operator filtering on it sees the config error twice
@@ -135,6 +203,7 @@ describe("decideValidation", () => {
 				kind: "reject",
 				status: 401,
 				body: { code: 401, message: "Invalid Token" },
+				challenge: 'Bearer error="invalid_token"',
 			});
 			expect(logger.error).toHaveBeenCalledWith(
 				{ "x-request-id": "rid-1", error: err },
@@ -156,6 +225,7 @@ describe("decideValidation", () => {
 				kind: "reject",
 				status: 500,
 				body: { code: 500, message: "Internal Server Error" },
+				challenge: null,
 			});
 		});
 
@@ -168,6 +238,7 @@ describe("decideValidation", () => {
 				kind: "reject",
 				status: 401,
 				body: { code: 401, message: "Invalid Token" },
+				challenge: 'Bearer error="invalid_token"',
 			});
 			expect(logger.error).toHaveBeenCalledWith(
 				{ "x-request-id": "rid-1", error: err },
@@ -186,6 +257,7 @@ describe("decideValidation", () => {
 				kind: "reject",
 				status: 500,
 				body: { code: 500, message: "Internal Server Error" },
+				challenge: null,
 			});
 			expect(logger.error).toHaveBeenCalledWith(
 				{ "x-request-id": "rid-1", error: err },

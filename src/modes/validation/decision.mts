@@ -46,18 +46,51 @@ export interface ValidationDeps {
 }
 
 /**
+ * The `WWW-Authenticate` challenge for a token this path will not accept
+ * (#95 F29).
+ *
+ * RFC 6750 §3 makes the header a MUST when a protected-resource request
+ * carries no credentials or carries a token that does not enable access, and
+ * a SHOULD to name the `error` **when the request included an access token**.
+ * Only this refusal meets that second condition: the caller presented a
+ * Bearer token and it was not accepted, which §3.1 calls `invalid_token`.
+ *
+ * No `realm` — it is OPTIONAL, and nothing configures a name to put in it, so
+ * the `error` is the one auth-param that §3's "MUST be followed by one or
+ * more auth-param values" needs. No `error_description`: §3 makes it a MAY,
+ * the body already carries the wording, and the same string in two places
+ * invites them to drift.
+ */
+const INVALID_TOKEN_CHALLENGE = 'Bearer error="invalid_token"';
+
+/**
  * The decision, as data. The middleware in `router.mts` applies it: `forward`
- * calls `next()` with `req.headers` untouched, `reject` writes the status and
- * the `{ code, message }` body.
+ * calls `next()` with `req.headers` untouched, `reject` writes the status, the
+ * `{ code, message }` body and, when there is one, the challenge.
  */
 export type ValidationOutcome =
 	| { kind: "forward" }
-	| { kind: "reject"; status: number; body: { code: number; message: string } };
+	| {
+			kind: "reject";
+			status: number;
+			body: { code: number; message: string };
+			/**
+			 * The `WWW-Authenticate` value, or `null` when the refusal is not
+			 * about the caller's credential and a challenge would ask them to
+			 * fix something that is not theirs.
+			 */
+			challenge: string | null;
+	  };
 
-const reject = (status: number, message: string): ValidationOutcome => ({
+const reject = (
+	status: number,
+	message: string,
+	challenge: string | null,
+): ValidationOutcome => ({
 	kind: "reject",
 	status,
 	body: { code: status, message },
+	challenge,
 });
 
 /**
@@ -93,7 +126,15 @@ export const decideValidation = async (
 	// can hold, it is not a credential, and refusing it here is the safe
 	// direction if the parser ever stops ruling it out (#95 F36).
 	if (!token) {
-		return reject(400, "Invalid Token Type");
+		// No challenge. RFC 6750 §3.1's last paragraph: a request that
+		// "attempted using an unsupported authentication method" SHOULD NOT
+		// carry an error code — and §3's SHOULD to name one is conditioned on
+		// the request having included an access token, which a Basic header or
+		// a `Bearer` with nothing after it did not. What the RFC does offer for
+		// this case is `Bearer realm="…"`, and there is no configured name to
+		// put in a realm. Tracked as F45 on #95, which also has to split the
+		// three requests this one branch answers.
+		return reject(400, "Invalid Token Type", null);
 	}
 
 	try {
@@ -102,7 +143,7 @@ export const decideValidation = async (
 		// non-boolean `active`, but a supplied introspector may not, and
 		// `{ active: "false" }` must not forward.
 		if (result.active !== true) {
-			return reject(401, "Invalid Token");
+			return reject(401, "Invalid Token", INVALID_TOKEN_CHALLENGE);
 		}
 	} catch (e) {
 		// The status is checked beside the mark: the class documents that only a
@@ -122,15 +163,15 @@ export const decideValidation = async (
 				{ "x-request-id": requestId, error: e },
 				"introspect refused the proxy's client credentials",
 			);
-			return reject(502, "Provider Configuration Error");
+			return reject(502, "Provider Configuration Error", null);
 		}
 		logger.error({ "x-request-id": requestId, error: e }, "introspect failed");
 		// Every other 401 is about the token: the bundled client marks it, and a
 		// supplied introspector that marks nothing is read the way it always was.
 		if (e instanceof IntrospectHttpError && e.status === 401) {
-			return reject(401, "Invalid Token");
+			return reject(401, "Invalid Token", INVALID_TOKEN_CHALLENGE);
 		}
-		return reject(500, "Internal Server Error");
+		return reject(500, "Internal Server Error", null);
 	}
 
 	return { kind: "forward" };

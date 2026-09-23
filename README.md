@@ -23,6 +23,10 @@ Flow:
 3. On cache miss, calls provider's `POST /oauth/introspect`.
 4. Returns `401` if `active: false`; forwards the request if `active: true`.
 
+A `401` carries `WWW-Authenticate: Bearer error="invalid_token"`, the RFC 6750 §3 challenge for a request that presented an access token the proxy would not accept. No other refusal carries one: a `400` attempted an authentication method this proxy does not support, which §3.1 says SHOULD NOT carry an error code, and a `500` or `502` is the proxy's or the provider's failure rather than a statement about the caller's credential. Injection mode answers no challenge on any path, deliberately: its caller holds a session cookie, not a Bearer token.
+
+Two limits worth knowing. A browser cannot read the header cross-origin — `WWW-Authenticate` is not CORS-safelisted and this proxy sets no `Access-Control-Expose-Headers` — so a SPA on another origin sees the status and the body only. And `invalid_token` invites a client to fetch a new token and retry (§3.1), which cannot help in the audience case described below: a token the provider calls `active: false` because its `aud` does not name this proxy's client is refused the same way however fresh it is.
+
 Benefits over JWT-only local validation:
 
 - Detects a revoked token — within the introspection cache TTL, and the only validation mode that can (see [Revocation and the access-token lifetime](#revocation-and-the-access-token-lifetime)).
