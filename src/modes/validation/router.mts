@@ -14,6 +14,15 @@
  * limitations under the License.
  */
 
+/**
+ * The validation-mode router: request id, the `incoming request` line, the
+ * validation middleware, then the shared upstream stage.
+ *
+ * `createRouter` builds the introspector over a client, a cache and a flight
+ * table of its own (`buildIntrospector`), or takes one from `deps.introspect`
+ * (#95 F3).
+ */
+
 import type { NextFunction, Request, Response } from "express";
 import express from "express";
 import type { AppConfig } from "../../../config/application.schema.mjs";

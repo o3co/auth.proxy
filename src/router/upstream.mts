@@ -13,6 +13,13 @@
  * See the License for the specific language governing permissions and
  * limitations under the License.
  */
+
+/**
+ * The upstream proxy stage both mode routers end with, `createUpstreamProxy`,
+ * and the two config fields it reads. What it forwards, and why its decorator
+ * is kept, is the doc comment on the function.
+ */
+
 import type { RequestHandler } from "express";
 import proxy from "express-http-proxy";
 

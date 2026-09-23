@@ -1,54 +1,25 @@
 # `src/oauth`
 
-Last updated: 2026-09-23
+Last updated: 2026-09-24
 
 One place for how this proxy authenticates *itself* to the provider: `client_secret_basic`. The provider-side requirements — which client to register, what audience to pin, what the alternative trades away — are in the root README under [Introspection client identity](../../README.md#introspection-client-identity) and, for the exchange, under [External credential exchange](../../README.md#external-credential-exchange-authinjectionexchange) ("Client authentication"). The boundary review behind this file is [#95](https://github.com/o3co/auth.proxy/issues/95).
 
 ## Responsibility
 
-**Role.** A contract module the two confidential-client paths call to build their `Authorization` header to the provider: validation's introspection client and the exchange's jwt-bearer client (see [Dependencies](#dependencies)). It uses nothing.
+**Role.** A contract module the two paths on which the proxy is a confidential client call to build their `Authorization` header to the provider: validation's introspection client (only when client credentials are configured) and the exchange's jwt-bearer client. The session grant is not a caller — there the proxy is a public client.
 
-**Owns:** [`client-secret-basic.mts`](client-secret-basic.mts): a pure function from a credential pair to an `Authorization` header value — [`clientSecretBasic`](client-secret-basic.mts), input type [`ClientCredentials`](client-secret-basic.mts) — and its RFC 6749 §2.3.1 encoding. No I/O, no configuration, no logging, no state.
+**Owns:** the encoding from a configured credential pair to the header value, [`clientSecretBasic`](client-secret-basic.mts) (RFC 6749 §2.3.1).
 
-**Does not own:** whether client credentials are configured and which header a call sends without them ([`buildAuthHeader`](../modes/validation/introspection-client.mts)); holding the built header (each client's closure); keeping the secret out of logs (the callers and [`provider-error.mts`](../modes/injection/provider-error.mts)); what a provider `401` means (each mode's decision).
+**Does not own:** whether client credentials are configured and which header a call sends without them (validation's introspection client); holding the built header (each client's closure); keeping the secret out of logs (the callers); what a provider `401` means (each mode's decision).
 
-**Why separate.** Both modes need the same encoding, and neither may import the other; the function was extracted from validation's introspection client when the exchange became the second caller (#91), so the encoding is written once.
-
-| File | Kind |
-| --- | --- |
-| [`client-secret-basic.mts`](client-secret-basic.mts) | contract |
-
-## Public contract
-
-`clientSecretBasic({ clientId, clientSecret }) → "Basic <base64>"`. The output goes on the wire unchanged as the provider call's `Authorization` header.
-
-## Inputs and outputs
-
-In: the raw `client_id` and `client_secret` as configured — set the raw values in the environment; do not pre-encode them. Out: the header value. Nothing else is produced, and the secret appears in no other outbound place.
+**Why separate.** Both modes need the same encoding, and neither may import the other, so it is written once here (#91).
 
 ## Dependencies
 
-None. Its two callers are the two paths on which the proxy is a confidential client:
-
-- validation — [`buildAuthHeader`](../modes/validation/introspection-client.mts), only when both `auth.validation.client` credentials are set; otherwise the inbound token itself is the introspection credential;
-- the exchange — [`createJwtBearerClient`](../modes/injection/jwt-bearer-client.mts), always.
-
-The session grant is **not** a caller: there the proxy is a public client and sends `client_id` in the form body with no `Authorization` ([`createSessionGrantClient`](../modes/injection/session-grant-client.mts)).
+None. Imported only by `modes/*`.
 
 ## Invariants
 
-**Encoding (RFC 6749 §2.3.1).** Each half is `application/x-www-form-urlencoded`-encoded *before* the two are joined with `:` and base64'd (the doc comment on [`clientSecretBasic`](client-secret-basic.mts)). Without that, a `:` inside either half re-splits the credential and the provider reads a different pair than the one configured. `encodeURIComponent` escapes `:` and every character the form-urlencoded decoder would read as a separator or escape (`&`, `=`, `+`, `%`, and the space it writes as `%20`), leaving only `-_.!~*'()` and alphanumerics bare, and the provider decodes with the matching form-urlencoded decoder, so a credential containing reserved characters round-trips byte for byte.
-
-**Not logged, within a bound.** Neither caller rebuilds the configured header per request: [`createJwtBearerClient`](../modes/injection/jwt-bearer-client.mts) holds it in its closure, and so does [`createIntrospectionClient`](../modes/validation/introspection-client.mts) (#95 F5) — the Basic form is a function of configuration alone. Validation's other path has nothing to hold: without client credentials the credential *is* the request's own token, so that header is built per call ([`buildAuthHeader`](../modes/validation/introspection-client.mts)). The jwt-bearer client checks the provider's `error` values against the secret before recording them (its [`sanitizeErrorCode`](../modes/injection/provider-error.mts) calls); validation's decision logs the thrown error, never the request it sent (the `catch` in [`decideValidation`](../modes/validation/decision.mts)). The check is a substring match at any length, however short the secret (`echoesCredential` in [`provider-error.mts`](../modes/injection/provider-error.mts); #95 F30): a value containing the secret is not recorded as received, so a short secret can cost the provider's diagnostic but cannot reach a log inside the provider's error text.
-
-## Failure and lifecycle
-
-A pure function has neither. A wrong or unregistered credential surfaces as a provider `401`, and both callers read it the same way: the exchange as `502 provider_config_error`, validation as `502 Provider Configuration Error` (#95 F7). Validation answers `401 Invalid Token` for a provider `401` only when it sent no Basic header at all — without client credentials the inbound token is the introspection credential, so that `401` is about the caller rather than about this module's output. See [`src/modes/validation`](../modes/validation/README.md).
-
-## Contract tests
-
-| Test file | Pins |
-| --- | --- |
-| [`__tests__/client-secret-basic.test.mts`](__tests__/client-secret-basic.test.mts) | the header shape (`builds a Basic header from client_id and client_secret`), encoding before joining (`percent-encodes both halves before joining them`), the round trip through a form-urlencoded decoder (`round-trips reserved characters through a form-urlencoded decoder`). |
-| [`validation/__tests__/introspection-client.test.mts`](../modes/validation/__tests__/introspection-client.test.mts) | `buildAuthHeader` choosing Basic vs. Bearer (`returns Basic auth when client credentials are provided`, `returns Bearer with the request token when no client credentials`); a `:` in either half (`percent-encodes a ':' in either half so the credential cannot re-split`); the round trip (`round-trips reserved characters through the provider's form-urlencoded decoder`). |
-| [`injection/__tests__/jwt-bearer-client.test.mts`](../modes/injection/__tests__/jwt-bearer-client.test.mts) | the header on the wire (`authenticates with client_secret_basic and sends only isolated headers`), reserved characters (`percent-encodes reserved characters in the client credentials (RFC 6749 section 2.3.1)`), the secret never in an error message (`never puts the assertion or the client secret into an error message`). |
+- **Pure.** No I/O, configuration, logging or state; nothing to fail or release. A wrong or unregistered credential surfaces as a provider `401`, which each caller interprets.
+- **Encode each half before joining (RFC 6749 §2.3.1).** Each half is form-urlencoded before the two are joined with `:` and base64'd, so a reserved character in either half round-trips byte for byte through the provider's decoder. The encoding is spelled out in the doc comment on [`clientSecretBasic`](client-secret-basic.mts) and pinned by [`__tests__/client-secret-basic.test.mts`](__tests__/client-secret-basic.test.mts).
+- **The secret goes only into this header.** It takes the raw `client_id` and `client_secret` as configured (do not pre-encode them), and the output goes on the wire unchanged as the provider call's `Authorization`; the secret appears in no other outbound place.

@@ -13,6 +13,13 @@
  * See the License for the specific language governing permissions and
  * limitations under the License.
  */
+
+/**
+ * Mode selection: `resolveRouter` builds exactly one mode router, chosen by
+ * `auth.mode`, with an exhaustive guard. Split out of `app.mts` so it can be
+ * tested without listening (`__tests__/mode-selection.test.mts`).
+ */
+
 import type { Router } from "express";
 import type { AppConfig } from "../config/application.schema.mjs";
 import { createRouter as createInjectionRouter } from "./modes/injection/router.mjs";

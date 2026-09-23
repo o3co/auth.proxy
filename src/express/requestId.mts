@@ -1,6 +1,12 @@
 // SPDX-FileCopyrightText: 2026 1o1 Co. Ltd.
 // SPDX-License-Identifier: Apache-2.0
 
+/**
+ * The request-id middleware, `createRequestIdMiddleware`: it settles one id
+ * per request, writes it back into `req.headers` and echoes it on the
+ * response.
+ */
+
 import crypto from "node:crypto";
 import type { RequestHandler } from "express";
 

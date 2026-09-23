@@ -13,6 +13,13 @@
  * See the License for the specific language governing permissions and
  * limitations under the License.
  */
+
+/**
+ * The liveness probe: `GET /_healthcheck` answers `200 {"status":"ok"}`. It
+ * sits outside the mode routers, which are what mount the request-id
+ * middleware, so it carries no request id: none is read, generated or echoed.
+ */
+
 import express from "express";
 
 /** Liveness only: the process is up and the event loop is turning. */

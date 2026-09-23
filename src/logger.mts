@@ -13,6 +13,21 @@
  * See the License for the specific language governing permissions and
  * limitations under the License.
  */
+
+/**
+ * The proxy's logger: the `Logger` interface every module logs through, and
+ * the process-wide singleton (the default export) that writes NDJSON to
+ * stdout at the level `LOG_LEVEL` names (default `info`).
+ *
+ * Anything logged under the `error` key goes through `serializeLoggedError`,
+ * an allowlist (#95 F48): an Error keeps its class name, message, stack and the
+ * fields in `LOGGED_ERROR_FIELDS`, follows `cause` at most `MAX_CAUSE_DEPTH`
+ * levels, and has URL credentials redacted; every other property is dropped.
+ * The allowlist covers the `error` key only — a value under `err` (which
+ * `shutdown.mts` uses for a failed `server.close` or cleanup) goes through
+ * pino's default serialiser.
+ */
+
 import pino, { type DestinationStream } from "pino";
 
 /**

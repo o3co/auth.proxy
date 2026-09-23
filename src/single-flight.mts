@@ -14,6 +14,13 @@
  * limitations under the License.
  */
 
+/**
+ * Request coalescing: `SingleFlight`, and its in-memory default. One flight
+ * per key; every waiter shares the leader's result or rejection; the slot is
+ * cleared in `finally`, settled either way, so the next call for the key
+ * starts a new flight. Both modes coalesce with it, and it belongs to neither.
+ */
+
 export interface SingleFlightResult<T> {
 	value: T;
 	wasWaiter: boolean;
