@@ -458,10 +458,23 @@ describe("createIntrospectionClient", () => {
 		},
 	);
 
-	it("propagates fetch rejection (network error / AbortError)", async () => {
-		const abortErr = new DOMException("The operation was aborted", "AbortError");
-		fetchMock.mockRejectedValueOnce(abortErr);
+	// #95 F42: a call that never answered is the provider failing, as a 5xx
+	// is, so it is an IntrospectHttpError too — the decision answers every one
+	// of those 502, and keeps 500 for what the proxy did not expect. The
+	// original stays reachable as the cause, for the log line.
+	it.each([
+		["a timeout", new DOMException("The operation was aborted due to timeout", "TimeoutError")],
+		["a network error", new TypeError("fetch failed")],
+		["a non-Error rejection", "boom"],
+	])("wraps %s as a 502, keeping it as the cause", async (_label, err) => {
+		fetchMock.mockRejectedValueOnce(err);
 
-		await expect(clientFor().introspect("t", "r")).rejects.toBe(abortErr);
+		const thrown = await clientFor()
+			.introspect("t", "r")
+			.catch((e: unknown) => e);
+
+		expect(thrown).toBeInstanceOf(IntrospectHttpError);
+		expect(thrown).toMatchObject({ status: 502, refusedCredential: null, cause: err });
+		expect((thrown as Error).message).toMatch(/^introspect call failed: /);
 	});
 });
