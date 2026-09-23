@@ -288,7 +288,7 @@ Validation mode:
 | `CLIENT_ID` | Client ID for introspection auth (optional; must be set together with `CLIENT_SECRET`). |
 | `CLIENT_SECRET` | Client secret for introspection auth (optional; must be set together with `CLIENT_ID`). |
 | `INTROSPECT_URL` | Introspection endpoint URL. |
-| `VALIDATION_REALM` | RFC 6750 `realm` for `WWW-Authenticate` (optional; printable ASCII without `"` or `\`). Unset, a request using another auth scheme gets no challenge. |
+| `VALIDATION_REALM` | RFC 6750 `realm` for `WWW-Authenticate` (optional; at most 256 printable ASCII characters, without `"`, `\` or surrounding spaces). Unset, a request using another auth scheme gets no challenge. |
 | `INTROSPECT_CACHE_TTL_SEC` | Cache TTL in seconds (default: 30). |
 | `INTROSPECT_CACHE_MAX_ENTRIES` | Cache max entries (default: 10000). |
 | `INTROSPECT_TIMEOUT_MS` | Introspection HTTP timeout (default: 5000). |

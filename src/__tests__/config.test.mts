@@ -85,7 +85,13 @@ describe("proxy config — validation mode", () => {
 			expect(realmOf({ VALIDATION_REALM: "" })).toBeNull();
 		});
 
-		it.each(['a"b', "a\\b", "a\u0001b", "a\u00e9b", "a\nb"])(
+		it("accepts 256 characters, spaces inside, and a single character", () => {
+			expect(realmOf({ VALIDATION_REALM: "x".repeat(256) })).toHaveLength(256);
+			expect(realmOf({ VALIDATION_REALM: "orders, api=v1" })).toBe("orders, api=v1");
+			expect(realmOf({ VALIDATION_REALM: "a" })).toBe("a");
+		});
+
+		it.each(['a"b', "a\\b", "a\u0001b", "a\u00e9b", "a\nb", " ", " a", "a ", "x".repeat(257)])(
 			"refuses %j, which a quoted-string would need to escape or cannot carry",
 			(realm) => {
 				expect(() => realmOf({ VALIDATION_REALM: realm })).toThrow(/auth\.validation\.realm/);

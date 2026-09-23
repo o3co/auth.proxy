@@ -203,7 +203,7 @@ describe("validation router", () => {
 			expect(res.body).toEqual({ code: 400, message: "Invalid Token Type" });
 			// Asserted by name rather than left implicit: RFC 6750 §3.1 keeps an
 			// error code off a request that attempted an unsupported method, and
-			// the challenge that would fit needs a realm (#95 F29, F45).
+			// the challenge that would fit needs a realm, and this app configures none (#95 F29, F45).
 			expect(res.headers["www-authenticate"]).toBeUndefined();
 			expect(upstreamCalls).toBe(0);
 			expect(fetchMock).not.toHaveBeenCalled();

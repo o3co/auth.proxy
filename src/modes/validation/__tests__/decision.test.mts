@@ -124,6 +124,20 @@ describe("the RFC 6750 challenge", () => {
 			expect(outcome.challenge).toBe('Bearer realm="api", error="invalid_token"');
 		});
 
+		it("puts the realm before the error on the provider's own 401 too", async () => {
+			const outcome = await rejectionOf(
+				"Bearer t",
+				(introspect) => {
+					introspect.mockRejectedValueOnce(
+						new IntrospectHttpError(401, "introspect returned 401", "token"),
+					);
+				},
+				"api",
+			);
+
+			expect(outcome.challenge).toBe('Bearer realm="api", error="invalid_token"');
+		});
+
 		it("still challenges nothing on a provider failure", async () => {
 			const outcome = await rejectionOf(
 				"Bearer t",
