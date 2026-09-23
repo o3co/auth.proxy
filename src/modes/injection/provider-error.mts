@@ -102,7 +102,7 @@ export const sanitizeErrorDescription = (
 export const MAX_ERROR_BODY_BYTES = 16 * 1024;
 
 /**
- * The decode both paths read a body through.
+ * How both paths turn a body's bytes into text.
  *
  * `TextDecoder` rather than `Buffer.toString("utf8")` because the two differ
  * on one input: a leading BOM. `TextDecoder` drops it (`ignoreBOM` defaults to
