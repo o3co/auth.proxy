@@ -91,7 +91,7 @@ describe("proxy config — validation mode", () => {
 			expect(realmOf({ VALIDATION_REALM: "a" })).toBe("a");
 		});
 
-		it.each(['a"b', "a\\b", "a\u0001b", "a\u00e9b", "a\nb", " ", " a", "a ", "x".repeat(257)])(
+		it.each(['a"b', "a\\b", "a\u0001b", "a\u00e9b", "a\nb", "a\n", "a\r\n", " ", " a", "a ", "x".repeat(257)])(
 			"refuses %j, which a quoted-string would need to escape or cannot carry",
 			(realm) => {
 				expect(() => realmOf({ VALIDATION_REALM: realm })).toThrow(/auth\.validation\.realm/);
