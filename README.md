@@ -66,7 +66,7 @@ A `500` or `502` carries none, because it is the proxy's or the provider's failu
 
 Two limits worth knowing. A browser cannot read the header cross-origin — `WWW-Authenticate` is not CORS-safelisted and this proxy sets no `Access-Control-Expose-Headers` — so a SPA on another origin sees the status and the body only. And `invalid_token` invites a client to fetch a new token and retry (§3.1), which cannot help in the audience case described below: a token the provider calls `active: false` because its `aud` does not name this proxy's client is refused the same way however fresh it is.
 
-**Logging.** Each provider failure is logged once, with the request id as `requestId`, the error under `error` and one of these events:
+**Logging.** A provider failure is logged once for each request it answers — requests that share one provider call (single-flight) each log it — with the request id as `requestId`, the error under `error` and one of these events:
 
 | Event | Level | When |
 | --- | --- | --- |
