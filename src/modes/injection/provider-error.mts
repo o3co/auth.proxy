@@ -28,17 +28,40 @@ const MAX_ERROR_CODE_LENGTH = 64;
 const JWT_SHAPE_RE = /[A-Za-z0-9_-]+\.[A-Za-z0-9_-]+\.[A-Za-z0-9_-]*/;
 
 /**
- * Below this length a credential is only matched exactly: a substring test on
- * a one- or two-character value would refuse ordinary text for no gain.
+ * Whether a provider's text carries one of the credentials this request sent,
+ * anywhere inside it and at any length (#95 F30).
+ *
+ * There used to be a length below which only an exact echo counted, on the
+ * reasoning that a substring test on a one- or two-character value refuses
+ * ordinary text for no gain. It is not for no gain: one of these credentials
+ * is the caller's session cookie value, whose length the proxy does not
+ * choose and cannot bound, and with the threshold a cookie value of `abc` sat
+ * inside `bad abc` in a log line and in the `error_description` relayed to the
+ * client.
+ *
+ * Only one of the three credentials can realistically be short. An assertion
+ * is at least nine characters by the time `JWS_COMPACT_RE` and the two
+ * base64url JSON segments have admitted it, so this is a no-op there; a client
+ * secret is the operator's own configuration; the cookie value is the
+ * caller's, and nothing bounds it. The rule is uniform anyway because this
+ * function is deliberately anonymous — it does not know which string is
+ * which, and buying diagnostics back for a three-character client secret is
+ * not worth breaking that.
+ *
+ * The cost is real and bounded: a very short credential refuses almost any
+ * text. What that loses is the provider's diagnostic — every caller classifies
+ * the raw value before sanitising, and substitutes its own wording for a
+ * refusal, so the status, the code and the logged event are unaffected and
+ * only the relayed or logged text changes. A lost diagnostic is cheaper than a
+ * credential in a log. The two costs differ in reach: a short cookie degrades
+ * that caller's requests, a short secret degrades every exchange refusal until
+ * it is rotated — which is a loud nudge to rotate it.
+ *
+ * An empty credential is skipped: `value.includes("")` is true of every
+ * string, so one would otherwise refuse everything.
  */
-const MIN_CONTAINED_CREDENTIAL_LENGTH = 8;
-
 const echoesCredential = (value: string, credentials: readonly string[]): boolean =>
-	credentials.some((credential) =>
-		credential.length >= MIN_CONTAINED_CREDENTIAL_LENGTH
-			? value.includes(credential)
-			: credential.length > 0 && value === credential,
-	);
+	credentials.some((credential) => credential.length > 0 && value.includes(credential));
 
 /**
  * The provider's `error` value, reduced to something safe to log.
@@ -48,8 +71,7 @@ const echoesCredential = (value: string, credentials: readonly string[]): boolea
  * would otherwise put a credential into the proxy's logs. Only a value that is
  * shaped like an OAuth error code survives: the RFC 6749 charset without
  * whitespace, at most 64 characters, nothing shaped like a JWT, and none of
- * `credentials` inside it (a credential shorter than 8 characters only as an
- * exact match). Anything else is recorded as
+ * `credentials` inside it, at any length (#95 F30). Anything else is recorded as
  * {@link INVALID_ERROR_CODE}; an absent `error` is `null`.
  *
  * Classifying a response still compares the raw value against known codes —
