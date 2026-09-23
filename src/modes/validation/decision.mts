@@ -154,6 +154,11 @@ const reject = (
  * inbound bytes go upstream (F14).
  *
  * Every challenge carries `policy.realm` when one is configured.
+ *
+ * Every provider failure is logged once, with `requestId`, a `validation.*`
+ * `event` and the thrown value under `error` — the vocabulary the injection
+ * path logs in (#134). The provider's 401 about the caller's token is info;
+ * everything that is the proxy's or the provider's own failure is error.
  */
 export const decideValidation = async (
 	{ requestId, authorization }: ValidationInputs,
@@ -200,39 +205,60 @@ export const decideValidation = async (
 		// statement about the caller's token — the provider never examined it
 		// (#95 F7). It is the deployment's own configuration, so it is reported
 		// as a provider-side failure and logged as the actionable thing it is,
-		// the way the injection path already reports `provider_config_error`.
+		// under the event the injection path gives it (#134).
 		if (
 			e instanceof IntrospectHttpError &&
 			e.status === 401 &&
 			e.refusedCredential === "client"
 		) {
 			logger.error(
-				{ "x-request-id": requestId, error: e },
+				{ requestId, event: "validation.provider_config_error", error: e },
 				"introspect refused the proxy's client credentials",
 			);
 			return reject(502, "Provider Configuration Error", null);
 		}
 		// A redirecting introspection endpoint is the same kind of thing: the
-		// deployment's configuration, reported as such (#95 F43). The client
-		// asks fetch not to follow, so the 3xx arrives with its own status.
+		// deployment's configuration, reported as such (#95 F43), under the
+		// same event — the injection path files a redirect there too. The
+		// client asks fetch not to follow, so the 3xx arrives with its own status.
 		if (e instanceof IntrospectHttpError && e.status >= 300 && e.status < 400) {
-			logger.error({ "x-request-id": requestId, error: e }, "introspect endpoint redirected");
+			logger.error(
+				{ requestId, event: "validation.provider_config_error", error: e },
+				"introspect endpoint redirected",
+			);
 			return reject(502, "Provider Configuration Error", null);
 		}
-		logger.error({ "x-request-id": requestId, error: e }, "introspect failed");
 		// Every other 401 is about the token: the bundled client marks it, and a
 		// supplied introspector that marks nothing is read the way it always was.
+		// It is the caller's refusal, not the proxy failing, so it is logged at
+		// info — the level `injection.session_unauthorized` has (#134).
 		if (e instanceof IntrospectHttpError && e.status === 401) {
+			logger.info(
+				{ requestId, event: "validation.token_unauthorized", error: e },
+				"introspect failed",
+			);
 			return reject(401, "Invalid Token", invalidToken);
 		}
 		// The rest of IntrospectHttpError is the provider failing, and a gateway
 		// reports its upstream's failure as 502 (RFC 9110 §15.6.3) — the status
-		// the injection path gives every one of these already (#95 F42). What
-		// is left is something the proxy, or a supplied introspector, did not
-		// expect, and that is the proxy's own 500.
+		// the injection path gives every one of these already (#95 F42). One
+		// event for all of them: the class carries a status and no finer
+		// classification, so an outage and a 200 that is not an introspection
+		// response cannot be told apart here the way injection's
+		// `provider_unavailable` and `provider_invalid_response` are.
 		if (e instanceof IntrospectHttpError) {
+			logger.error(
+				{ requestId, event: "validation.provider_error", error: e },
+				"introspect failed",
+			);
 			return reject(502, "Bad Gateway", null);
 		}
+		// What is left is something the proxy, or a supplied introspector, did
+		// not expect, and that is the proxy's own 500.
+		logger.error(
+			{ requestId, event: "validation.unexpected_error", error: e },
+			"introspect failed",
+		);
 		return reject(500, "Internal Server Error", null);
 	}
 
