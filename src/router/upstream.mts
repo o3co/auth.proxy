@@ -29,8 +29,10 @@ export interface UpstreamStageConfig {
  * a mode's decision, so both routers mount this one function instead of each
  * carrying its own copy (#95 F18).
  *
- * What the decorator does. It sets `Authorization`, in canonical casing, to
- * the inbound value, and re-sets `x-request-id` to the value it already has.
+ * What the decorator does. When an `Authorization` header arrived — empty
+ * included, as the injection paths read presence (#95 F40, #133) — it sets
+ * `Authorization`, in canonical casing, to the inbound value, and it re-sets
+ * `x-request-id` to the value it already has.
  *
  * What it does not do: choose what is forwarded. What reaches upstream is
  * decided before this stage, on `req.headers`. express-http-proxy copies every
@@ -55,7 +57,9 @@ export const createUpstreamProxy = (config: UpstreamStageConfig): RequestHandler
 	proxy(config.upstream.baseURL, {
 		limit: config.http.bodyLimitSize,
 		proxyReqOptDecorator: async (proxyReqOpts, srcReq) => {
-			if (srcReq?.headers?.authorization) {
+			// Presence, as the injection paths read it (#95 F40, #133): an empty
+			// `Authorization:` is re-set in canonical casing too.
+			if (srcReq?.headers?.authorization !== undefined) {
 				proxyReqOpts.headers.Authorization = srcReq.headers.authorization;
 			}
 			if (srcReq?.headers?.["x-request-id"]) {
