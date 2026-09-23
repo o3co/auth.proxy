@@ -12,6 +12,7 @@
 import { describe, expect, it, vi } from "vitest";
 import type { ExchangeConfig } from "../../../../config/application.schema.mjs";
 import type { Logger } from "../../../logger.mjs";
+import { createSingleFlight } from "../../../single-flight.mjs";
 import type { ExchangeArgs } from "../decision.mjs";
 import {
 	decideExchange,
@@ -25,7 +26,6 @@ import {
 	type JwtBearerErrorCode,
 	type JwtBearerResult,
 } from "../jwt-bearer-client.mjs";
-import { createSingleFlight } from "../single-flight.mjs";
 import { createTokenCache } from "../token-cache.mjs";
 
 const ENABLED: Extract<ExchangeConfig, { enabled: true }> = {

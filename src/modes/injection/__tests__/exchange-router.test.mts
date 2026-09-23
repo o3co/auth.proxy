@@ -7,9 +7,9 @@ import { afterEach, beforeEach, describe, expect, it, vi } from "vitest";
 import type { AppConfig, ExchangeConfig } from "../../../../config/application.schema.mjs";
 import type { Logger } from "../../../logger.mjs";
 import logger from "../../../logger.mjs";
+import { createSingleFlight, type SingleFlight } from "../../../single-flight.mjs";
 import { exchangeCacheKey, exchangeContext } from "../exchange.mjs";
 import { createRouter } from "../router.mjs";
-import { createSingleFlight, type SingleFlight } from "../single-flight.mjs";
 import { createTokenCache } from "../token-cache.mjs";
 
 // External credential exchange (#90): with auth.injection.exchange enabled, an

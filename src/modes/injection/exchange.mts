@@ -16,6 +16,7 @@
 import crypto from "node:crypto";
 import type { ExchangeConfig } from "../../../config/application.schema.mjs";
 import type { Logger } from "../../logger.mjs";
+import type { SingleFlight } from "../../single-flight.mjs";
 import { parseBearerAssertion } from "./bearer-assertion.mjs";
 import { computeCacheExpiresAt } from "./cache-expiry.mjs";
 import type { ExchangeArgs, InjectionOutcome } from "./decision.mjs";
@@ -24,7 +25,6 @@ import {
 	type JwtBearerClient,
 	JwtBearerError,
 } from "./jwt-bearer-client.mjs";
-import type { SingleFlight } from "./single-flight.mjs";
 import type { TokenCache } from "./token-cache.mjs";
 import { buildTokenUrl } from "./token-endpoint.mjs";
 

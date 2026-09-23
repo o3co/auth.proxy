@@ -20,10 +20,15 @@ import type { AppConfig } from "../../../config/application.schema.mjs";
 import { createRequestIdMiddleware } from "../../express/requestId.mjs";
 import defaultLogger from "../../logger.mjs";
 import { createUpstreamProxy } from "../../router/upstream.mjs";
+import { createSingleFlight } from "../../single-flight.mjs";
 import { decideValidation, type Introspector, type ValidationDeps } from "./decision.mjs";
 import { createIntrospector } from "./introspect.mjs";
 import { createIntrospectionCache } from "./introspection-cache.mjs";
-import { type ClientCredentials, createIntrospectionClient } from "./introspection-client.mjs";
+import {
+	type ClientCredentials,
+	createIntrospectionClient,
+	type IntrospectionResult,
+} from "./introspection-client.mjs";
 
 type ValidationConfig = Extract<AppConfig["auth"], { mode: "validation" }>;
 
@@ -85,6 +90,10 @@ const buildIntrospector = (validation: ValidationConfig["validation"]): Introspe
 			credentials,
 		}),
 		cache: createIntrospectionCache({ maxEntries: validation.introspect.cacheMaxEntries }),
+		// The router's own, like the cache: not supplied through `deps`, because
+		// a caller that supplies `deps.introspect` replaces everything below
+		// this seam and owns its own coalescing (#95 F3, F6).
+		singleFlight: createSingleFlight<IntrospectionResult>(),
 		cacheTtlSec: validation.introspect.cacheTtlSec,
 	});
 };

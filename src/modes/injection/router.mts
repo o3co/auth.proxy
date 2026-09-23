@@ -20,6 +20,7 @@ import { createRequestIdMiddleware } from "../../express/requestId.mjs";
 import type { Logger } from "../../logger.mjs";
 import defaultLogger from "../../logger.mjs";
 import { createUpstreamProxy } from "../../router/upstream.mjs";
+import { createSingleFlight } from "../../single-flight.mjs";
 import { decideInjection, type InjectionDeps } from "./decision.mjs";
 import {
 	decideExchange,
@@ -29,7 +30,6 @@ import {
 } from "./exchange.mjs";
 import { createJwtBearerClient } from "./jwt-bearer-client.mjs";
 import { createSessionGrantClient } from "./session-grant-client.mjs";
-import { createSingleFlight } from "./single-flight.mjs";
 import { createTokenCache } from "./token-cache.mjs";
 
 type InjectionConfig = Extract<AppConfig["auth"], { mode: "injection" }>;
