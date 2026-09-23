@@ -96,6 +96,11 @@ export const createIntrospectionClient = ({
 			});
 
 			if (!resp.ok) {
+				// Nothing reads an error body on this path, and an unread one holds
+				// its socket out of undici's pool until the response is collected
+				// (#95 F28). Cancelling is the release; a cancel that itself fails
+				// must not replace the status this call is here to report.
+				await resp.body?.cancel().catch(() => undefined);
 				throw new IntrospectHttpError(resp.status, `introspect returned ${resp.status}`);
 			}
 

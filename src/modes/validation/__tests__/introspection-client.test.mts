@@ -238,6 +238,63 @@ describe("createIntrospectionClient", () => {
 		await expect(p).rejects.toMatchObject({ status: 503 });
 	});
 
+	// Nothing here reads an error body, but leaving it unread keeps the socket
+	// out of undici's pool until the response is collected (#95 F28). The
+	// non-2xx path is the only one that throws before the body is consumed:
+	// every other refusal runs after `resp.json()`.
+	it.each([401, 503])(
+		"cancels the body of a %d response instead of leaving it unread",
+		async (status) => {
+			let cancelled = false;
+			const resp = new Response(
+				new ReadableStream<Uint8Array>({
+					start(controller) {
+						controller.enqueue(new TextEncoder().encode('{"error":"x"}'));
+					},
+					cancel() {
+						cancelled = true;
+					},
+				}),
+				{ status },
+			);
+			fetchMock.mockResolvedValueOnce(resp);
+
+			await expect(clientFor().introspect("t", "r")).rejects.toMatchObject({
+				name: "IntrospectHttpError",
+				status,
+			});
+
+			expect(cancelled).toBe(true);
+			expect(resp.bodyUsed).toBe(true);
+		},
+	);
+
+	// The cancellation is a release, not an answer. A stream that is already
+	// errored — the connection reset before anything read it — rejects its own
+	// cancel, and without the swallow that rejection would replace the status
+	// this call exists to report: a provider 401 would reach the decision as an
+	// unknown failure and be answered 500 rather than 401 Invalid Token.
+	it("keeps the provider's status when cancelling the body fails", async () => {
+		fetchMock.mockResolvedValueOnce(
+			new Response(
+				new ReadableStream<Uint8Array>({
+					start(controller) {
+						controller.enqueue(new TextEncoder().encode('{"error":"x"}'));
+					},
+					cancel() {
+						throw new Error("socket hang up");
+					},
+				}),
+				{ status: 401 },
+			),
+		);
+
+		await expect(clientFor().introspect("t", "r")).rejects.toMatchObject({
+			name: "IntrospectHttpError",
+			status: 401,
+		});
+	});
+
 	it("propagates fetch rejection (network error / AbortError)", async () => {
 		const abortErr = new DOMException("The operation was aborted", "AbortError");
 		fetchMock.mockRejectedValueOnce(abortErr);
