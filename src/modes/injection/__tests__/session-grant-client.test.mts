@@ -303,6 +303,7 @@ describe("createSessionGrantClient.exchange", () => {
 	// to tell an expired session from the proxy's own client being refused.
 	it.each([
 		[302, "provider_config_error"],
+		[201, "provider_unavailable"],
 		[503, "provider_unavailable"],
 		[403, "provider_unavailable"],
 	])("cancels the body of a %d it answers without reading (%s)", async (status, code) => {
@@ -615,6 +616,35 @@ describe("createSessionGrantClient.exchange", () => {
 			code: "provider_unavailable",
 			status: 502,
 			retryAfter: null,
+		});
+	});
+
+	// #95 F38: RFC 6749 §5.1's success is a 200. Any other 2xx — even one
+	// carrying a well-formed token — is an unexpected status, answered as the
+	// jwt-bearer client answers it, and never reported as a 200.
+	it.each([201, 202, 206])("refuses a %d carrying a token as an unexpected status", async (status) => {
+		fetchMock.mockResolvedValueOnce(
+			jsonResponse(status, { access_token: "tok-123", token_type: "Bearer", expires_in: 120 }),
+		);
+
+		await expect(
+			client().exchange({ sessionCookieValue: "c", requestId: "r" }),
+		).rejects.toMatchObject({
+			code: "provider_unavailable",
+			status: 502,
+			message: `unexpected provider response: ${status}`,
+		});
+	});
+
+	it("refuses a 204 as an unexpected status, not as a 200 without a token", async () => {
+		fetchMock.mockResolvedValueOnce(new Response(null, { status: 204 }));
+
+		await expect(
+			client().exchange({ sessionCookieValue: "c", requestId: "r" }),
+		).rejects.toMatchObject({
+			code: "provider_unavailable",
+			status: 502,
+			message: "unexpected provider response: 204",
 		});
 	});
 
