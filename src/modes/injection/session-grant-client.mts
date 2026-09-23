@@ -81,6 +81,17 @@ export const createSessionGrantClient = (
 						Accept: "application/json",
 					},
 					body,
+					// The token endpoint is configuration, not somewhere a provider
+					// moves at runtime, and neither way a redirect goes is one this
+					// call can report honestly (#95 F8). Same-origin, `fetch` keeps
+					// the Cookie and re-sends it to a path nothing configured, with
+					// the method changed to GET on a 301/302/303. Cross-origin it
+					// strips the Cookie, so the provider sees an unauthenticated
+					// request, answers 401, and the caller is told to authenticate
+					// again over a misconfigured endpoint. The jwt-bearer client has
+					// always refused a redirect; this one inherited `fetch`'s default
+					// of following up to twenty.
+					redirect: "manual",
 					signal: AbortSignal.timeout(cfg.timeoutMs),
 				});
 			} catch (err) {
@@ -117,6 +128,15 @@ export const createSessionGrantClient = (
 				const expiresIn =
 					typeof data.expires_in === "number" ? data.expires_in : null;
 				return { accessToken, expiresIn };
+			}
+
+			if (resp.status >= 300 && resp.status < 400) {
+				throw new SessionGrantError(
+					"provider_config_error",
+					502,
+					`provider token endpoint redirected (${resp.status})`,
+					retryAfter,
+				);
 			}
 
 			if (resp.status === 401) {

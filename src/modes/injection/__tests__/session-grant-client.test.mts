@@ -233,6 +233,44 @@ describe("createSessionGrantClient.exchange", () => {
 		});
 	});
 
+	// The jwt-bearer client has always refused a redirecting token endpoint
+	// rather than following it; this one let fetch follow by default, which
+	// sends the session cookie wherever the Location points (#95 F8).
+	it("asks fetch not to follow a redirect", async () => {
+		fetchMock.mockResolvedValueOnce(
+			jsonResponse(200, { access_token: "tok", token_type: "Bearer" }),
+		);
+
+		await createSessionGrantClient(baseCfg).exchange({
+			sessionCookieValue: "c",
+			requestId: "r",
+		});
+
+		expect((fetchMock.mock.calls[0][1] as RequestInit).redirect).toBe("manual");
+	});
+
+	// 300 is in the list because the range is `>= 300`, not because `fetch`
+	// would follow one: it does not, any more than it follows a 304, 305 or
+	// 306. They are refused as a redirect anyway, which is the bound the
+	// jwt-bearer client has always used and this one now copies.
+	it.each([300, 301, 302, 303, 307, 308])(
+		"refuses a 3xx rather than following it (%d)",
+		async (status) => {
+			fetchMock.mockResolvedValueOnce(
+				new Response("", { status, headers: { Location: "https://elsewhere.test/oauth/token" } }),
+			);
+			const client = createSessionGrantClient(baseCfg);
+
+			await expect(
+				client.exchange({ sessionCookieValue: "c", requestId: "r" }),
+			).rejects.toMatchObject({
+				code: "provider_config_error",
+				status: 502,
+				message: `provider token endpoint redirected (${status})`,
+			});
+		},
+	);
+
 	it("throws session_unauthorized on provider 401 with Retry-After propagation", async () => {
 		fetchMock.mockResolvedValueOnce(
 			jsonResponse(401, { error: "invalid_grant" }, { "retry-after": "30" }),
