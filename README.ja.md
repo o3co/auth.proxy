@@ -66,6 +66,17 @@
 
 知っておくべき限界が 2 つある。ブラウザはクロスオリジンではこのヘッダーを読めない — `WWW-Authenticate` は CORS セーフリストに含まれず、このプロキシは `Access-Control-Expose-Headers` を設定しない — ので、別オリジンの SPA に見えるのはステータスとボディだけである。また `invalid_token` はクライアントに新しいトークンを取得して再試行するよう促す（§3.1）が、後述の audience のケースではそれは役に立たない。`aud` がこのプロキシのクライアントを指していないためにプロバイダーが `active: false` と答えるトークンは、どれだけ新しくても同じように拒否される。
 
+**ログ。** プロバイダーの失敗はそれぞれ 1 回だけ、リクエスト ID を `requestId`、エラーを `error` に入れ、次のいずれかのイベントとしてログする:
+
+| イベント | レベル | 条件 |
+| --- | --- | --- |
+| `validation.token_unauthorized` | info | プロバイダーが呼び出し元のトークンについて `401` を返した（`401 Invalid Token`）。 |
+| `validation.provider_config_error` | error | プロバイダーがプロキシ自身のクライアント資格情報を拒否した、またはエンドポイントがリダイレクトした（`502 Provider Configuration Error`）。 |
+| `validation.provider_error` | error | それ以外のプロバイダーの失敗 — `5xx`、`429`、その他の `4xx`、イントロスペクション応答ではない応答、タイムアウト、ネットワークエラー（`502 Bad Gateway`）。 |
+| `validation.unexpected_error` | error | それ以外に投げられたもの（`500 Internal Server Error`）。 |
+
+プロバイダーが拒否したトークンはプロキシではなく呼び出し元の問題なので、`injection.session_unauthorized` と同じレベルでログし、error レベルの行に対するアラートは発火しない。`active: false` の応答はログしない。
+
 JWT ローカル検証との比較:
 
 - 失効したトークンを検出できる（イントロスペクションキャッシュ TTL の範囲内）。失効を検出できる検証方式はこれだけ（[アクセストークンの寿命と失効](#アクセストークンの寿命と失効)を参照）。
@@ -87,7 +98,7 @@ JWT ローカル検証との比較:
 
 `https://api.example.com/orders` の前段に置いたプロキシが無関係な `client_id` で認証している場合、RFC 8707 `resource` audience 付きで発行されたトークンにはすべて `401` を返す — resource indicator を使っている環境では、それは受け取る全リクエストを意味する。
 
-**プロバイダーの `401` が意味するもの。** RFC 7662 §2.3 ではイントロスペクション要求は認証されるので、プロバイダーの `401` は、その要求が載せていたクレデンシャルに対する答えである。クライアント資格情報が無い場合、そのクレデンシャルは受信トークン*そのもの*であり、`401` は呼び出し元についての答え — `401 Invalid Token` — になる。資格情報がある場合、クレデンシャルはプロキシ自身の Basic ヘッダーであり、`401` が拒否したのは*プロキシ*で、呼び出し元のトークンは検査すらされていない。これは `502 Provider Configuration Error` とし、汎用の `introspect failed` ではなく `introspect refused the proxy's client credentials` としてログする。直すのはオペレーターだからである。インジェクション経路も同じ状況を `provider_config_error` 502 として報告する — 交換は当初から、セッショングラントは #95 F47 以降。したがって設定を誤ったデプロイは、クライアントやゲートウェイが `401` よりも積極的に再試行するステータスを返し、それが[プロバイダーのレート制限](#プロバイダーのレート制限)で述べるインスタンス単位のイントロスペクション予算を消費する。直すべきは資格情報であって、再試行ポリシーではない。
+**プロバイダーの `401` が意味するもの。** RFC 7662 §2.3 ではイントロスペクション要求は認証されるので、プロバイダーの `401` は、その要求が載せていたクレデンシャルに対する答えである。クライアント資格情報が無い場合、そのクレデンシャルは受信トークン*そのもの*であり、`401` は呼び出し元についての答え — `401 Invalid Token` — になる。資格情報がある場合、クレデンシャルはプロキシ自身の Basic ヘッダーであり、`401` が拒否したのは*プロキシ*で、呼び出し元のトークンは検査すらされていない。これは `502 Provider Configuration Error` とし、呼び出し元の `validation.token_unauthorized`（info）ではなく `validation.provider_config_error`（`introspect refused the proxy's client credentials`）として error でログする。直すのはオペレーターだからである。インジェクション経路も同じ状況を `provider_config_error` 502 として報告する — 交換は当初から、セッショングラントは #95 F47 以降。したがって設定を誤ったデプロイは、クライアントやゲートウェイが `401` よりも積極的に再試行するステータスを返し、それが[プロバイダーのレート制限](#プロバイダーのレート制限)で述べるインスタンス単位のイントロスペクション予算を消費する。直すべきは資格情報であって、再試行ポリシーではない。
 
 > `auth.provider` 側の対応変更で、この固定は他のグラントがすでに使っている上限、すなわち `allowedAudiences ∪ {clientId}` に拡張される。それが入るまでは、クライアント認証ありの場合に active となるのは `aud` が呼び出し元の `client_id` と完全一致するトークンだけ。
 
@@ -303,7 +314,7 @@ make docker       # ランタイムイメージのビルド
 | `HTTP_BODY_LIMIT_SIZE` | リクエストボディサイズ上限（デフォルト: 10mb）。 |
 | `UPSTREAM_BASEURL` | アップストリームサービスのベース URL。 |
 | `CORS_ORIGIN_PATTERN` | CORS オリジン正規表現パターン（任意）。 |
-| `LOG_LEVEL` | pino のログレベル — `trace`・`debug`・`info`・`warn`・`error`・`fatal`・`silent`（デフォルト: `info`）。HOCON 設定を経由せず、ロガー生成時に環境変数から直接読む。出力は stdout への NDJSON。 |
+| `LOG_LEVEL` | pino のログレベル — `trace`・`debug`・`info`・`warn`・`error`・`fatal`・`silent`（デフォルト: `info`）。HOCON 設定を経由せず、ロガー生成時に環境変数から直接読む。出力は stdout への NDJSON。どちらのモードでも、リクエストに関する行 — `incoming request` と各判定 — はリクエスト ID を `requestId` に、`injection.*` または `validation.*` という名前の `event` を持つ。 |
 
 バリデーションモード:
 

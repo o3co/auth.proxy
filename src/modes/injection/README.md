@@ -72,7 +72,3 @@ Injection mode turns a session cookie into the outbound `Authorization: Bearer` 
 - **Packages:** `express` and `node:crypto`.
 - **Never imported:** `src/modes/validation`, which in turn never imports this directory. This mode does not use `express/bearer.mts`, because the exchange parses `Authorization` with its own grammar.
 - **Inside the directory:** no import cycles, and neither token client imports the other. What they share lives in `token-endpoint.mts` and `provider-error.mts` (#95 F19).
-
-## Known issues
-
-- [#134](https://github.com/o3co/auth.proxy/issues/134) — log field names and levels differ between the two modes.

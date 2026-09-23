@@ -66,6 +66,17 @@ A `500` or `502` carries none, because it is the proxy's or the provider's failu
 
 Two limits worth knowing. A browser cannot read the header cross-origin — `WWW-Authenticate` is not CORS-safelisted and this proxy sets no `Access-Control-Expose-Headers` — so a SPA on another origin sees the status and the body only. And `invalid_token` invites a client to fetch a new token and retry (§3.1), which cannot help in the audience case described below: a token the provider calls `active: false` because its `aud` does not name this proxy's client is refused the same way however fresh it is.
 
+**Logging.** Each provider failure is logged once, with the request id as `requestId`, the error under `error` and one of these events:
+
+| Event | Level | When |
+| --- | --- | --- |
+| `validation.token_unauthorized` | info | The provider answered `401` about the caller's token (`401 Invalid Token`). |
+| `validation.provider_config_error` | error | The provider refused the proxy's own client credentials, or the endpoint redirected (`502 Provider Configuration Error`). |
+| `validation.provider_error` | error | Any other provider failure — `5xx`, `429`, another `4xx`, a response that is not an introspection response, a timeout or a network error (`502 Bad Gateway`). |
+| `validation.unexpected_error` | error | Anything else thrown (`500 Internal Server Error`). |
+
+A token the provider refuses is the caller's problem, not the proxy's, so it is logged at the level `injection.session_unauthorized` has and an alert on error-level lines does not fire for it. An `active: false` answer is not logged.
+
 Benefits over JWT-only local validation:
 
 - Detects a revoked token — within the introspection cache TTL, and the only validation mode that can (see [Revocation and the access-token lifetime](#revocation-and-the-access-token-lifetime)).
@@ -92,7 +103,7 @@ The client the proxy authenticates as must therefore be associated with the audi
 
 A proxy fronting `https://api.example.com/orders` that authenticates as some unrelated `client_id` answers `401` to every request whose token was minted with an RFC 8707 `resource` audience — which, wherever resource indicators are in use, is every request it sees.
 
-**What a provider `401` means.** RFC 7662 §2.3 has the introspection request authenticated, so the provider's `401` answers whichever credential it carried. Without client credentials the inbound token *is* that credential and the `401` is about the caller: `401 Invalid Token`. With them the credential is the proxy's own Basic header, the `401` refused the *proxy*, and the caller's token was never examined — that is `502 Provider Configuration Error`, logged as `introspect refused the proxy's client credentials` rather than the generic `introspect failed`, because it is the operator's to fix. The injection path reports the same situation as `provider_config_error` 502 — the exchange always has, and the session grant since #95 F47. A misconfigured deployment therefore answers a status that clients and gateways retry more readily than `401`, which spends the same per-instance introspection budget described under [Provider rate limiting](#provider-rate-limiting); the fix is the credential, not the retry policy.
+**What a provider `401` means.** RFC 7662 §2.3 has the introspection request authenticated, so the provider's `401` answers whichever credential it carried. Without client credentials the inbound token *is* that credential and the `401` is about the caller: `401 Invalid Token`. With them the credential is the proxy's own Basic header, the `401` refused the *proxy*, and the caller's token was never examined — that is `502 Provider Configuration Error`, logged at error as `validation.provider_config_error` (`introspect refused the proxy's client credentials`) rather than at info as the caller's `validation.token_unauthorized`, because it is the operator's to fix. The injection path reports the same situation as `provider_config_error` 502 — the exchange always has, and the session grant since #95 F47. A misconfigured deployment therefore answers a status that clients and gateways retry more readily than `401`, which spends the same per-instance introspection budget described under [Provider rate limiting](#provider-rate-limiting); the fix is the credential, not the retry policy.
 
 > A companion change in `auth.provider` widens this pin to `allowedAudiences ∪ {clientId}`, the ceiling its other grants already use. Until it lands, only a token whose `aud` is exactly the caller's `client_id` introspects as active under client authentication.
 
@@ -321,7 +332,7 @@ Shared environment variables:
 | `HTTP_BODY_LIMIT_SIZE` | Request body size limit (default: 10mb). |
 | `UPSTREAM_BASEURL` | Upstream service base URL. |
 | `CORS_ORIGIN_PATTERN` | CORS origin regex pattern (optional). |
-| `LOG_LEVEL` | pino log level — `trace`, `debug`, `info`, `warn`, `error`, `fatal` or `silent` (default: `info`). Read directly from the environment when the logger is created, not through the HOCON config. Output is NDJSON on stdout. |
+| `LOG_LEVEL` | pino log level — `trace`, `debug`, `info`, `warn`, `error`, `fatal` or `silent` (default: `info`). Read directly from the environment when the logger is created, not through the HOCON config. Output is NDJSON on stdout. In both modes, every line about a request — `incoming request` and each decision — carries the request id as `requestId` and an `event` named `injection.*` or `validation.*`. |
 
 Validation mode:
 
