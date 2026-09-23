@@ -149,16 +149,17 @@ describe("sessionCacheKey", () => {
 		["a pipe", { clientId: "a|b", scope: "c" }, { clientId: "a", scope: "b|c" }],
 		["a comma", { clientId: "a,b", scope: "c" }, { clientId: "a", scope: "b,c" }],
 		["JSON's own", { clientId: 'a","b', scope: "c" }, { clientId: "a", scope: 'b","c' }],
-		["the value's edge", { clientId: "a", scope: "b" }, { clientId: "a", scope: "b" }],
-	])("does not let a field shift into its neighbour across %s", (label, left, right) => {
-		// The last row shifts the boundary between the last field and the value
-		// instead, which no context override can express.
-		const [leftKey, rightKey] =
-			label === "the value's edge"
-				? [keyFor("1s", left), keyFor("s1", right)]
-				: [keyFor("s", left), keyFor("s", right)];
+	])("does not let a field shift into its neighbour across %s", (_label, left, right) => {
+		expect(keyFor("s", left)).not.toBe(keyFor("s", right));
+	});
 
-		expect(leftKey).not.toBe(rightKey);
+	// The same shift at the boundary the overrides above cannot express: the
+	// last context field against the cookie value. "sid" + "1s" and "sid1" +
+	// "s" concatenate to the same text, so only the encoding tells them apart.
+	it("does not let the last field shift into the cookie value", () => {
+		expect(keyFor("1s", { sessionCookieName: "sid" })).not.toBe(
+			keyFor("s", { sessionCookieName: "sid1" }),
+		);
 	});
 });
 

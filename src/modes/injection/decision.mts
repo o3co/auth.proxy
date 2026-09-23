@@ -52,27 +52,34 @@ type InjectionConfig = Extract<AppConfig["auth"], { mode: "injection" }>;
  * two are what a caller sharing one cache between routers must still match;
  * the rest is now the key's job.
  *
- * The parameter is the client's own config minus `timeoutMs`, rather than a
- * hand-written list, so a field added to what the client sends has to be
- * added here or omitted on purpose — it cannot be forgotten.
+ * The parameter is the client's own config minus `timeoutMs`, and the rest
+ * element below is what makes that a guarantee rather than a convention: a
+ * field added to what the client sends lands in it and fails the build until
+ * it is keyed or dropped on purpose.
  */
 export const sessionCacheKey = (
 	cfg: Omit<SessionGrantClientConfig, "timeoutMs">,
 	sessionCookieValue: string,
-): string =>
-	crypto
+): string => {
+	const { providerOrigin, clientId, scope, sessionCookieName, ..._unkeyed } = cfg;
+	// Empty by construction today; a new field makes it non-empty and this
+	// assignment stops compiling.
+	const _everythingIsKeyed: Record<string, never> = _unkeyed;
+
+	return crypto
 		.createHash("sha256")
 		.update(
 			JSON.stringify([
 				SESSION_GRANT_TYPE,
-				buildTokenUrl(cfg.providerOrigin),
-				cfg.clientId,
-				cfg.scope,
-				cfg.sessionCookieName,
+				buildTokenUrl(providerOrigin),
+				clientId,
+				scope,
+				sessionCookieName,
 				sessionCookieValue,
 			]),
 		)
 		.digest("hex");
+};
 
 /**
  * What the session decision needs. `createRouter` builds every default and
