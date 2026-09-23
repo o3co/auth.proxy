@@ -636,7 +636,7 @@ describe("createSessionGrantClient.exchange", () => {
 		});
 	});
 
-	it("refuses a 204 as an unexpected status, not as a 200 without a token", async () => {
+	it("refuses a 204 as an unexpected status, not as a malformed 200", async () => {
 		fetchMock.mockResolvedValueOnce(new Response(null, { status: 204 }));
 
 		await expect(
