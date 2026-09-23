@@ -109,6 +109,14 @@ A provider response of `400 invalid_grant` is mapped to `401 session_required`,
 so a revoked session prompts authentication rather than appearing as a proxy
 configuration failure. Other provider 400 responses retain their configuration-error mapping.
 
+A redirect from the token endpoint is not followed on either injection path: it is
+`502 provider_config_error`, with the status in the message. The endpoint is configuration, and a
+followed redirect cannot be reported honestly. A `307` or `308` to the same origin replays the whole
+POST — session cookie and form body — to a path nothing configured, and mints a token there. The same
+statuses cross-origin have the cookie stripped, so the provider answers `401` and the caller is told
+to authenticate again over an endpoint that is merely misconfigured. A `301`, `302` or `303` turns the
+grant into a `GET` with no body, which a token endpoint answers `405`.
+
 #### CSRF responsibility boundary
 
 The proxy is a transparent augmentation layer. It injects the Bearer but does NOT enforce CSRF. Combine with `SameSite=Lax` cookies, same-origin deployment, and CSRF protection in the upstream service. Being transparent cuts the other way too — see [Inbound Authorization headers](#inbound-authorization-headers).
