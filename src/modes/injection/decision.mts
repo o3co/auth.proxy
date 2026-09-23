@@ -22,7 +22,11 @@ import {
 	type CookieRejectReason,
 	extractCookie,
 } from "./cookie-extractor.mjs";
-import { type SessionGrantClient, SessionGrantError } from "./session-grant-client.mjs";
+import {
+	type SessionGrantClient,
+	SessionGrantError,
+	type SessionGrantErrorCode,
+} from "./session-grant-client.mjs";
 import type { SingleFlight } from "./single-flight.mjs";
 import type { TokenCache } from "./token-cache.mjs";
 
@@ -118,6 +122,38 @@ const logCookieRejected = (
 			? "session cookie rejected, forwarding without Authorization"
 			: "malformed session cookie pair skipped, using the next well-formed pair",
 	);
+};
+
+/** How a failed session grant is reported: which level, under which event. */
+interface SessionFailureLine {
+	level: "info" | "error";
+	event: string;
+}
+
+/**
+ * One discriminator for the whole failure branch (#95 F32): the code says what
+ * went wrong, and it decides the body's `error`, the level and the event
+ * together. `status` decides only the status, which is the client's to choose
+ * — the bundled one remaps a 400 `invalid_grant` to 401 deliberately — and it
+ * used to decide the level as well, so an error whose code and status were not
+ * paired was reported as one thing and answered as another.
+ *
+ * `satisfies` is what keeps this exhaustive: a new `SessionGrantErrorCode`
+ * fails the build here rather than falling into the unknown case and being
+ * reported as a provider outage it is not. The lookup is by `string` because a
+ * supplied grant client (F4) is not bound by the union at runtime.
+ */
+const SESSION_FAILURE_LINES: Partial<Record<string, SessionFailureLine>> = {
+	session_unauthorized: { level: "info", event: "injection.session_unauthorized" },
+	provider_config_error: { level: "error", event: "injection.provider_config_error" },
+	provider_invalid_response: { level: "error", event: "injection.provider_invalid_response" },
+	provider_unavailable: { level: "error", event: "injection.provider_unavailable" },
+} satisfies Record<SessionGrantErrorCode, SessionFailureLine>;
+
+/** A code no version of this proxy declared, from a supplied grant client. */
+const UNKNOWN_SESSION_FAILURE: SessionFailureLine = {
+	level: "error",
+	event: "injection.provider_unavailable",
 };
 
 /**
@@ -254,27 +290,8 @@ export const decideInjection = async (
 					err.code === "session_unauthorized" ? "session_required" : err.code,
 				error_description: err.message,
 			};
-			if (err.status === 401) {
-				logger.info(
-					{ requestId, event: "injection.session_unauthorized", error: err.message },
-					"grant failed",
-				);
-			} else if (err.code === "provider_config_error") {
-				logger.error(
-					{ requestId, event: "injection.provider_config_error", error: err.message },
-					"grant failed",
-				);
-			} else if (err.code === "provider_invalid_response") {
-				logger.error(
-					{ requestId, event: "injection.provider_invalid_response", error: err.message },
-					"grant failed",
-				);
-			} else {
-				logger.error(
-					{ requestId, event: "injection.provider_unavailable", error: err.message },
-					"grant failed",
-				);
-			}
+			const { level, event } = SESSION_FAILURE_LINES[err.code] ?? UNKNOWN_SESSION_FAILURE;
+			logger[level]({ requestId, event, error: err.message }, "grant failed");
 			return { kind: "respond", status: err.status, body, retryAfter: err.retryAfter };
 		}
 		logger.error(

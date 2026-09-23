@@ -305,6 +305,52 @@ describe("decideInjection", () => {
 			);
 		});
 
+		// The four cases above are what the bundled client throws, and it always
+		// pairs the code with the status. A supplied grant client (F4) need not,
+		// and the branch used to read the code for the body and the status for
+		// the log line — so an unpaired error was reported as one thing and
+		// answered as another (#95 F32). The code decides both now; the status
+		// decides the status, which is its own job.
+		it.each([
+			{
+				label: "a 401 that is not a session problem is not logged as one",
+				err: new SessionGrantError("provider_config_error", 401, "client authentication refused"),
+				error: "provider_config_error",
+				level: "error" as const,
+				event: "injection.provider_config_error",
+			},
+			{
+				label: "a session problem that is not a 401 is still logged as one",
+				err: new SessionGrantError("session_unauthorized", 502, "session store unreachable"),
+				error: "session_required",
+				level: "info" as const,
+				event: "injection.session_unauthorized",
+			},
+		])("$label", async ({ err, error, level, event }) => {
+			const { deps, logger, grantClient } = makeDeps();
+			grantClient.exchange.mockRejectedValueOnce(err);
+
+			const outcome = await decideInjection(inputs({ cookieHeader: "sid=s1" }), deps);
+
+			// The status on the wire is still the error's own, untouched.
+			expect(outcome).toEqual<InjectionOutcome>({
+				kind: "respond",
+				status: err.status,
+				body: { error, error_description: err.message },
+				retryAfter: null,
+			});
+			expect(fieldsOf(logger[level])).toContainEqual(
+				expect.objectContaining({ event, requestId: "rid-1", error: err.message }),
+			);
+			// Not `.not.toContain(event)`: the old code never logged this event
+			// at the other level, it logged a different one, so that assertion
+			// would pass with the defect in place. The other level carries
+			// nothing but the attempt.
+			expect(eventsOf(logger[level === "info" ? "error" : "info"])).toEqual(
+				level === "info" ? [] : ["injection.grant_fetch"],
+			);
+		});
+
 		it("answers 502 provider_unavailable for an unclassified throw and logs it as a string", async () => {
 			const { deps, logger, grantClient } = makeDeps();
 			grantClient.exchange.mockRejectedValueOnce(new Error("boom"));
