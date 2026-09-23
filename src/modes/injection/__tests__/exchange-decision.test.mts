@@ -327,17 +327,24 @@ describe("decideExchange", () => {
 	});
 
 	describe("provider answers", () => {
-		const answers: [JwtBearerErrorCode, number, "info" | "warn" | "error", string, string | null][] = [
-			["credential_rejected", 401, "info", "injection.exchange_rejected", null],
-			["exchange_not_permitted", 403, "warn", "injection.exchange_not_permitted", null],
-			["provider_config_error", 502, "error", "injection.exchange_provider_config_error", null],
-			["provider_invalid_response", 502, "error", "injection.exchange_provider_invalid_response", null],
-			["provider_unavailable", 503, "error", "injection.exchange_provider_unavailable", "7"],
+		const answers: [
+			JwtBearerErrorCode,
+			number,
+			"info" | "warn" | "error",
+			string,
+			string | null,
+			string,
+		][] = [
+			["credential_rejected", 401, "info", "injection.exchange_rejected", null, "exchange rejected"],
+			["exchange_not_permitted", 403, "warn", "injection.exchange_not_permitted", null, "exchange not permitted"],
+			["provider_config_error", 502, "error", "injection.exchange_provider_config_error", null, "exchange failed"],
+			["provider_invalid_response", 502, "error", "injection.exchange_provider_invalid_response", null, "exchange failed"],
+			["provider_unavailable", 503, "error", "injection.exchange_provider_unavailable", "7", "exchange failed"],
 		];
 
 		it.each(answers)(
 			"%s is answered %i with the client's message, logged at %s as %s",
-			async (code, status, level, event, retryAfter) => {
+			async (code, status, level, event, retryAfter, message) => {
 				const { deps, logger, client } = makeDeps();
 				client.exchange.mockRejectedValueOnce(
 					new JwtBearerError(code, status, `message for ${code}`, retryAfter, "provider_said"),
@@ -355,6 +362,34 @@ describe("decideExchange", () => {
 						requestId: "rid-1",
 						providerError: "provider_said",
 						error: `message for ${code}`,
+					}),
+				);
+				// The line's message too, now that it is data in a table (#95 F41).
+				expect(logger[level]).toHaveBeenCalledWith(expect.objectContaining({ event }), message);
+			},
+		);
+
+		// #95 F41. The exchange client is injectable (F2), and a supplied one is
+		// not bound by JwtBearerErrorCode at runtime. logFailure was a switch
+		// with no default returning void, so an undeclared code fell out of it
+		// and the refusal was answered with no log line at all. The prototype
+		// keys are here for the reason #109 found them on the session path.
+		it.each(["provider_exploded", "constructor", "toString", "__proto__"])(
+			"logs a refusal whose code the union does not declare (%j), rather than nothing",
+			async (code) => {
+				const { deps, logger, client } = makeDeps();
+				client.exchange.mockRejectedValueOnce(
+					new JwtBearerError(code as JwtBearerErrorCode, 502, "a supplied client invented this"),
+				);
+
+				const outcome = await decideExchange(args(makeAssertion()), deps);
+
+				expect(outcome).toMatchObject({ kind: "respond", status: 502 });
+				expect(fieldsOf(logger.error)).toContainEqual(
+					expect.objectContaining({
+						event: "injection.exchange_provider_unavailable",
+						requestId: "rid-1",
+						error: "a supplied client invented this",
 					}),
 				);
 			},
