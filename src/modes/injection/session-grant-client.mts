@@ -17,6 +17,9 @@
 import { readBoundedJsonObject, sanitizeErrorDescription } from "./provider-error.mjs";
 import { buildTokenUrl, parseJsonBody } from "./token-endpoint.mjs";
 
+/** The provider-specific grant this client submits, as the request says it. */
+export const SESSION_GRANT_TYPE = "session";
+
 export type SessionGrantErrorCode =
 	| "session_unauthorized"
 	| "provider_config_error"
@@ -63,7 +66,7 @@ export const createSessionGrantClient = (
 	return {
 		async exchange({ sessionCookieValue, requestId }) {
 			const body = new URLSearchParams({
-				grant_type: "session",
+				grant_type: SESSION_GRANT_TYPE,
 				client_id: cfg.clientId,
 				scope: cfg.scope,
 			}).toString();

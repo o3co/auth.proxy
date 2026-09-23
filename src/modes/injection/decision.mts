@@ -23,17 +23,63 @@ import {
 	extractCookie,
 } from "./cookie-extractor.mjs";
 import {
+	SESSION_GRANT_TYPE,
 	type SessionGrantClient,
+	type SessionGrantClientConfig,
 	SessionGrantError,
 	type SessionGrantErrorCode,
 } from "./session-grant-client.mjs";
 import type { SingleFlight } from "./single-flight.mjs";
 import type { TokenCache } from "./token-cache.mjs";
+import { buildTokenUrl } from "./token-endpoint.mjs";
 
 type InjectionConfig = Extract<AppConfig["auth"], { mode: "injection" }>;
 
-const sha256Hex = (s: string): string =>
-	crypto.createHash("sha256").update(s).digest("hex");
+/**
+ * What the session grant asks the provider, as the key for the answer it gets
+ * back (#95 F33).
+ *
+ * The cache and the flight table are supplied-able (#95 F4), so one instance
+ * can serve two routers. The key was SHA-256 of the cookie value alone, which
+ * made "this cookie's token" mean whatever the first router to ask had asked —
+ * a different provider, client, scope or cookie name is a different question,
+ * and the second router was served the first one's answer.
+ *
+ * Hashed as a JSON array rather than joined, so no field's text can shift into
+ * its neighbour's, and the cookie value never leaves the digest. The cache
+ * policy is not in it: `ttlSeconds` bounds how long an entry lives, not which
+ * token comes back. Neither is the grant client, which cannot be hashed. Those
+ * two are what a caller sharing one cache between routers must still match;
+ * the rest is now the key's job.
+ *
+ * The parameter is the client's own config minus `timeoutMs`, and the rest
+ * element below is what makes that a guarantee rather than a convention: a
+ * field added to what the client sends lands in it and fails the build until
+ * it is keyed or dropped on purpose.
+ */
+export const sessionCacheKey = (
+	cfg: Omit<SessionGrantClientConfig, "timeoutMs">,
+	sessionCookieValue: string,
+): string => {
+	const { providerOrigin, clientId, scope, sessionCookieName, ..._unkeyed } = cfg;
+	// Empty by construction today; a new field makes it non-empty and this
+	// assignment stops compiling.
+	const _everythingIsKeyed: Record<string, never> = _unkeyed;
+
+	return crypto
+		.createHash("sha256")
+		.update(
+			JSON.stringify([
+				SESSION_GRANT_TYPE,
+				buildTokenUrl(providerOrigin),
+				clientId,
+				scope,
+				sessionCookieName,
+				sessionCookieValue,
+			]),
+		)
+		.digest("hex");
+};
 
 /**
  * What the session decision needs. `createRouter` builds every default and
@@ -44,10 +90,13 @@ const sha256Hex = (s: string): string =>
 export interface InjectionDeps {
 	cfg: InjectionConfig["injection"];
 	/**
-	 * Both keyed by SHA-256 of the cookie value alone — nothing of the grant
-	 * context is in the key. An instance supplied through `createRouter({ deps })`
-	 * may therefore be shared only between routers whose grant settings (provider,
-	 * client, scope, grant client) and cache policy are identical (#95 F33).
+	 * Both keyed by {@link sessionCacheKey}, which carries the grant context —
+	 * provider, client, scope, cookie name — beside the cookie value (#95 F33).
+	 * An instance supplied through `createRouter({ deps })` may therefore be
+	 * shared between routers that differ in any of those. What is still not in
+	 * the key, and so still the caller's to match: the `grantClient`, which
+	 * cannot be hashed, and the cache policy, which decides how long an entry
+	 * lives rather than which token comes back.
 	 */
 	tokenCache: TokenCache;
 	singleFlight: SingleFlight<string>;
@@ -260,7 +309,7 @@ export const decideInjection = async (
 	}
 
 	const sessionCookieValue = extraction.value;
-	const cacheKey = sha256Hex(sessionCookieValue);
+	const cacheKey = sessionCacheKey(cfg, sessionCookieValue);
 	const cached = tokenCache.get(cacheKey);
 
 	const inject = (token: string): InjectionOutcome => {
