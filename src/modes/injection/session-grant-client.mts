@@ -114,7 +114,11 @@ export const createSessionGrantClient = (
 
 			const retryAfter = resp.headers.get("retry-after");
 
-			if (resp.ok) {
+			// RFC 6749 §5.1: a successful token response is a 200. Any other 2xx
+			// reaches the unexpected-status tail below, as it does in the
+			// jwt-bearer client — until #95 F38 this was `resp.ok`, and a 204
+			// was refused as "provider returned 200 …", a status it never sent.
+			if (resp.status === 200) {
 				const data = await parseJsonBody(resp);
 				if (data === null) {
 					throw new SessionGrantError(
@@ -217,7 +221,7 @@ export const createSessionGrantClient = (
 					retryAfter,
 				);
 			}
-			// Unexpected 4xx.
+			// Unexpected 4xx, or a 2xx other than 200.
 			await discardBody(resp);
 			throw new SessionGrantError(
 				"provider_unavailable",
