@@ -29,6 +29,53 @@ export interface Logger {
 	debug(...args: [string] | [Record<string, unknown>, string]): void;
 }
 
+/**
+ * The fields of an Error that reach a log line (#95 F48). An allowlist, not
+ * pino's `errWithCause`: that copies every enumerable property, and some
+ * errors carry bytes nobody chose to log — undici's `HTTPParserError.data` is
+ * the unparsed rest of the provider's response, which may echo the token the
+ * proxy just sent. What is kept is what diagnoses a failed call: the class, the
+ * message, the stack, the socket's `code` / `errno` / `syscall`, and the
+ * provider's `status` with the bundled clients' classification.
+ */
+const LOGGED_ERROR_FIELDS = ["code", "errno", "syscall", "status", "refusedCredential"] as const;
+
+/** Deep enough for wrapper → undici → socket, with room; bounded against a cycle. */
+const MAX_CAUSE_DEPTH = 5;
+
+/**
+ * `scheme://user:pass@host` → `scheme://***@host`. undici puts the request URL
+ * in some rejection messages, and the configured introspection URL is only a
+ * string to the schema, so it may carry userinfo.
+ */
+const redactUrlCredentials = (text: string): string =>
+	text.replace(/([a-z][a-z0-9+.-]*:\/\/)[^\s/@]*@/gi, "$1***@");
+
+/**
+ * The serialiser for the `error` key. A non-Error passes through as it is —
+ * injection logs a string there.
+ */
+export const serializeLoggedError = (value: unknown, depth = 0): unknown => {
+	if (!(value instanceof Error)) return value;
+	const out: Record<string, unknown> = {
+		type: value.name,
+		message: redactUrlCredentials(value.message),
+	};
+	if (typeof value.stack === "string") out.stack = redactUrlCredentials(value.stack);
+	const fields = value as unknown as Record<string, unknown>;
+	for (const key of LOGGED_ERROR_FIELDS) {
+		const field = fields[key];
+		if (typeof field === "string" || typeof field === "number") {
+			out[key] = typeof field === "string" ? redactUrlCredentials(field) : field;
+		}
+	}
+	if (value.cause !== undefined && depth < MAX_CAUSE_DEPTH) {
+		out.cause =
+			value.cause instanceof Error ? serializeLoggedError(value.cause, depth + 1) : "[non-Error cause]";
+	}
+	return out;
+};
+
 export interface ProxyLoggerOptions {
 	/** Defaults to `LOG_LEVEL`, then `info`. */
 	level?: string;
@@ -45,7 +92,15 @@ export interface ProxyLoggerOptions {
  */
 export function createProxyLogger(options?: ProxyLoggerOptions): pino.Logger {
 	const level = options?.level ?? process.env.LOG_LEVEL ?? "info";
-	const config = { name: "proxy", level };
+	const config = {
+		name: "proxy",
+		level,
+		// pino serialises an Error only under `err`; the validation path logs
+		// its failures under `error`, where an Error became `{}` plus whatever
+		// fields it declared — no message, no stack, no cause (#95 F48). Not
+		// pino's own serialiser: see `LOGGED_ERROR_FIELDS`.
+		serializers: { error: (value: unknown) => serializeLoggedError(value) },
+	};
 	return options?.destination ? pino(config, options.destination) : pino(config);
 }
 

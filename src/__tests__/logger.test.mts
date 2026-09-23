@@ -16,7 +16,7 @@
  */
 import { PassThrough } from "node:stream";
 import { afterEach, describe, expect, it } from "vitest";
-import { createProxyLogger } from "../logger.mjs";
+import { createProxyLogger, serializeLoggedError } from "../logger.mjs";
 
 const original = process.env.LOG_LEVEL;
 afterEach(() => {
@@ -65,5 +65,77 @@ describe("createProxyLogger", () => {
 		const entry = await firstLine((logger) => logger.warn({ status: 401 }, "rejected"));
 		expect(entry.status).toBe(401);
 		expect(entry.msg).toBe("rejected");
+	});
+
+	// #95 F48: pino serialises an Error only under `err`; validation logs its
+	// failures under `error`, where JSON.stringify kept the enumerable fields
+	// alone — no message, no stack, no cause.
+	it("serialises an Error under `error` with its message, stack and cause chain", async () => {
+		// The shape of a refused introspection call since F42: the wrapper, then
+		// undici's `fetch failed`, then the socket's own error.
+		const refused = Object.assign(new Error("connect ECONNREFUSED 127.0.0.1:1"), {
+			code: "ECONNREFUSED",
+		});
+		const cause = new TypeError("fetch failed", { cause: refused });
+		const entry = await firstLine((logger) =>
+			logger.error({ error: new Error("introspect call failed", { cause }) }, "introspect failed"),
+		);
+		expect(entry.error).toMatchObject({
+			type: "Error",
+			message: "introspect call failed",
+			cause: {
+				type: "TypeError",
+				message: "fetch failed",
+				cause: { message: "connect ECONNREFUSED 127.0.0.1:1", code: "ECONNREFUSED" },
+			},
+		});
+		expect(entry.error.stack).toContain("introspect call failed");
+	});
+
+	it("keeps a string `error` as it is, which is how injection logs", async () => {
+		const entry = await firstLine((logger) => logger.error({ error: "session expired" }, "grant failed"));
+		expect(entry.error).toBe("session expired");
+	});
+
+	// Codex on #95 F48: an allowlist, because undici's HTTPParserError keeps
+	// the unparsed response in `data`, and a provider may echo the token.
+	it("logs only the allowlisted fields of an error in the chain", async () => {
+		const parser = Object.assign(new Error("Response does not match the HTTP/1.1 protocol"), {
+			code: "HPE_INVALID_CONSTANT",
+			data: "token=SECRET-ECHO",
+			headers: { authorization: "Bearer SECRET" },
+		});
+		const entry = await firstLine((logger) =>
+			logger.error(
+				{ error: new Error("introspect call failed", { cause: new TypeError("fetch failed", { cause: parser }) }) },
+				"introspect failed",
+			),
+		);
+		expect(JSON.stringify(entry)).not.toContain("SECRET");
+		expect(entry.error.cause.cause).toMatchObject({ code: "HPE_INVALID_CONSTANT" });
+	});
+
+	it("redacts URL credentials from messages and stacks", async () => {
+		const entry = await firstLine((logger) =>
+			logger.error(
+				{ error: new TypeError("Request cannot be constructed from a URL that includes credentials: https://proxy:hunter2@auth.test/introspect") },
+				"introspect failed",
+			),
+		);
+		expect(JSON.stringify(entry)).not.toContain("hunter2");
+		expect(entry.error.message).toContain("https://***@auth.test/introspect");
+	});
+
+	it("stops at a cycle in the cause chain", () => {
+		const a = new Error("a");
+		const b = new Error("b", { cause: a });
+		Object.defineProperty(a, "cause", { value: b });
+		expect(() => JSON.stringify(serializeLoggedError(a))).not.toThrow();
+	});
+
+	it("passes a non-Error through, message-shaped or not", () => {
+		const shaped = { message: "not an Error", data: "kept as given" };
+		expect(serializeLoggedError(shaped)).toBe(shaped);
+		expect(serializeLoggedError("session expired")).toBe("session expired");
 	});
 });
