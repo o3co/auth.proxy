@@ -24,7 +24,7 @@ const rawPairs = (rawHeaders: string[], name: string): [string, string][] =>
 	Array.from({ length: rawHeaders.length / 2 }, (_, i): [string, string] => [
 		rawHeaders[2 * i],
 		rawHeaders[2 * i + 1],
-	]).filter(([sent]) => sent.toLowerCase() === name);
+	]).filter(([sent]) => sent.toLowerCase() === name.toLowerCase());
 
 describe("createUpstreamProxy on the wire", () => {
 	let upstream: Server;
@@ -63,6 +63,14 @@ describe("createUpstreamProxy on the wire", () => {
 		expect(received).toHaveLength(1);
 		expect(rawPairs(received[0], "authorization")).toEqual([["Authorization", "Bearer inbound-7f3a"]]);
 		expect(rawPairs(received[0], "x-request-id")).toEqual([["x-request-id", "rid-2c9e"]]);
+	});
+
+	it("sends an empty Authorization upstream once, in canonical casing, as the other paths treat it as present (#132, #133)", async () => {
+		const res = await request(app).get("/resource").set("authorization", "");
+
+		expect(res.status).toBe(200);
+		expect(received).toHaveLength(1);
+		expect(rawPairs(received[0], "Authorization")).toEqual([["Authorization", ""]]);
 	});
 
 	it("sends no Authorization upstream when none arrived", async () => {
