@@ -30,11 +30,17 @@
  *   - `provider_config_error` (502)      a 401 `invalid_client` (the proxy's
  *                                        own `clientId`, #95 F47), any other
  *                                        400, or a redirect
- *   - `provider_unavailable` (502)       5xx, network error, timeout, an
+ *   - `provider_unavailable` (502)       5xx, network error, a timeout before
+ *                                        the response headers arrive, an
  *                                        unexpected 4xx or a 2xx other than 200
  *   - `provider_invalid_response` (502)  a 200 that is not a JSON object, is
  *                                        over `MAX_TOKEN_BODY_BYTES`, or lacks
  *                                        an `access_token`
+ *
+ * A timeout while a body is being read is not `provider_unavailable`:
+ * `readBoundedJsonObject` answers `null` for it, so the status decides — a 200
+ * is `provider_invalid_response`, a 400 `provider_config_error`, and a 401
+ * `session_unauthorized`.
  *
  * A body answered from the status alone is released with `discardBody`;
  * every other is read bounded.

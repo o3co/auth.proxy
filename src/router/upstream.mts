@@ -16,8 +16,8 @@
 
 /**
  * The upstream proxy stage both mode routers end with, `createUpstreamProxy`,
- * and the two config fields it reads. What it forwards, and why its decorator
- * is kept, is the doc comment on the function.
+ * and the two config fields it reads. What its decorator does and does not
+ * do, and why it is kept, is the doc comment on the function.
  */
 
 import type { RequestHandler } from "express";
