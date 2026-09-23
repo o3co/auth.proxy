@@ -1,4 +1,3 @@
-import type { Server } from "node:http";
 import type { AddressInfo } from "node:net";
 import type express from "express";
 
@@ -19,7 +18,7 @@ import type express from "express";
 export const listenForFlight = async (
 	app: express.Express,
 	count: number,
-): Promise<{ server: Server; baseURL: string; joined: Promise<void> }> => {
+): Promise<{ baseURL: string; joined: Promise<void>; close: () => Promise<void> }> => {
 	const server = app.listen(0, "127.0.0.1");
 	await new Promise((resolve) => server.once("listening", resolve));
 	let arrived = 0;
@@ -31,8 +30,14 @@ export const listenForFlight = async (
 	});
 	const { port } = server.address() as AddressInfo;
 	return {
-		server,
 		baseURL: `http://127.0.0.1:${port}`,
 		joined: allArrived.then(() => new Promise<void>((resolve) => setImmediate(resolve))),
+		// Drops kept-alive connections too, and waits for the listener to go,
+		// so no server outlives its test.
+		close: () =>
+			new Promise<void>((resolve, reject) => {
+				server.closeAllConnections();
+				server.close((err) => (err ? reject(err) : resolve()));
+			}),
 	};
 };

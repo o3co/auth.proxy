@@ -181,7 +181,7 @@ describe("injection router", () => {
 				grantControl.resolve = resolve;
 			}),
 		);
-		const { server, baseURL, joined } = await listenForFlight(mountApp(makeConfig(upstream.baseURL)), 3);
+		const { baseURL, joined, close } = await listenForFlight(mountApp(makeConfig(upstream.baseURL)), 3);
 
 		try {
 			const inflight = Promise.all([
@@ -196,7 +196,7 @@ describe("injection router", () => {
 			expect(fetchMock).toHaveBeenCalledTimes(1);
 			expect(responses.map((r) => r.status)).toEqual([204, 204, 204]);
 		} finally {
-			server.close();
+			await close();
 		}
 	});
 

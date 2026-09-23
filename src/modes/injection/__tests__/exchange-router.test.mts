@@ -573,7 +573,7 @@ describe("injection router — external credential exchange (#90)", () => {
 			const assertion = makeAssertion();
 			const pending = deferred();
 			fetchMock.mockReturnValueOnce(pending.promise);
-			const { server, baseURL, joined } = await listenForFlight(mountApp(makeConfig(upstream.baseURL)), 3);
+			const { baseURL, joined, close } = await listenForFlight(mountApp(makeConfig(upstream.baseURL)), 3);
 
 			try {
 				const inflight = Promise.all(
@@ -593,7 +593,7 @@ describe("injection router — external credential exchange (#90)", () => {
 					"Bearer issued-shared",
 				]);
 			} finally {
-				server.close();
+				await close();
 			}
 		});
 
@@ -601,7 +601,7 @@ describe("injection router — external credential exchange (#90)", () => {
 			const assertion = makeAssertion();
 			const pending = deferred();
 			fetchMock.mockReturnValueOnce(pending.promise);
-			const { server, baseURL, joined } = await listenForFlight(mountApp(makeConfig(upstream.baseURL)), 2);
+			const { baseURL, joined, close } = await listenForFlight(mountApp(makeConfig(upstream.baseURL)), 2);
 
 			try {
 				const inflight = Promise.all(
@@ -617,7 +617,7 @@ describe("injection router — external credential exchange (#90)", () => {
 				expect(responses.map((r) => r.status)).toEqual([401, 401]);
 				expect(upstream.received).toHaveLength(0);
 			} finally {
-				server.close();
+				await close();
 			}
 		});
 	});
