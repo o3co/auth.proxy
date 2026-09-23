@@ -24,6 +24,7 @@ import {
 	JWT_BEARER_GRANT_TYPE,
 	type JwtBearerClient,
 	JwtBearerError,
+	type JwtBearerErrorCode,
 } from "./jwt-bearer-client.mjs";
 import type { TokenCache } from "./token-cache.mjs";
 import { buildTokenUrl } from "./token-endpoint.mjs";
@@ -150,37 +151,72 @@ const respond = (
 	retryAfter,
 });
 
+/** How a failed exchange is reported: which level, under which event, with which message. */
+interface ExchangeFailureLine {
+	level: "info" | "warn" | "error";
+	event: string;
+	message: string;
+}
+
+/**
+ * The line each JwtBearerErrorCode is logged as (#95 F41), the exchange
+ * path's counterpart of the session path's SESSION_FAILURE_LINES (F32).
+ *
+ * `satisfies` on the literal keeps it exhaustive: a code added to the union
+ * fails the build here. The lookup is a Map keyed by string because a
+ * supplied client (F2) is not bound by the union at runtime — and a plain
+ * object would answer `constructor` or `__proto__` with an inherited value,
+ * which #109 found on the session path.
+ */
+const EXCHANGE_FAILURE_LINES = new Map<string, ExchangeFailureLine>(
+	Object.entries({
+		credential_rejected: {
+			level: "info",
+			event: "injection.exchange_rejected",
+			message: "exchange rejected",
+		},
+		exchange_not_permitted: {
+			level: "warn",
+			event: "injection.exchange_not_permitted",
+			message: "exchange not permitted",
+		},
+		provider_config_error: {
+			level: "error",
+			event: "injection.exchange_provider_config_error",
+			message: "exchange failed",
+		},
+		provider_invalid_response: {
+			level: "error",
+			event: "injection.exchange_provider_invalid_response",
+			message: "exchange failed",
+		},
+		provider_unavailable: {
+			level: "error",
+			event: "injection.exchange_provider_unavailable",
+			message: "exchange failed",
+		},
+	} satisfies Record<JwtBearerErrorCode, ExchangeFailureLine>),
+);
+
+/**
+ * A code no version of this proxy declared, from a supplied client. It used
+ * to fall out of a switch with no default, so the refusal was answered with
+ * no log line at all; a refusal that leaves no trace is worse than one logged
+ * under a general name.
+ */
+const UNKNOWN_EXCHANGE_FAILURE: ExchangeFailureLine = {
+	level: "error",
+	event: "injection.exchange_provider_unavailable",
+	message: "exchange failed",
+};
+
 const logFailure = (logger: Logger, requestId: string, err: JwtBearerError): void => {
-	const fields = { requestId, providerError: err.providerError, error: err.message };
-	switch (err.code) {
-		case "credential_rejected":
-			logger.info({ ...fields, event: "injection.exchange_rejected" }, "exchange rejected");
-			return;
-		case "exchange_not_permitted":
-			logger.warn(
-				{ ...fields, event: "injection.exchange_not_permitted" },
-				"exchange not permitted",
-			);
-			return;
-		case "provider_config_error":
-			logger.error(
-				{ ...fields, event: "injection.exchange_provider_config_error" },
-				"exchange failed",
-			);
-			return;
-		case "provider_invalid_response":
-			logger.error(
-				{ ...fields, event: "injection.exchange_provider_invalid_response" },
-				"exchange failed",
-			);
-			return;
-		case "provider_unavailable":
-			logger.error(
-				{ ...fields, event: "injection.exchange_provider_unavailable" },
-				"exchange failed",
-			);
-			return;
-	}
+	const { level, event, message } =
+		EXCHANGE_FAILURE_LINES.get(err.code) ?? UNKNOWN_EXCHANGE_FAILURE;
+	logger[level](
+		{ requestId, providerError: err.providerError, error: err.message, event },
+		message,
+	);
 };
 
 /**
