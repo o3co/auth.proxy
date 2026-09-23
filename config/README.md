@@ -21,6 +21,7 @@ In: `application.conf` plus the process environment — every `${?NAME}` substit
 | `http.hostname`, `port`, `pathPrefix`, `bodyLimitSize` | the `http` block | `.default()` on each field of the `http` object |
 | `http.cors.origin.pattern` | `http.cors.origin` | `.nullable().default(null)` |
 | `auth.validation.client.*` | `auth.validation.client` | `.nullable().default(null)` with `""` → `null` |
+| `auth.validation.realm` | `auth.validation` | `optionalString`, then a `.refine` to printable ASCII without `"` or `\` — it is sent inside a quoted-string (#95 F45) |
 | `auth.validation.introspect.cacheTtlSec`, `cacheMaxEntries`, `timeoutMs` | `auth.validation.introspect` | `.default()` on each of those three fields (`url` has none) |
 | `auth.injection.stripInboundAuthorization` | `auth.injection` | `strictBoolean` |
 | `auth.injection.tokenCache.*` | `auth.injection.tokenCache` | `.default()` on each field of the `tokenCache` object |

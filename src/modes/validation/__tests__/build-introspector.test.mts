@@ -41,6 +41,7 @@ const makeConfig = (client: { clientId: string | null; clientSecret: string | nu
 	},
 	auth: { mode: "validation", validation: {
 		client,
+		realm: null,
 		introspect: { url: "http://provider.test/introspect-bound", cacheTtlSec: 31, cacheMaxEntries: 77, timeoutMs: 4321 },
 	} },
 	// Never reached: the stubbed provider answers `active: false`.

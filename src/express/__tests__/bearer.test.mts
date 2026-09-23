@@ -9,7 +9,7 @@
  * where its tests can pin it.
  */
 import { describe, expect, it } from "vitest";
-import { extractBearerToken } from "../bearer.mjs";
+import { extractBearerToken, namesBearerScheme } from "../bearer.mjs";
 
 describe("extractBearerToken", () => {
 	it("extracts the token from a well-formed header", () => {
@@ -45,4 +45,18 @@ describe("extractBearerToken", () => {
 	it("keeps only the first token when the header carries trailing content", () => {
 		expect(extractBearerToken("Bearer abc123 extra")).toBe("abc123");
 	});
+});
+
+// #95 F45: which of extractBearerToken's refusals named Bearer.
+describe("namesBearerScheme", () => {
+	it.each(["Bearer", "Bearer ", "Bearer  t"])("is true for the malformed Bearer %j", (header) => {
+		expect(namesBearerScheme(header)).toBe(true);
+	});
+
+	it.each(["Basic dXNlcjpwYXNz", "bearer t", "BEARER t", "Bearerx t"])(
+		"is false for %j, which is another method to this parser",
+		(header) => {
+			expect(namesBearerScheme(header)).toBe(false);
+		},
+	);
 });

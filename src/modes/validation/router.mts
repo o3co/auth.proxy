@@ -21,7 +21,12 @@ import { createRequestIdMiddleware } from "../../express/requestId.mjs";
 import defaultLogger from "../../logger.mjs";
 import { createUpstreamProxy } from "../../router/upstream.mjs";
 import { createSingleFlight } from "../../single-flight.mjs";
-import { decideValidation, type Introspector, type ValidationDeps } from "./decision.mjs";
+import {
+	decideValidation,
+	type Introspector,
+	type ValidationDeps,
+	type ValidationPolicy,
+} from "./decision.mjs";
 import { createIntrospector } from "./introspect.mjs";
 import { createIntrospectionCache } from "./introspection-cache.mjs";
 import {
@@ -42,7 +47,7 @@ export type ValidationDepsOverrides = Partial<ValidationDeps>;
  * know throws rather than leaving the request unanswered and the socket held.
  */
 const validationMiddleware =
-	(deps: ValidationDeps) =>
+	(deps: ValidationDeps, policy: ValidationPolicy) =>
 	async (req: Request, res: Response, next: NextFunction): Promise<void> => {
 		const outcome = await decideValidation(
 			{
@@ -50,6 +55,7 @@ const validationMiddleware =
 				authorization: req.headers.authorization,
 			},
 			deps,
+			policy,
 		);
 		switch (outcome.kind) {
 			case "forward":
@@ -57,7 +63,7 @@ const validationMiddleware =
 			case "reject":
 				// Before the body because headers must precede the send. Which
 				// refusals carry one at all is the decision's, not this
-				// switch's — see `INVALID_TOKEN_CHALLENGE` in `decision.mts`.
+				// switch's — see `challengeFor` in `decision.mts`.
 				if (outcome.challenge !== null) {
 					res.setHeader("WWW-Authenticate", outcome.challenge);
 				}
@@ -132,7 +138,7 @@ export const createRouter = ({
 			);
 			return next();
 		})
-		.use(validationMiddleware(deps))
+		.use(validationMiddleware(deps, { realm: validation.realm }))
 		.use(createUpstreamProxy(config));
 
 	return router;

@@ -18,6 +18,7 @@ const makeConfig = (
 		clientId: null,
 		clientSecret: null,
 	},
+	realm: string | null = null,
 ): AppConfig => ({
 	http: {
 		hostname: "127.0.0.1", port: 0, pathPrefix: "/",
@@ -25,6 +26,7 @@ const makeConfig = (
 	},
 	auth: { mode: "validation", validation: {
 		client,
+		realm,
 		introspect: { url: "http://provider.test/introspect", cacheTtlSec: 30, cacheMaxEntries: 100, timeoutMs: 5000 },
 	} },
 	upstream: { baseURL: `http://127.0.0.1:${upstreamPort}` },
@@ -203,6 +205,26 @@ describe("validation router", () => {
 			// error code off a request that attempted an unsupported method, and
 			// the challenge that would fit needs a realm (#95 F29, F45).
 			expect(res.headers["www-authenticate"]).toBeUndefined();
+			expect(upstreamCalls).toBe(0);
+			expect(fetchMock).not.toHaveBeenCalled();
+		});
+
+		// #95 F45, from the config to the header.
+		it("challenges with the configured realm, and names invalid_request on a malformed Bearer", async () => {
+			const fetchMock = vi.fn();
+			vi.stubGlobal("fetch", fetchMock);
+			const own = express();
+			own.use(createRouter({ config: makeConfig(upstreamPort, undefined, "orders api") }));
+
+			const basic = await request(own).get("/protected").set("Authorization", "Basic dXNlcjpwYXNz");
+			const malformed = await request(own).get("/protected").set("Authorization", "Bearer");
+
+			expect(basic.status).toBe(400);
+			expect(basic.headers["www-authenticate"]).toBe('Bearer realm="orders api"');
+			expect(malformed.status).toBe(400);
+			expect(malformed.headers["www-authenticate"]).toBe(
+				'Bearer realm="orders api", error="invalid_request"',
+			);
 			expect(upstreamCalls).toBe(0);
 			expect(fetchMock).not.toHaveBeenCalled();
 		});

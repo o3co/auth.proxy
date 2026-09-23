@@ -33,6 +33,7 @@ const validationConfig: AppConfig = {
 		mode: "validation" as const,
 		validation: {
 			client: { clientId: null, clientSecret: null },
+			realm: null,
 			introspect: {
 				url: "http://auth/introspect",
 				cacheTtlSec: 30,
