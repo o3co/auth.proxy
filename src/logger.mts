@@ -59,12 +59,27 @@ const LOGGED_ERROR_FIELDS = ["code", "errno", "syscall", "status", "refusedCrede
 const MAX_CAUSE_DEPTH = 5;
 
 /**
- * `scheme://user:pass@host` → `scheme://***@host`. undici puts the request URL
- * in some rejection messages, and the configured introspection URL is only a
- * string to the schema, so it may carry userinfo.
+ * `scheme://user:pass@host` → `scheme://***@host`: everything after `://` up to
+ * the last `@` before the next `/` or the end of the line.
+ *
+ * An error message quotes a URL as it was given, not normalised: `fetch`'s
+ * refusal of a URL with credentials and its failure to parse one both do
+ * (#140). So userinfo may carry a space, an `@`, a `?` or a `#` unencoded, and
+ * only `/` and the end of a line are taken as the end of the authority.
+ *
+ * Known limit: a `/` inside a raw password cannot be told from the start of a
+ * path, and the part after it is not redacted. The schema refuses a configured
+ * introspection URL with userinfo, so no credential-bearing URL of the
+ * proxy's own reaches `fetch`; this keeps the helper sound for any other raw
+ * URL that reaches a message.
+ *
+ * It errs towards redacting: after a bare origin with no path, an `@` later on
+ * the same line — in a query, a fragment or plain text — takes the text before
+ * it along. That costs diagnostic text, never a credential, and it never
+ * reaches past a line of a stack.
  */
 const redactUrlCredentials = (text: string): string =>
-	text.replace(/([a-z][a-z0-9+.-]*:\/\/)[^\s/@]*@/gi, "$1***@");
+	text.replace(/([a-z][a-z0-9+.-]*:\/\/)[^/\n]*@/gi, "$1***@");
 
 /**
  * The serialiser for the `error` key. A non-Error passes through as it is —
