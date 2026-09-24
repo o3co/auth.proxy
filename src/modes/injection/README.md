@@ -65,6 +65,44 @@ Injection mode turns a session cookie into the outbound `Authorization: Bearer` 
    Each code maps to exactly one log event and level, and a code the union does not declare is logged rather than dropped. Pinned by [`decision.test.mts`](__tests__/decision.test.mts), [`exchange-decision.test.mts`](__tests__/exchange-decision.test.mts), [`router.test.mts`](__tests__/router.test.mts), [`exchange-router.test.mts`](__tests__/exchange-router.test.mts) and the two client tests.
 10. **The router owns only what it builds.** `createRouter({ config, deps })` refuses any mode other than `"injection"`. For each dependency, it takes what the caller supplied under `deps` or `deps.exchange`, and builds the rest. `deps.exchange` is refused while the exchange is disabled. Anything the router built lives in its closure until process exit, and nothing clears it; anything the caller supplied remains the caller's. Pinned by [`router.test.mts`](__tests__/router.test.mts) and [`exchange-router.test.mts`](__tests__/exchange-router.test.mts). That shutdown leaves the caches untouched is not tested.
 
+## Log events
+
+Every line about a request carries `requestId` and one of these `event`s, at the level shown. The router writes `injection.incoming_request` (info) for every request, and then the decisions write the rest, in the order they happen. No line carries a credential (invariant 3). A failure line's `error` is a string. On the exchange path, a failure line also carries `providerError`: the provider's `error`, if it passed `sanitizeErrorCode`, and otherwise `null`.
+
+Session path ([`decideInjection`](decision.mts)):
+
+| Event | Level | When | Fields |
+| --- | --- | --- | --- |
+| `injection.no_cookie` | debug | No session cookie in `Cookie`. | `action`: `forward` or `forward_stripped` |
+| `injection.cookie_rejected` | warn | A session cookie pair failed the grammar check. | `reason`: `empty`, `quoting` or `grammar`; `action`: `forward`, `forward_stripped` or `fallback` |
+| `injection.inbound_authorization_stripped` | warn | An inbound `Authorization` was removed (`stripInboundAuthorization`). | `reason`: `no_cookie` or `cookie_rejected` |
+| `injection.cache_hit` | debug | The token came from the session cache. | |
+| `injection.grant_fetch` | info | A cache miss is about to call the token endpoint. Only the first request of a coalesced group writes it. | |
+| `injection.grant_success` | info | The grant returned a token. | `expiresIn`: the provider's `expires_in`, or `null` |
+| `injection.single_flight_wait` | debug | The request was answered by a grant another request was already making. | |
+| `injection.authorization_override` | warn | A minted token replaced an inbound `Authorization`, including an empty one. | |
+| `injection.session_unauthorized` | info | `session_unauthorized`, answered `401 session_required`. | `error` |
+| `injection.provider_config_error`, `injection.provider_invalid_response`, `injection.provider_unavailable` | error | The code of the same name. A code the union does not declare is logged as `provider_unavailable`. | `error` |
+| `injection.unexpected_error` | error | A throw that is not a `SessionGrantError`. | `error` |
+
+Exchange path ([`decideExchange`](exchange.mts)). An exchanged token replaces `Authorization` by design, so this path writes no `authorization_override`:
+
+| Event | Level | When | Fields |
+| --- | --- | --- | --- |
+| `injection.exchange_credential_ambiguous` | warn | A session cookie and an `Authorization` arrived on the same request. | `sessionCookie`: `found` or `rejected` |
+| `injection.exchange_credential_unsupported` | info | `Authorization` is not a `Bearer` JWT. | `reason`: `scheme` or `format` |
+| `injection.exchange_issuer_refused` | info | The `iss` is not in `allowedIssuers`. | |
+| `injection.exchange_cache_hit` | debug | The token came from the exchange cache. | |
+| `injection.exchange_fetch` | info | A cache miss is about to call the token endpoint. Only the first request of a coalesced group writes it. | |
+| `injection.exchange_success` | info | The exchange returned a token. | `expiresIn`: the provider's `expires_in`, or `null`; `cached`: whether the result was cached |
+| `injection.exchange_single_flight_wait` | debug | The request was answered by an exchange another request was already making. | |
+| `injection.exchange_rejected` | info | `credential_rejected`. | `error`, `providerError` |
+| `injection.exchange_not_permitted` | warn | `exchange_not_permitted`. | `error`, `providerError` |
+| `injection.exchange_provider_config_error`, `injection.exchange_provider_invalid_response`, `injection.exchange_provider_unavailable` | error | The code of the same name. A code the union does not declare is logged as `exchange_provider_unavailable`. | `error`, `providerError` |
+| `injection.exchange_unexpected_error` | error | A throw that is not a `JwtBearerError`. | `error` |
+
+Pinned by [`decision.test.mts`](__tests__/decision.test.mts), [`exchange-decision.test.mts`](__tests__/exchange-decision.test.mts), [`router.test.mts`](__tests__/router.test.mts) and [`exchange-router.test.mts`](__tests__/exchange-router.test.mts). In the running app, they are pinned by [`app-injection.test.mts`](../../__tests__/app-injection.test.mts).
+
 ## Dependencies
 
 - **Within `src/`:** [`router/upstream.mts`](../../router/upstream.mts), `express/requestId.mts`, [`oauth/client-secret-basic.mts`](../../oauth/client-secret-basic.mts) (the exchange's client authentication), and the root modules `single-flight.mts`, `response-body.mts` and `logger.mts`. Only the router takes the logger singleton; the decisions see just the `Logger` type.
