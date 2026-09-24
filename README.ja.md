@@ -235,8 +235,8 @@ grant_type=urn:ietf:params:oauth:grant-type:jwt-bearer&assertion=<JWT>[&scope=�
 | 401 | `credential_rejected` | `iss` が `allowedIssuers` に無い（プロバイダー呼び出しなし）、またはプロバイダーが `invalid_grant` を返した: 署名不正、期限切れ、audience 不一致、未登録の発行者、発行者が認めないクライアント、リプレイされた ID-JAG、解決できない subject。 |
 | 403 | `exchange_not_permitted` | プロバイダーが `invalid_scope`・`invalid_target`・`unauthorized_client` を返した。 |
 | 502 | `provider_config_error` | プロバイダーが `401`（プロキシ自身のクライアント認証）、その他の `400`、またはリダイレクトを返した（リダイレクトは追従しない）。 |
-| 502 | `provider_unavailable` | プロバイダーの `5xx` または `429`、ネットワークエラー、タイムアウト、想定外のステータス。プロバイダーの `Retry-After` はそのまま透過する。 |
-| 502 | `provider_invalid_response` | ボディが JSON オブジェクトでない（空、JSON でない、配列）か 64 KiB の上限を超える `200`、`access_token` の無い `200`、または `token_type` が `Bearer` 以外（例: `DPoP`）の `200`。 |
+| 502 | `provider_unavailable` | プロバイダーの `5xx` または `429`、レスポンス到着前のネットワークエラーやタイムアウト、想定外のステータス。プロバイダーの `Retry-After` はそのまま透過する。 |
+| 502 | `provider_invalid_response` | ボディが JSON オブジェクトでない（空、JSON でない、配列）、64 KiB の上限を超える、または読み切れなかった（読み取り中のタイムアウトや切断）`200`、`access_token` の無い `200`、または `token_type` が `Bearer` 以外（例: `DPoP`）の `200`。 |
 
 各結果は `injection.exchange_*` イベントとしてログされる（`exchange_fetch`、`exchange_success`、`exchange_cache_hit`、warn の `exchange_credential_ambiguous`、`reason` が `scheme` / `format` の `exchange_credential_unsupported`、`exchange_issuer_refused`、`exchange_rejected`、warn の `exchange_not_permitted`、error の `exchange_provider_config_error` / `exchange_provider_unavailable` / `exchange_provider_invalid_response`。プロバイダーの `error` コードがあれば付く）。アサーション、発行されたトークン、クライアントシークレット、未検証の `iss` はログに出ない。プロバイダーの `error` は RFC 6749 のエラーコードの形 — 空白なし、64 文字以内、JWT の形でない、アサーションやシークレットを含まない — のときだけそのままログされ、それ以外は `invalid_error_code` としてログされる。`error_description` はログに出ない。
 
