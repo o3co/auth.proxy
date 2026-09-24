@@ -52,6 +52,36 @@ import { z } from "zod";
 const COOKIE_NAME_RE = /^[!#$%&'*+.^_`|~0-9A-Za-z-]+$/;
 
 /**
+ * The introspection endpoint the validation proxy POSTs every cache miss to:
+ * an absolute http(s) URL with no userinfo (#140). The URL carries no
+ * credential — the introspection client authenticates with
+ * `auth.validation.client`, or presents the inbound token when that is unset.
+ *
+ * A URL with userinfo never introspected a token: `fetch` refuses to build a
+ * request from one, on every call, and its refusal quotes the URL exactly as
+ * configured — credential included, a space or an `@` in it unencoded — in the
+ * line the validation path logs. A string that is not a URL failed every call
+ * the same way. Both booted and served only what validation passes through
+ * without introspecting — a request with no `Authorization`. A non-http(s)
+ * scheme is refused as well, and one of them was worse than failing: `fetch`
+ * answers a POST to a `data:` URL with the body it encodes, so
+ * `data:application/json,{"active":true}` admitted every token. All of these
+ * now stop the process at boot.
+ *
+ * A refine rather than `.url()`, so the message is this one and never quotes
+ * the value it refused.
+ */
+const isIntrospectionUrl = (value: string): boolean => {
+	if (!URL.canParse(value)) return false;
+	const parsed = new URL(value);
+	return (
+		(parsed.protocol === "http:" || parsed.protocol === "https:") &&
+		parsed.username === "" &&
+		parsed.password === ""
+	);
+};
+
+/**
  * A boolean knob that has to survive the HOCON -> environment round trip.
  * `parseFile` substitutes an environment override as a *string*, so both the
  * literal `false` from application.conf and the string `"false"` from
@@ -250,7 +280,10 @@ export const AppConfigSchema = z.object({
 					},
 				),
 				introspect: z.object({
-					url: z.string(),
+					url: z.string().refine(isIntrospectionUrl, {
+						message:
+							"auth.validation.introspect.url must be an absolute http(s) URL without userinfo; the URL carries no credential (configure auth.validation.client)",
+					}),
 					cacheTtlSec: z.coerce.number().default(30),
 					cacheMaxEntries: z.coerce.number().int().positive().default(10000),
 					timeoutMs: z.coerce.number().int().positive().default(5000),

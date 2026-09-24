@@ -99,6 +99,50 @@ describe("proxy config — validation mode", () => {
 		);
 	});
 
+	// fetch refuses a URL that carries credentials, and fails to parse a URL
+	// that is not one, so a configuration of either kind never introspected a
+	// token; it failed every introspection, and the refusal quoted the URL as
+	// configured — credential included — into the log (#140). It fails at boot
+	// instead, as `providerOrigin` always has.
+	describe("auth.validation.introspect.url (#140)", () => {
+		const urlOf = (url: string) => {
+			const config = validate(
+				parseFile(confPath, { env: { AUTH_MODE: "validation", INTROSPECT_URL: url } }),
+				AppConfigSchema,
+			);
+			if (config.auth.mode !== "validation") throw new Error("narrow");
+			return config.auth.validation.introspect.url;
+		};
+
+		it.each([
+			"http://localhost:3000/oauth/introspect",
+			"https://auth.example/oauth/introspect",
+			"https://auth.example:8443/tenant-a/oauth/introspect",
+		])("accepts %j", (url) => {
+			expect(urlOf(url)).toBe(url);
+		});
+
+		it.each([
+			["userinfo", "https://proxy:s3cr3t@auth.example/oauth/introspect"],
+			["a username alone", "https://proxy@auth.example/oauth/introspect"],
+			["userinfo with a space", "https://proxy:my s3cr3t@auth.example/oauth/introspect"],
+			["userinfo with an '@'", "https://proxy:p@s3cr3t@auth.example/oauth/introspect"],
+			["an unparseable URL", "https://proxy:s3cr3t@auth exam ple/oauth/introspect"],
+			["a relative path", "/oauth/introspect"],
+			["a non-HTTP scheme", "ftp://auth.example/oauth/introspect"],
+			["a data: URL, which answers every POST with what it encodes", 'data:application/json,{"active":true,"s3cr3t":1}'],
+		])("refuses %s, naming the key and never the credential", (_, url) => {
+			let message = "";
+			try {
+				urlOf(url);
+			} catch (err) {
+				message = String(err);
+			}
+			expect(message).toMatch(/auth\.validation\.introspect\.url/);
+			expect(message).not.toMatch(/s3cr3t/);
+		});
+	});
+
 	it("rejects when only clientId is set", () => {
 		const raw = parseFile(confPath, {
 			env: { AUTH_MODE: "validation", CLIENT_ID: "my-proxy" },
