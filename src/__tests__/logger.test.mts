@@ -126,6 +126,54 @@ describe("createProxyLogger", () => {
 		expect(entry.error.message).toContain("https://***@auth.test/introspect");
 	});
 
+	// #140: `fetch` quotes a URL in its refusals exactly as it was given, not
+	// normalised, so the redaction cannot rely on the WHATWG spelling — where a
+	// space is `%20`, an interior `@` is `%40`, and `?` and `#` never appear in
+	// userinfo at all.
+	describe("URL credentials, quoted as they were given (#140)", () => {
+		const messageOf = (text: string) =>
+			(serializeLoggedError(new TypeError(text)) as { message: string }).message;
+
+		it.each([
+			["raw, with a space", "Failed to parse URL from https://proxy:my hunter2@auth exam ple/introspect"],
+			["raw, with an interior '@'", "Failed to parse URL from https://proxy:p@hunter2@auth.test/introspect"],
+			["raw, parseable, with a space", "Request cannot be constructed from a URL that includes credentials: https://proxy:my hunter2@auth.test/x"],
+			["raw, with a '?'", "Failed to parse URL from https://proxy:pa?hunter2@auth.test/introspect"],
+			["raw, with a '#'", "Failed to parse URL from https://proxy:pa#hunter2@auth.test/introspect"],
+			["normalised, with %20", "fetch failed: https://proxy:my%20hunter2@auth.test/introspect"],
+			["normalised, with %40", "fetch failed: https://proxy:p%40hunter2@auth.test/introspect"],
+			["a username alone", "fetch failed: https://hunter2@auth.test/introspect"],
+		])("redacts the whole userinfo: %s", (_, text) => {
+			const message = messageOf(text);
+			expect(message).not.toContain("hunter2");
+			expect(message).toContain("://***@");
+		});
+
+		it("redacts every URL in one message", () => {
+			const message = messageOf("from https://a:hunter2@one.test/x to https://b:hunter2@two.test/y");
+			expect(message).not.toContain("hunter2");
+			expect(message).toBe("from https://***@one.test/x to https://***@two.test/y");
+		});
+
+		it.each([
+			"fetch failed: https://auth.test/introspect",
+			"fetch failed: https://auth.test/introspect?requester=ops@example.test",
+			"fetch failed: https://auth.test/introspect#owner@example.test",
+		])("leaves a URL without userinfo as it is when it has a path: %j", (text) => {
+			expect(messageOf(text)).toBe(text);
+		});
+
+		it("errs towards redacting after a bare origin: an '@' in its query or fragment takes the text before it", () => {
+			expect(messageOf("fetch failed: https://auth.test#fragment@x")).toBe("fetch failed: https://***@x");
+			expect(messageOf("fetch failed: https://auth.test?who=ops@x")).toBe("fetch failed: https://***@x");
+		});
+
+		it("does not reach across a line to an '@' on the next one", () => {
+			const text = "fetch failed: https://auth.test\n    at owner@example.test";
+			expect(messageOf(text)).toBe(text);
+		});
+	});
+
 	it("stops at a cycle in the cause chain", () => {
 		const a = new Error("a");
 		const b = new Error("b", { cause: a });
