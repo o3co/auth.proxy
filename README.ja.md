@@ -322,7 +322,7 @@ make docker       # ランタイムイメージのビルド
 | --- | --- |
 | `CLIENT_ID` | イントロスペクション認証のクライアント ID（任意。`CLIENT_SECRET` とペアで設定する）。 |
 | `CLIENT_SECRET` | イントロスペクション認証のクライアントシークレット（任意。`CLIENT_ID` とペアで設定する）。 |
-| `INTROSPECT_URL` | イントロスペクションエンドポイント URL。 |
+| `INTROSPECT_URL` | イントロスペクションエンドポイント URL。userinfo を含まない絶対 `http(s)` URL であること。それ以外はキー名を示して起動時に失敗する — プロキシは URL ではなく `CLIENT_ID` / `CLIENT_SECRET` で認証する。 |
 | `VALIDATION_REALM` | `WWW-Authenticate` の RFC 6750 `realm`（任意。印字可能 ASCII で 256 文字以内、`"`・`\`・前後の空白を含まない）。未設定なら、別の認証方式を使ったリクエストにはチャレンジを返さない。 |
 | `INTROSPECT_CACHE_TTL_SEC` | キャッシュ TTL（秒、デフォルト: 30）。 |
 | `INTROSPECT_CACHE_MAX_ENTRIES` | キャッシュ最大エントリ数（デフォルト: 10000）。 |
