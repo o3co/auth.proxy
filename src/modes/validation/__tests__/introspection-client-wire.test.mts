@@ -12,7 +12,7 @@
  * that `AbortSignal.timeout` ends a call on a real socket, and what reaches
  * the provider.
  */
-import { afterAll, beforeAll, beforeEach, describe, expect, it } from "vitest";
+import { afterAll, afterEach, beforeAll, describe, expect, it } from "vitest";
 
 import {
 	type FakeProvider,
@@ -41,7 +41,7 @@ describe("createIntrospectionClient on the wire", () => {
 	afterAll(async () => {
 		await Promise.all([fake.close(), elsewhere.close()]);
 	});
-	beforeEach(() => {
+	afterEach(() => {
 		fake.reset();
 		elsewhere.reset();
 	});
@@ -49,7 +49,10 @@ describe("createIntrospectionClient on the wire", () => {
 	const client = (overrides: Partial<IntrospectionClientConfig> = {}) =>
 		createIntrospectionClient({
 			url: fake.url(PATH),
-			timeoutMs: 5000,
+			// Not 5000: vitest's own timeout is 5000 too, so a body that is never
+			// released would be closed by this timeout instead, and the cases that
+			// pin the release at the bound would pass without it.
+			timeoutMs: 60_000,
 			credentials: null,
 			...overrides,
 		});
@@ -158,6 +161,8 @@ describe("createIntrospectionClient on the wire", () => {
 				const err = await refusal(client().introspect(TOKEN, "r"));
 
 				expect(err.status).toBe(502);
+				// Past the headers: a timeout before them would carry a cause.
+				expect(err.cause).toBeUndefined();
 				await fake.requests[0].connectionClosed;
 			} finally {
 				timeout.restore();
@@ -170,6 +175,8 @@ describe("createIntrospectionClient on the wire", () => {
 			const err = await refusal(client().introspect(TOKEN, "r"));
 
 			expect(err.status).toBe(502);
+			// Past the headers: a drop before them would carry a cause.
+			expect(err.cause).toBeUndefined();
 		});
 	});
 

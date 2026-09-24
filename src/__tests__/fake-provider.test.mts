@@ -8,7 +8,7 @@
  * what it says would pin nothing. The timeout the client tests fire mid-body
  * is pinned here for the same reason.
  */
-import { afterAll, beforeAll, beforeEach, describe, expect, it } from "vitest";
+import { afterAll, afterEach, beforeAll, describe, expect, it, vi } from "vitest";
 
 import { type FakeProvider, json, redirect, startFakeProvider } from "./fake-provider.mjs";
 import { controlledTimeout, timeoutAfterResponseHeaders } from "./provider-timeout.mjs";
@@ -22,7 +22,7 @@ describe("startFakeProvider", () => {
 	afterAll(async () => {
 		await fake.close();
 	});
-	beforeEach(() => {
+	afterEach(() => {
 		fake.reset();
 	});
 
@@ -81,11 +81,28 @@ describe("startFakeProvider", () => {
 			return json(200, { echoed: req.body.toString("utf8") });
 		});
 
-		const pending = fetch(fake.url("/x"), { method: "POST", body: "hello" });
+		let answered = false;
+		const pending = fetch(fake.url("/x"), { method: "POST", body: "hello" }).then((res) => {
+			answered = true;
+			return res;
+		});
+		await vi.waitFor(() => expect(fake.requests).toHaveLength(1));
+		await new Promise((resolve) => setTimeout(resolve, 20));
+		expect(answered).toBe(false);
 		release();
 		const res = await pending;
 
 		expect(await res.json()).toEqual({ echoed: "hello" });
+	});
+
+	it("reports a responder that threw at the next reset, not as a dropped connection alone", async () => {
+		fake.respond("/x", () => {
+			throw new Error("a bug in the test");
+		});
+
+		await expect(fetch(fake.url("/x"))).rejects.toThrow();
+
+		expect(() => fake.reset()).toThrow(/a responder threw/);
 	});
 
 	it("does not follow its own redirect when the client does not", async () => {
