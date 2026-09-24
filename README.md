@@ -94,7 +94,7 @@ TTL; a malformed `exp` is treated as a provider response error. TTL zero disable
 
 `CLIENT_ID` / `CLIENT_SECRET` are optional, and the choice between setting them and leaving them unset changes which tokens the provider will call `active`.
 
-**With client authentication (both set).** The proxy authenticates to `POST /oauth/introspect` with HTTP Basic, and the provider then pins the introspected token's audience to the **calling client's own identity**: a token whose `aud` does not name this client comes back `active: false`. There is no error and no diagnostic — on the wire an audience mismatch is indistinguishable from a forged or expired token, so the proxy answers `401` for tokens that are in fact perfectly valid.
+**With client authentication (both set).** The proxy authenticates to `POST /oauth/introspect` with HTTP Basic, and the provider then pins the introspected token's audience to **what the calling client may address** — its own `client_id` and its `allowedAudiences` (auth.provider v0.12.0 and later; earlier releases pinned it to the `client_id` alone): a token whose `aud` names neither comes back `active: false`. There is no error and no diagnostic — on the wire an audience mismatch is indistinguishable from a forged or expired token, so the proxy answers `401` for tokens that are in fact perfectly valid.
 
 The client the proxy authenticates as must therefore be associated with the audience of the tokens it validates. Either:
 
@@ -104,8 +104,6 @@ The client the proxy authenticates as must therefore be associated with the audi
 A proxy fronting `https://api.example.com/orders` that authenticates as some unrelated `client_id` answers `401` to every request whose token was minted with an RFC 8707 `resource` audience — which, wherever resource indicators are in use, is every request it sees.
 
 **What a provider `401` means.** RFC 7662 §2.3 has the introspection request authenticated, so the provider's `401` answers whichever credential it carried. Without client credentials the inbound token *is* that credential and the `401` is about the caller: `401 Invalid Token`. With them the credential is the proxy's own Basic header, the `401` refused the *proxy*, and the caller's token was never examined — that is `502 Provider Configuration Error`, logged at error as `validation.provider_config_error` (`introspect refused the proxy's client credentials`) rather than at info as the caller's `validation.token_unauthorized`, because it is the operator's to fix. The injection path reports the same situation as `provider_config_error` 502 — the exchange always has, and the session grant since #95 F47. A misconfigured deployment therefore answers a status that clients and gateways retry more readily than `401`, which spends the same per-instance introspection budget described under [Provider rate limiting](#provider-rate-limiting); the fix is the credential, not the retry policy.
-
-> A companion change in `auth.provider` widens this pin to `allowedAudiences ∪ {clientId}`, the ceiling its other grants already use. Until it lands, only a token whose `aud` is exactly the caller's `client_id` introspects as active under client authentication.
 
 **Without client authentication (both unset).** The proxy presents the inbound token itself as the introspection credential — `buildAuthHeader` emits `Authorization: Bearer <token>` with the same token in the body, which the provider requires to match. On that path the calling client is never identified, so **the audience pin does not apply** and a token for any audience is introspected on its own merits.
 
@@ -149,7 +147,7 @@ With UserSession tracking configured, the provider's `session` grant requires a 
 
 So, for an operator:
 
-- **Keep the provider's access-token lifetime short in a BFF topology.** `oauth.accessToken.expiresIn` bounds replay exposure at offline validators. The proxy owns the cookie-to-token exchange, so a short lifetime costs a grant call while the browser session remains valid.
+- **Keep the provider's access-token lifetime short in a BFF topology.** `oauth.accessToken.defaultExpiresIn` (`expiresIn` in older providers, which newer ones keep as a deprecated alias) bounds replay exposure at offline validators. The proxy owns the cookie-to-token exchange, so a short lifetime costs a grant call while the browser session remains valid.
 - **A downstream service that validates the JWT offline cannot learn about a logout at all.** Signature, `iss`, `aud` and `exp` are everything an offline validator checks, and none of them changes when a session ends. For such a service the revocation window *is* the token lifetime, with nothing available to shorten it.
 - **Introspection-based validation is the only mode that can observe a revocation.** A resource server — or an `auth.mode = "validation"` proxy in front of one — calling `POST /oauth/introspect` asks the provider on every cache miss, so a token the provider has stopped vouching for comes back `active: false` within that introspection cache TTL.
 
