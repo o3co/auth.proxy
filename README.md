@@ -64,7 +64,7 @@ Challenges, without and with `VALIDATION_REALM` (here `api`):
 
 A `500` or `502` carries none, because it is the proxy's or the provider's failure rather than a statement about the caller's credential. Injection mode answers no challenge on any path, deliberately: its caller holds a session cookie, not a Bearer token.
 
-Two limits worth knowing. A browser cannot read the header cross-origin — `WWW-Authenticate` is not CORS-safelisted and this proxy sets no `Access-Control-Expose-Headers` — so a SPA on another origin sees the status and the body only. And `invalid_token` invites a client to fetch a new token and retry (§3.1), which cannot help in the audience case described below: a token the provider calls `active: false` because its `aud` does not name this proxy's client is refused the same way however fresh it is.
+Two limits worth knowing. A browser cannot read the header cross-origin — `WWW-Authenticate` is not CORS-safelisted and this proxy sets no `Access-Control-Expose-Headers` — so a SPA on another origin sees the status and the body only. And `invalid_token` invites a client to fetch a new token and retry (§3.1), which cannot help in the audience case described below: a token the provider calls `active: false` because its `aud` names neither this proxy's client nor an audience registered in that client's `allowedAudiences` is refused the same way however fresh it is.
 
 **Logging.** A provider failure is logged once for each request it answers — requests that share one provider call (single-flight) each log it — with the request id as `requestId`, the error under `error` and one of these events:
 
@@ -101,7 +101,7 @@ The client the proxy authenticates as must therefore be associated with the audi
 - register that audience in the client's `allowedAudiences`, or
 - give the client the resource URI as its own `client_id`.
 
-A proxy fronting `https://api.example.com/orders` that authenticates as some unrelated `client_id` answers `401` to every request whose token was minted with an RFC 8707 `resource` audience — which, wherever resource indicators are in use, is every request it sees.
+A proxy fronting `https://api.example.com/orders` that authenticates as a `client_id` which is neither that URI nor lists it in `allowedAudiences` answers `401` to every request whose token was minted with an RFC 8707 `resource` audience — which, wherever resource indicators are in use, is every request it sees.
 
 **What a provider `401` means.** RFC 7662 §2.3 has the introspection request authenticated, so the provider's `401` answers whichever credential it carried. Without client credentials the inbound token *is* that credential and the `401` is about the caller: `401 Invalid Token`. With them the credential is the proxy's own Basic header, the `401` refused the *proxy*, and the caller's token was never examined — that is `502 Provider Configuration Error`, logged at error as `validation.provider_config_error` (`introspect refused the proxy's client credentials`) rather than at info as the caller's `validation.token_unauthorized`, because it is the operator's to fix. The injection path reports the same situation as `provider_config_error` 502 — the exchange always has, and the session grant since #95 F47. A misconfigured deployment therefore answers a status that clients and gateways retry more readily than `401`, which spends the same per-instance introspection budget described under [Provider rate limiting](#provider-rate-limiting); the fix is the credential, not the retry policy.
 
