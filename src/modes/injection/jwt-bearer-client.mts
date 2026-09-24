@@ -42,9 +42,14 @@ export const JWT_BEARER_GRANT_TYPE = "urn:ietf:params:oauth:grant-type:jwt-beare
  *   - `provider_config_error` (502)     the provider refused the proxy itself:
  *                                       a 401 (`invalid_client`), any other 400,
  *                                       or a redirect
- *   - `provider_unavailable` (502)      5xx, 429, network error, timeout, or an
+ *   - `provider_unavailable` (502)      5xx, 429, a network error or timeout
+ *                                       before the response arrives, or an
  *                                       unexpected status
- *   - `provider_invalid_response` (502) a 200 that is not a Bearer token response
+ *   - `provider_invalid_response` (502) a 200 whose body is not a JSON object,
+ *                                       is over `MAX_TOKEN_BODY_BYTES` or could
+ *                                       not be read — a timeout or a dropped
+ *                                       connection mid-body included — or that
+ *                                       is not a Bearer token response
  */
 export type JwtBearerErrorCode =
 	| "credential_rejected"
