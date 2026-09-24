@@ -5,6 +5,374 @@ All notable changes to this project are documented in this file.
 The format is based on [Keep a Changelog](https://keepachangelog.com/en/1.1.0/),
 and this project adheres to [Semantic Versioning](https://semver.org/spec/v2.0.0.html).
 
+## [0.7.0] — 2026-09-24
+
+### Changed
+
+Ten of the changes below are breaking, marked **BREAKING**. Each says what an
+operator sees on the wire and in the logs, and what to do.
+
+- **BREAKING: with client credentials configured, a provider `401` to
+  introspection is `502 Provider Configuration Error`, not `401 Invalid Token`
+  (#95 F7, #111).** RFC 7662 §2.3 has the introspection request authenticated,
+  so the provider's `401` refuses whichever credential the request carried.
+  With both `CLIENT_ID` and `CLIENT_SECRET` set, that credential is the proxy's
+  own Basic header: the caller's token was never examined, and the old answer
+  told the caller their token was bad when the deployment was misconfigured.
+  The answer is now `502 {"code":502,"message":"Provider Configuration Error"}`
+  with no `WWW-Authenticate`, logged at error as
+  `introspect refused the proxy's client credentials` under the event
+  `validation.provider_config_error`, where 0.6.0 logged `introspect failed`.
+  Without client credentials the caller's token is the credential, and the
+  status and body do not change; `active: false` is still `401 Invalid Token`
+  either way.
+  Clients and gateways retry a `502` more readily than a `401`, and every
+  retry spends the same per-instance introspection rate-limit budget.
+  **Action:** an alert keyed on `introspect failed` stops firing for this
+  case, so alert on the new event; fix the credential, not the retry policy.
+
+- **BREAKING: validation answers a provider failure `502 Bad Gateway`, and
+  keeps `500` for the proxy's own (#95 F42, #126).** A provider `5xx` or `429`,
+  a `4xx` other than `401`, a `2xx` whose body is not an introspection
+  response, a malformed `exp`, a timeout and a network error were all
+  `500 Internal Server Error` in 0.6.0. They are now
+  `502 {"code":502,"message":"Bad Gateway"}`, logged at error as
+  `introspect failed` under `validation.provider_error`, which is what
+  injection mode has always answered for the same failures. `500` is kept for
+  a thrown value that is not an introspection error — a bug in the proxy, or a
+  supplied introspector's own error — logged under
+  `validation.unexpected_error`. **Action:** review alerts keyed on
+  validation's `500` and retry policies that retry a `502` but not a `500`:
+  they now retry against a failing provider, and validation passes no
+  `Retry-After` through.
+
+- **BREAKING: validation refuses a redirect from the introspection endpoint
+  instead of following it (#95 F43, #123).** A `3xx` from
+  `POST /oauth/introspect` is `502 Provider Configuration Error`, logged at
+  error as `introspect endpoint redirected` under
+  `validation.provider_config_error`, with no challenge. It is not cached, so
+  a corrected URL takes effect on the next request. An endpoint that
+  redirected on the same origin used to work whenever the target answered
+  introspection — typically a trailing-slash rewrite; a cross-origin one, such
+  as `http` → `https`, never did — and now fails every request that needs
+  introspection. **Action:** set
+  `INTROSPECT_URL` to the final URL. Why following was unsafe is under
+  Security.
+
+- **BREAKING: validation's `401` carries
+  `WWW-Authenticate: Bearer error="invalid_token"` (#95 F29, #114).** RFC 6750
+  §3 makes the challenge a MUST on this refusal. It is sent for
+  `active: false` and for a provider `401` about the caller's token; the
+  status and the body are unchanged, and with `VALIDATION_REALM` set the
+  challenge also carries `realm` (see Added). A browser does not prompt on a
+  Bearer challenge — only Basic and Digest do — so a client that ignores the
+  header sees no difference. Two limits: a browser cannot read the header
+  cross-origin, because it is not CORS-safelisted and the proxy sets no
+  `Access-Control-Expose-Headers`; and `invalid_token` invites a retry with a
+  fresh token, which cannot help when the provider answers `active: false`
+  because the token's `aud` does not name the proxy's client. Injection mode
+  still sends no challenge. **Action:** none for a client that ignores the
+  header; expose it at your edge if a cross-origin browser client must read
+  it.
+
+- **BREAKING: neither injection token client follows a redirect (#95 F8,
+  #112).** The session grant now refuses a `3xx` from `POST /oauth/token`, as
+  the exchange always has:
+  `502 {"error":"provider_config_error","error_description":"provider token endpoint redirected (<status>)"}`,
+  logged as `injection.provider_config_error` at error, with the provider's
+  `Retry-After` passed through. What that replaces depends on the status. A
+  same-origin `307` / `308` used to succeed, minting a token at the redirect
+  target; that deployment stops working. A cross-origin `307` / `308` was
+  `401 session_required`. A `301` / `302` / `303` was usually already a
+  `502` — it depended on what the target answered the resulting `GET` — but as
+  `provider_unavailable` with `unexpected provider response: 405` (or whatever
+  the redirect target answered to a `GET`) — the code and the description
+  change, which is what alerts key on, and it is what most affected
+  deployments will see. **Action:** set `INJECTION_PROVIDER_ORIGIN`
+  (`auth.injection.providerOrigin`) to the origin that answers `/oauth/token`
+  itself. If the redirect stays on the same origin — `/oauth/token` to
+  `/oauth/token/`, or under a path prefix — the provider or its ingress must
+  answer `POST /oauth/token` directly, because `providerOrigin` cannot carry a
+  path. Re-key alerts on the code. Why following was unsafe is under
+  Security.
+
+- **BREAKING: a session grant succeeds only on a `200` (#95 F38, #124).** Any
+  other `2xx` from the token endpoint is
+  `502 provider_unavailable`, `unexpected provider response: <status>`, as the
+  exchange client already answered. 0.6.0 accepted a `201` that carried a
+  token, and refused a `204` as `provider_invalid_response` with a description
+  naming a `200` the provider never sent. **Action:** none for a provider that
+  answers `200`, as RFC 6749 §5.1 describes.
+
+- **BREAKING: a session grant's `401 invalid_client` is
+  `502 provider_config_error`, not `401 session_required` (#95 F47, #120).**
+  RFC 6749 §5.2 answers `invalid_client` when the client fails authentication,
+  which here means `auth.injection.clientId` is wrong or unregistered; 0.6.0
+  told every browser to sign in again, forever, over something signing in
+  cannot fix. The `401` body is now read, bounded at 16 KiB, and
+  `error: "invalid_client"` is answered
+  `502 {"error":"provider_config_error", …}` — the provider's
+  `error_description` relayed only when it passes the same check as the
+  `400` branch, otherwise `provider rejected the proxy's client (client_id)` —
+  with `Retry-After` passed through, and logged as
+  `injection.provider_config_error` at error instead of
+  `injection.session_unauthorized` at info. Any other `401` — another code, no
+  code, a body over the bound or one that cannot be read — is still
+  `401 session_required`; auth.provider answers an unauthenticated browser
+  session `401 unauthorized`, which stays there. Reading the body has one
+  cost: a provider that trickles its `401` body holds the request, and every
+  request coalesced onto it, until `INJECTION_TIMEOUT_MS` ends the read, and
+  that timeout then lands as `session_required`, logged
+  `injection.session_unauthorized` at info — the one provider timeout not
+  logged at error. **Action:** correct the client registration if this starts
+  appearing; re-key alerts and dashboards on either event.
+
+- **BREAKING: a credential inside provider error text is refused at any
+  length, not only from eight characters up (#95 F30, #115).** A deployment
+  whose session cookie values are shorter than eight characters sees the
+  proxy's own wording where the session path used to relay and log the
+  provider's `error_description`; one whose exchange client secret is shorter
+  than eight characters sees `invalid_error_code` where the exchange's log
+  lines carried the provider's `error`. The status, the `error` code, the
+  event and the level are unchanged on every path; only the provider's
+  diagnostic is lost. A short cookie costs that caller's own requests; a short
+  client secret costs every exchange refusal. **Action:** rotate an
+  `INJECTION_EXCHANGE_CLIENT_SECRET` shorter than eight characters. What this
+  closes is under Security.
+
+- **BREAKING: log lines carry `requestId` instead of `"x-request-id"`, every
+  request, decision and failure line carries an `event`, and a caller-caused
+  provider `401` is logged at info (#134, #139).** Both modes'
+  `incoming request` lines are `injection.incoming_request` /
+  `validation.incoming_request`. Validation's failure lines keep their
+  messages and are now:
+
+  | Event | Level | When |
+  | --- | --- | --- |
+  | `validation.token_unauthorized` | info (was error) | The provider answered `401` about the caller's token. |
+  | `validation.provider_config_error` | error | The proxy's own client credentials were refused, or the endpoint redirected. |
+  | `validation.provider_error` | error | Any other provider failure (`502 Bad Gateway`). |
+  | `validation.unexpected_error` | error | Anything else thrown (`500`). |
+
+  An `x-request-id` header sent to the provider or the upstream is unchanged.
+  A query on `*.provider_config_error` or `*.unexpected_error` now matches
+  both modes. **Action:** move log queries and alerts from `"x-request-id"`
+  to `requestId`. An alert on validation's error-level lines no longer fires
+  when the provider refuses a caller's token with a `401`; that line still
+  says `introspect failed`, now at info, so an alert on the message alone
+  still fires — re-key it on `event`.
+
+- **BREAKING: `auth.validation.introspect.url` must be an absolute `http(s)`
+  URL without userinfo, checked at boot (#140).** An `INTROSPECT_URL` that
+  carries userinfo, is not a URL, or has any other scheme stops the process
+  at boot, with a message that names the key and does not quote the value.
+  Such a deployment used to boot and then served only requests carrying no
+  Bearer token — `fetch` refuses a URL with credentials on every call, and
+  fails to parse a non-URL — answering every request with one `500`; with a `data:`
+  URL it admitted every token (see Security). **Action:** set
+  `INTROSPECT_URL` to the endpoint's `http(s)` URL with no credential in it,
+  and set `CLIENT_ID` / `CLIENT_SECRET` if the introspection request should
+  authenticate as the proxy.
+
+- **Validation's failure lines carry the error (#95 F48, #128).** In 0.6.0
+  their `error` field was `{}` for a plain `Error` — so a timeout and a
+  refused connection wrote the same line — and `{status, name}` for an
+  introspection error, with no message. `error` is now an object with `type`, `message`, `stack`,
+  `code`, `errno`, `syscall`, `status`, `refusedCredential` and `cause`,
+  followed up to five levels, so a network failure shows undici's error and
+  the socket's `ECONNREFUSED` beneath it. It is an allowlist; see Security.
+  Injection's lines still log a string under `error`, so a query on
+  `error.message` matches validation lines only. A supplied `deps.logger` is
+  unaffected.
+
+- **With `stripInboundAuthorization` on, an empty inbound `Authorization` is
+  stripped like any other (#95 F40, #122).** With the exchange disabled, a
+  header that was present but empty (`Authorization:`, or whitespace only,
+  which Node trims to empty) reached the upstream. It is now deleted, logged
+  as `injection.inbound_authorization_stripped` at warn, and the `action`
+  on `injection.no_cookie` / `injection.cookie_rejected` is
+  `forward_stripped`. With stripping off it still passes through.
+
+- **An empty inbound `Authorization` that an injected token overwrites is
+  logged as an override (#133, #135).** With the exchange disabled it now logs
+  `injection.authorization_override` at warn with its `metric`, like any other
+  override. The upstream receives the minted token, as before.
+
+- **An empty `Authorization` that reaches the upstream is sent as
+  `Authorization`, not `authorization` (#132, #136).** Casing only; the value
+  is still empty. The upstream stage re-sets a present `Authorization` in
+  canonical casing for upstreams that match header names case-sensitively,
+  and it used to skip an empty one. This is the case for validation mode,
+  which passes an empty header through, and for injection mode when nothing
+  strips or replaces it.
+
+- **`action` on `injection.no_cookie` and `injection.cookie_rejected` names
+  what happened: `forward_stripped` when the inbound `Authorization` was
+  stripped (#95 F31, #108).** 0.6.0 logged `action: "forward"` while the
+  header was being removed, so a dashboard keyed on `action: "forward"` now
+  under-counts; add `"forward_stripped"`. Only deployments with
+  `stripInboundAuthorization` on are affected. Separately,
+  `injection.cookie_rejected`'s message changes on every non-`fallback`
+  occurrence, with stripping on or off, from
+  `session cookie rejected, forwarding without Authorization` to
+  `session cookie rejected, forwarding without a minted Authorization` — a
+  client's own header still reaches the upstream unless it is stripped.
+
+- **Provider response bodies are read at a bound (#95 F34, F35, F39; #106,
+  #107, #119).** A `200` from the token endpoint is read up to 64 KiB on both
+  injection paths; a longer one is `502 provider_invalid_response` instead of
+  being buffered. The `error_description` for a `200` that is not a JSON
+  object changes from `provider returned 200 with a non-JSON or non-object
+  JSON body` to `provider returned 200 with a body that is not a JSON object,
+  or is over the size bound`; on the session path a `200` carrying a JSON array
+  answered `provider returned 200 without an access_token` and now answers
+  the same. Validation reads its `200` up to 64 KiB too; a longer body, or one
+  that is not a JSON object, is `502 Bad Gateway`, logged as
+  `introspect failed` with `introspect returned 200 with a body that is not a
+  JSON object, or is over the size bound` in `error.message`. A leading byte-order mark is accepted on every path,
+  including error bodies, whose diagnostic it used to cost. No provider sends
+  a legitimate body near the bound.
+
+- Runtime dependency: `zod` 4.6.2 → 4.6.5 (#94).
+
+### Added
+
+- **`VALIDATION_REALM` (`auth.validation.realm`), and a `400` challenge shaped
+  by what was sent (#95 F45, #127).** Optional; unset (`null`, or `""` from the
+  environment) means no realm. A value must be at most 256 printable ASCII
+  characters without `"` or `\` and without surrounding spaces, or boot fails
+  naming the key. Set, every challenge carries `realm="…"`. The
+  `400 Invalid Token Type` now answers by what was sent: a `Bearer` with no
+  usable token (`Bearer`, `Bearer  t`) gets `Bearer error="invalid_request"`,
+  and another method (`Basic …`, or a lowercase `bearer`, which the proxy does
+  not admit) gets `Bearer realm="…"` when a realm is set and no header
+  otherwise, since RFC 6750 §3.1 says a request using an unsupported method
+  SHOULD NOT carry an error code. Statuses and bodies are unchanged, and a
+  `500` or `502` carries no challenge. For a deployment that sets no realm the
+  one change is that a malformed `Bearer` now gets
+  `WWW-Authenticate: Bearer error="invalid_request"` on its `400` — the `400`
+  counterpart of the BREAKING `401` challenge under Changed; its commit
+  carries no breaking marker. **Action:** none; set a realm if your
+  clients expect one on every challenge.
+
+- **Validation coalesces concurrent misses on one token into one provider
+  call (#95 F6, #116).** Injection mode already did. The first request asks;
+  the others are answered by its response or its failure and do not write the
+  cache. The coalescing is independent of `INTROSPECT_CACHE_TTL_SEC`: with a
+  zero TTL, requests for the same token that overlap still share one call, so
+  a burst sees the provider's answer to the first of them. The provider sees
+  only the first request's `x-request-id`, and a shared failure is logged once
+  for each request it answers. A burst of parallel requests carrying one token
+  now spends one call from the per-instance introspection rate limit.
+
+- **Both routers take injectable dependencies — a library seam, not
+  operator configuration (#95 F1–F5; #99, #100, #101, #102).**
+  `createRouter({ config, deps })` accepts, for injection, `tokenCache`,
+  `singleFlight`, `grantClient`, `logger` and — only while the exchange is
+  enabled, and refused at construction otherwise —
+  `exchange: { client, tokenCache, singleFlight }`; for validation,
+  `introspect` and `logger`. Each decision is a function of plain values
+  (`decideInjection`, `decideExchange`, `decideValidation`). The introspection
+  cache now belongs to the router, so two routers in one process no longer
+  share one, and the module-level `clearCache` is gone. A caller that supplies
+  a dependency owns its lifecycle and whatever the bundled one guaranteed. The
+  session cache key covers the grant context — grant type, token endpoint,
+  client, scope and cookie name as well as the cookie value (#95 F33, #113) —
+  so one supplied cache can serve routers whose contexts differ; it must still
+  be matched on the supplied client, the exchange's client secret and the
+  cache policy, none of which is in the key. A supplied grant or exchange
+  client's failures are logged by their error code rather than their status,
+  and a code outside the declared set is logged as
+  `injection.provider_unavailable` / `injection.exchange_provider_unavailable`
+  at error (#95 F32, F41; #109, #121).
+  The package is private and ships as the Docker image: a deployment
+  configures none of this, and the image wires what 0.6.0 did.
+
+- **The cancellation contract is stated and tested (#95 F10, #117).** A
+  caller that disconnects does not cancel the provider call:
+  `INTROSPECT_TIMEOUT_MS` and `INJECTION_TIMEOUT_MS` are the only
+  cancellation, because the request that leaves may be the one others are
+  coalesced onto. The call completes, and its result is cached when it is
+  cacheable. No behaviour changes; the contract is now on the client
+  interfaces and pinned by tests on a real socket.
+
+### Security
+
+- **The introspection URL is checked at boot, and a `data:` URL no longer
+  admits every token (#140).** `fetch` answers a `POST` to a `data:` URL with
+  the body the URL encodes, so in 0.6.0
+  `INTROSPECT_URL=data:application/json,{"active":true}` made validation
+  forward every Bearer token without asking anyone. The schema accepted any
+  string; it now accepts only an absolute `http(s)` URL without userinfo. See
+  the BREAKING entry under Changed for what a refused deployment sets instead.
+
+- **No provider call follows a redirect (#95 F8, F43; #112, #123).** 0.6.0's
+  session-grant and introspection clients followed redirects (the exchange
+  never did). On the same origin, any redirect carried the session cookie, or
+  the introspection request's `Authorization` (the proxy's Basic header, or
+  the caller's token), to the path in `Location`, and a `307` / `308` re-sent
+  the body too. Across origins `fetch` drops `Authorization` and `Cookie`, but
+  a `307` / `308` still re-sends the body — and for introspection the body is
+  `token=<the caller's token>`, which reached the other origin. A `301` / `302` / `303`
+  on the introspection path became a `GET` of `Location` whose answer was
+  read as the introspection response, so a target answering
+  `{"active":true}` admitted the token. Both clients now answer a `3xx` as a
+  configuration error without sending a second request; see the BREAKING
+  entries under Changed.
+
+- **Provider error text is checked for a credential at any length (#95 F30,
+  #115).** 0.6.0 refused a credential inside provider-controlled text only
+  from eight characters up, and a shorter one only when the whole text was
+  that credential; before 0.6.0 there was no check at all. A provider that echoed a short session cookie value inside
+  its `error_description` had it relayed in the response and written to the
+  log, and a short exchange client secret inside the provider's `error`
+  reached the log. Any occurrence is refused now; the cost and the action are
+  in the BREAKING entry under Changed.
+
+- **Logged errors pass through an allowlist, and URL userinfo in them is
+  redacted however it is written (#95 F48, #128; #140).** Validation's failure
+  lines carry the error's text from 0.7.0 on (see Changed). What reaches a
+  line is the class, `message`, `stack`, `code`, `errno`, `syscall`,
+  `status`, `refusedCredential` and the `cause` chain to five levels; every
+  other property is dropped. That is deliberately not pino's
+  `errWithCause`, which copies every enumerable property down the chain and
+  would have written undici's `HTTPParserError.data` — the provider's
+  unparsed response, which can echo the token the proxy just sent. The same
+  allowlist now serialises the `err` key the shutdown lines use, where pino's
+  own serialiser copied every enumerable property; the shutdown lines the
+  proxy writes come out as before. `scheme://user:pass@` in a message or a
+  stack is redacted up to the last `@` before the next `/` or the end of the
+  line, because `fetch` quotes a URL as it was given: a password containing a
+  space, an `@`, a `?` or a `#` is redacted whole. A `/` inside a raw password
+  still ends the match early; the boot check above keeps any
+  credential-bearing introspection URL out of the process. 0.5.0 and 0.6.0
+  logged these errors without their message, so neither wrote such a
+  password.
+
+### Fixed
+
+- **Provider bodies the clients answer without reading are released (#95 F28,
+  F37; #105, #118).** The introspection client's non-`2xx`, and the session
+  grant's `3xx`, `5xx`, unexpected `4xx` and non-`200` `2xx` and the
+  exchange's `3xx`, now cancel the body instead of leaving it unread. Within
+  undici's 64 KiB read-ahead — every realistic refusal — nothing changes;
+  past it an unread body held its socket until garbage collection (thirty
+  200 KiB refusals left 27 sockets open on Node 26). Nothing on the wire
+  changes.
+
+- **A single-flight whose fetcher throws synchronously is cleared, not pinned
+  (#141).** The rejection stayed under its key, so every later call for that
+  key got the old error until the process restarted.
+  Unreachable from the proxy's own callers, which all pass `async` fetchers;
+  reachable by code that uses the single-flight directly.
+
+### Removed
+
+- **`jsonwebtoken` (runtime dependency) and `@types/jsonwebtoken` (#95 F24,
+  #104).** Nothing imported them. The proxy verifies no JWT: validation asks
+  the provider over RFC 7662, and the exchange submits the assertion to the
+  provider, reading only its unverified `iss` and `exp`.
+
 ## [0.6.0] — 2026-09-17
 
 ### Added
