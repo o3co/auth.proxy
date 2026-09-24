@@ -69,6 +69,30 @@ describe("createSingleFlight", () => {
 		expect(sf._sizeForTesting()).toBe(0);
 	});
 
+	// A fetcher that throws before it returns a promise has to be cleared like
+	// one that rejects. Otherwise its rejection stays under the key, and every
+	// later call for it gets that rejection without running its own fetcher.
+	it("clears the entry when the fetcher throws synchronously, so the next call runs its own", async () => {
+		const sf = createSingleFlight<string>();
+		await expect(
+			sf.run("k1", () => {
+				throw new Error("sync");
+			}),
+		).rejects.toThrow("sync");
+		expect(sf._sizeForTesting()).toBe(0);
+
+		const next = vi.fn().mockResolvedValue("tok");
+		await expect(sf.run("k1", next)).resolves.toEqual({ value: "tok", wasWaiter: false });
+		expect(next).toHaveBeenCalledTimes(1);
+	});
+
+	it("starts the leader's fetcher within run(), before it yields", () => {
+		const sf = createSingleFlight<string>();
+		const fetcher = vi.fn().mockResolvedValue("tok");
+		void sf.run("k1", fetcher);
+		expect(fetcher).toHaveBeenCalledTimes(1);
+	});
+
 	it("does not coalesce different keys", async () => {
 		const sf = createSingleFlight<string>();
 		const f1 = vi.fn().mockResolvedValue("a");

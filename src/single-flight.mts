@@ -17,8 +17,9 @@
 /**
  * Request coalescing: `SingleFlight`, and its in-memory default. One flight
  * per key; every waiter shares the leader's result or rejection; the slot is
- * cleared in `finally`, settled either way, so the next call for the key
- * starts a new flight. Both modes coalesce with it, and it belongs to neither.
+ * cleared in `finally`, settled either way — a fetcher that throws before it
+ * returns a promise included — so the next call for the key starts a new
+ * flight. Both modes coalesce with it, and it belongs to neither.
  */
 
 export interface SingleFlightResult<T> {
@@ -40,13 +41,21 @@ export const createSingleFlight = <T,>(): SingleFlight<T> => {
 				const value = await existing;
 				return { value, wasWaiter: true };
 			}
-			const promise = (async () => {
-				try {
-					return await fetch();
-				} finally {
-					pending.delete(key);
-				}
-			})();
+			// Started here, before `run` yields, as a leader always has been. A
+			// fetcher that throws synchronously becomes this flight's rejection:
+			// inside an async wrapper its `finally` would run before the entry
+			// was set, and the rejection would then be pinned under the key.
+			let started: Promise<T>;
+			try {
+				started = Promise.resolve(fetch());
+			} catch (err) {
+				started = Promise.reject(err);
+			}
+			// The waiters await this promise, and `finally` settles it only after
+			// the key is cleared, so none of them resumes into a stale entry.
+			const promise = started.finally(() => {
+				pending.delete(key);
+			});
 			pending.set(key, promise);
 			const value = await promise;
 			return { value, wasWaiter: false };
