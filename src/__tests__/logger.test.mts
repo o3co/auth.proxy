@@ -115,9 +115,9 @@ describe("createProxyLogger", () => {
 		expect(entry.error.cause.cause).toMatchObject({ code: "HPE_INVALID_CONSTANT" });
 	});
 
-	// The allowlist is keyed on a field name, so it has to cover both names an
-	// Error is logged under: validation logs `error`, shutdown logs `err`, and
-	// pino's own `err` serialiser copies every enumerable property.
+	// The allowlist is keyed on a field name, so it has to cover both keys under
+	// which an Error is logged: validation logs `error`, shutdown logs `err`,
+	// and pino's own `err` serialiser copies every enumerable property.
 	it("applies the same allowlist to an Error logged under `err`", async () => {
 		const failure = Object.assign(
 			new Error("close failed: https://proxy:hunter2@auth.test/introspect"),
