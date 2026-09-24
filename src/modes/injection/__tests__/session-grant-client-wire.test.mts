@@ -12,7 +12,7 @@
  * `AbortSignal.timeout` ends a call — or a body read — on a real socket, and
  * what reaches the provider.
  */
-import { afterAll, beforeAll, beforeEach, describe, expect, it } from "vitest";
+import { afterAll, afterEach, beforeAll, describe, expect, it } from "vitest";
 
 import {
 	type FakeProvider,
@@ -42,7 +42,7 @@ describe("createSessionGrantClient on the wire", () => {
 	afterAll(async () => {
 		await Promise.all([fake.close(), elsewhere.close()]);
 	});
-	beforeEach(() => {
+	afterEach(() => {
 		fake.reset();
 		elsewhere.reset();
 	});
@@ -53,7 +53,10 @@ describe("createSessionGrantClient on the wire", () => {
 			clientId: "proxy-client",
 			scope: "openid profile",
 			sessionCookieName: "sid",
-			timeoutMs: 5000,
+			// Not 5000: vitest's own timeout is 5000 too, so a body that is never
+			// released would be closed by this timeout instead, and the cases that
+			// pin the release at the bound would pass without it.
+			timeoutMs: 60_000,
 			...overrides,
 		});
 
@@ -311,6 +314,7 @@ describe("createSessionGrantClient on the wire", () => {
 				const err = await refusal(exchange({ providerOrigin: silent.origin, timeoutMs: 50 }));
 
 				expect(err).toMatchObject({ code: "provider_unavailable", status: 502, retryAfter: null });
+				expect(err.message).toMatch(/timeout/);
 			} finally {
 				await silent.close();
 			}

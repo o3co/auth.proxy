@@ -37,7 +37,11 @@ export interface RecordedRequest {
 	method: string;
 	/** The request target as sent: the path and any query. */
 	path: string;
-	/** Node's view: names lower-cased, repeated values joined. */
+	/**
+	 * Node's view: names lower-cased. A repeated header is joined, except
+	 * those Node keeps only once (`authorization`, `content-type` and others),
+	 * whose repeats are dropped; `rawHeaders` has every one.
+	 */
 	headers: IncomingHttpHeaders;
 	/** Names and values as sent, alternating. */
 	rawHeaders: string[];
@@ -96,7 +100,13 @@ export interface FakeProvider {
 	respond(path: string, responder: Responder): void;
 	/** Every request received, in the order its body completed. */
 	readonly requests: readonly RecordedRequest[];
-	/** Forgets the programmed answers and the recorded requests. Connections stay. */
+	/**
+	 * Forgets the programmed answers and the recorded requests. Connections
+	 * stay. Throws if a responder threw since the last reset: the fake answers
+	 * that by dropping the connection, which a client reports as the provider
+	 * being unreachable — an outcome tests expect — so a bug in a test's
+	 * responder would otherwise pass as one. Call it in `afterEach`.
+	 */
 	reset(): void;
 	/** Drops every connection and stops listening. */
 	close(): Promise<void>;
@@ -177,13 +187,17 @@ const writeBody = async (res: ServerResponse, body: FakeBody | undefined): Promi
 export const startFakeProvider = async (): Promise<FakeProvider> => {
 	let responders = new Map<string, Responder>();
 	let requests: RecordedRequest[] = [];
+	let responderErrors: unknown[] = [];
 	const connections = new WeakMap<Socket, { id: number; closed: Promise<void> }>();
 	let connectionCount = 0;
 
 	const handle = async (req: IncomingMessage, res: ServerResponse): Promise<void> => {
 		const body = await readBody(req);
 		// Every socket is registered on "connection", which precedes its requests.
-		const connection = connections.get(req.socket) ?? { id: 0, closed: Promise.resolve() };
+		const connection = connections.get(req.socket);
+		if (connection === undefined) {
+			throw new Error("fake provider: a request arrived on a socket it never registered");
+		}
 		const recorded: RecordedRequest = {
 			method: req.method ?? "",
 			path: req.url ?? "",
@@ -197,12 +211,18 @@ export const startFakeProvider = async (): Promise<FakeProvider> => {
 
 		const pathname = new URL(recorded.path, "http://fake.invalid").pathname;
 		const responder = responders.get(pathname);
-		const response: FakeResponse =
-			responder === undefined
-				? json(404, { error: "not_found", path: pathname })
-				: typeof responder === "function"
-					? await responder(recorded)
-					: responder;
+		let response: FakeResponse;
+		try {
+			response =
+				responder === undefined
+					? json(404, { error: "not_found", path: pathname })
+					: typeof responder === "function"
+						? await responder(recorded)
+						: responder;
+		} catch (error) {
+			responderErrors.push(error);
+			throw error;
+		}
 		if ("hang" in response) {
 			return;
 		}
@@ -242,8 +262,13 @@ export const startFakeProvider = async (): Promise<FakeProvider> => {
 			return requests;
 		},
 		reset() {
+			const errors = responderErrors;
 			responders = new Map();
 			requests = [];
+			responderErrors = [];
+			if (errors.length > 0) {
+				throw new AggregateError(errors, "fake provider: a responder threw");
+			}
 		},
 		close: () =>
 			new Promise<void>((resolve, reject) => {
