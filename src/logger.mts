@@ -19,13 +19,15 @@
  * the process-wide singleton (the default export) that writes NDJSON to
  * stdout at the level `LOG_LEVEL` names (default `info`).
  *
- * Anything logged under the `error` key goes through `serializeLoggedError`,
- * an allowlist (#95 F48): an Error keeps its class name, message, stack and the
- * fields in `LOGGED_ERROR_FIELDS`, follows `cause` at most `MAX_CAUSE_DEPTH`
- * levels, and has URL credentials redacted; every other property is dropped.
- * The allowlist covers the `error` key only — a value under `err` (which
- * `shutdown.mts` uses for a failed `server.close` or cleanup) goes through
- * pino's default serialiser.
+ * Anything logged under the `error` or the `err` key goes through
+ * `serializeLoggedError`, an allowlist (#95 F48): an Error keeps its class
+ * name, message, stack and the fields in `LOGGED_ERROR_FIELDS`, follows `cause`
+ * at most `MAX_CAUSE_DEPTH` levels, and has URL credentials redacted; every
+ * other property is dropped. The validation path logs under `error`,
+ * `shutdown.mts` under `err`; a key the allowlist does not name is serialised
+ * by pino as it is, so an Error belongs under one of these two. Only an
+ * `Error` instance is recognised: an error-like value from another realm, or a
+ * plain object with a `message`, passes through as it is.
  */
 
 import pino, { type DestinationStream } from "pino";
@@ -82,8 +84,8 @@ const redactUrlCredentials = (text: string): string =>
 	text.replace(/([a-z][a-z0-9+.-]*:\/\/)[^/\n]*@/gi, "$1***@");
 
 /**
- * The serialiser for the `error` key. A non-Error passes through as it is —
- * injection logs a string there.
+ * The serialiser for the `error` and `err` keys. A non-Error passes through as
+ * it is — injection logs a string under `error`.
  */
 export const serializeLoggedError = (value: unknown, depth = 0): unknown => {
 	if (!(value instanceof Error)) return value;
@@ -125,11 +127,16 @@ export function createProxyLogger(options?: ProxyLoggerOptions): pino.Logger {
 	const config = {
 		name: "proxy",
 		level,
-		// pino serialises an Error only under `err`; the validation path logs
-		// its failures under `error`, where an Error became `{}` plus whatever
-		// fields it declared — no message, no stack, no cause (#95 F48). Not
-		// pino's own serialiser: see `LOGGED_ERROR_FIELDS`.
-		serializers: { error: (value: unknown) => serializeLoggedError(value) },
+		// pino serialises an Error only under `err`, with a serialiser that
+		// copies every enumerable property; the validation path logs its
+		// failures under `error`, where an Error became `{}` plus whatever
+		// fields it declared — no message, no stack, no cause (#95 F48). Both
+		// keys get the allowlist, so the guarantee does not depend on which
+		// name a log line chose: see `LOGGED_ERROR_FIELDS`.
+		serializers: {
+			error: (value: unknown) => serializeLoggedError(value),
+			err: (value: unknown) => serializeLoggedError(value),
+		},
 	};
 	return options?.destination ? pino(config, options.destination) : pino(config);
 }

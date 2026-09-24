@@ -115,6 +115,21 @@ describe("createProxyLogger", () => {
 		expect(entry.error.cause.cause).toMatchObject({ code: "HPE_INVALID_CONSTANT" });
 	});
 
+	// The allowlist is keyed on a field name, so it has to cover both names an
+	// Error is logged under: validation logs `error`, shutdown logs `err`, and
+	// pino's own `err` serialiser copies every enumerable property.
+	it("applies the same allowlist to an Error logged under `err`", async () => {
+		const failure = Object.assign(
+			new Error("close failed: https://proxy:hunter2@auth.test/introspect"),
+			{ code: "ERR_SERVER_NOT_RUNNING", data: "token=SECRET-ECHO" },
+		);
+		const entry = await firstLine((logger) => logger.error({ err: failure }, "graceful shutdown: server close failed"));
+		expect(JSON.stringify(entry)).not.toContain("SECRET");
+		expect(JSON.stringify(entry)).not.toContain("hunter2");
+		expect(entry.err).toMatchObject({ type: "Error", code: "ERR_SERVER_NOT_RUNNING" });
+		expect(entry.err.message).toContain("https://***@auth.test/introspect");
+	});
+
 	it("redacts URL credentials from messages and stacks", async () => {
 		const entry = await firstLine((logger) =>
 			logger.error(
