@@ -41,6 +41,7 @@ Code both modes need sits outside `modes/`, because neither mode may import the 
 - `modes/*` may import the `src/` root's shared modules, `express/`, `oauth/`, `router/upstream.mts` and `config/`. Neither mode imports the other.
 - Nothing under `express/`, `oauth/`, `router/` or `config/` imports a mode, and the root's shared modules import no mode. In production code, only `app-internal.mts` imports a mode, to select its router.
 - `express/` and `oauth/` import nothing else in `src/`.
+- The test support in `__tests__/` that is not itself a test — the fake provider ([`fake-provider.mts`](__tests__/fake-provider.mts)), a local `node:http` server the provider clients reach through the real `fetch`, and the controlled provider timeout beside it — is imported by tests only, never by production code (#143).
 
 ## Invariants
 
