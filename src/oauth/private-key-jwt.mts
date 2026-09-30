@@ -29,6 +29,7 @@ import {
 	type KeyObject,
 	randomUUID,
 	sign,
+	verify,
 } from "node:crypto";
 
 /** RFC 7523 section 2.2. */
@@ -84,13 +85,6 @@ const algorithmsFor = (kty: unknown, crv: unknown): readonly ClientAssertionAlgo
 	return [];
 };
 
-/**
- * RFC 9864's fully specified name for an Ed25519 signature: the same
- * signature as `EdDSA` on an Ed25519 key, which is the name the provider
- * verifies.
- */
-const ED25519_ALIAS = "Ed25519";
-
 /** Below this, an RSA signature is not one a JOSE verifier accepts. */
 const MIN_RSA_MODULUS_BITS = 2048;
 
@@ -112,16 +106,21 @@ export class ClientKeyError extends Error {
 	}
 }
 
-/** RFC 7638: the required members of the public key, sorted, hashed. */
-const thumbprintOf = (key: KeyObject): string => {
-	const jwk = createPublicKey(key).export({ format: "jwk" }) as Record<string, string>;
-	const members: Record<string, readonly string[]> = {
-		OKP: ["crv", "kty", "x"],
-		EC: ["crv", "kty", "x", "y"],
-		RSA: ["e", "kty", "n"],
-	};
-	const required = members[jwk.kty] ?? [];
-	const canonical = `{${required.map((name) => `${JSON.stringify(name)}:${JSON.stringify(jwk[name])}`).join(",")}}`;
+/**
+ * The members that make a JWK's public key (RFC 7638 section 3.2), in the
+ * lexicographic order its thumbprint hashes them in.
+ */
+const PUBLIC_MEMBERS: Record<string, readonly string[]> = {
+	OKP: ["crv", "kty", "x"],
+	EC: ["crv", "kty", "x", "y"],
+	RSA: ["e", "kty", "n"],
+};
+
+/** RFC 7638: the public members, in order, hashed. */
+const thumbprintOf = (publicJwk: Record<string, unknown>): string => {
+	const canonical = `{${Object.entries(publicJwk)
+		.map(([name, value]) => `${JSON.stringify(name)}:${JSON.stringify(value)}`)
+		.join(",")}}`;
 	return createHash("sha256").update(canonical).digest("base64url");
 };
 
@@ -167,10 +166,11 @@ export const parseClientKey = (value: unknown): ClientKey => {
 	if (keyOps !== undefined && !(Array.isArray(keyOps) && keyOps.includes("sign"))) {
 		throw new ClientKeyError('the client key\'s key_ops do not include "sign"');
 	}
-	const named = alg === ED25519_ALIAS && algorithms.includes("EdDSA") ? "EdDSA" : alg;
-	if (named !== undefined && !algorithms.includes(named as ClientAssertionAlgorithm)) {
+	// The provider matches a registered key's alg to the header's exactly, so
+	// RFC 9864's Ed25519 would be refused where EdDSA is verified.
+	if (alg !== undefined && !algorithms.includes(alg as ClientAssertionAlgorithm)) {
 		throw new ClientKeyError(
-			`the client key's alg does not fit the key; for this key use one of ${algorithms.join(", ")}`,
+			`the client key's alg does not fit the key; for this key use one of ${algorithms.join(", ")}, or no alg`,
 		);
 	}
 	if (kid !== undefined && (typeof kid !== "string" || kid.length === 0)) {
@@ -188,11 +188,31 @@ export const parseClientKey = (value: unknown): ClientKey => {
 		throw new ClientKeyError(`the client key is an RSA key shorter than ${MIN_RSA_MODULUS_BITS} bits`);
 	}
 
+	// The operator registers the public part this JWK carries, and the provider
+	// verifies with it: a signature by the private part must verify under it.
+	// Not every Node checks the two agree when the key is read.
+	const chosen = (alg as ClientAssertionAlgorithm | undefined) ?? algorithms[0];
+	const members = jwk as Record<string, unknown>;
+	const publicJwk = Object.fromEntries(
+		(PUBLIC_MEMBERS[kty as string] ?? []).map((name) => [name, members[name]]),
+	);
+	let matches = false;
+	try {
+		const publicKey = createPublicKey({ key: publicJwk, format: "jwk" } as JsonWebKeyInput);
+		const probe = Buffer.from("client key self-check");
+		matches = verifyJws(chosen, probe, publicKey, signJws(chosen, probe, key));
+	} catch {
+		matches = false;
+	}
+	if (!matches) {
+		throw new ClientKeyError("the client key's public part does not match its private part");
+	}
+
 	return {
 		key,
-		alg: (named as ClientAssertionAlgorithm | undefined) ?? algorithms[0],
+		alg: chosen,
 		kid: (kid as string | undefined) ?? null,
-		thumbprint: thumbprintOf(key),
+		thumbprint: thumbprintOf(publicJwk),
 	};
 };
 
@@ -222,6 +242,36 @@ const signJws = (alg: ClientAssertionAlgorithm, input: Buffer, key: KeyObject): 
 				padding: constants.RSA_PKCS1_PSS_PADDING,
 				saltLength: constants.RSA_PSS_SALTLEN_DIGEST,
 			});
+	}
+};
+
+/** Verifies a signature {@link signJws} made. */
+const verifyJws = (
+	alg: ClientAssertionAlgorithm,
+	input: Buffer,
+	key: KeyObject,
+	signature: Buffer,
+): boolean => {
+	switch (alg) {
+		case "EdDSA":
+			return verify(null, input, key, signature);
+		case "ES256":
+		case "ES384":
+		case "ES512":
+			return verify(`sha${alg.slice(2)}`, input, { key, dsaEncoding: "ieee-p1363" }, signature);
+		case "RS256":
+		case "RS384":
+		case "RS512":
+			return verify(`sha${alg.slice(2)}`, input, key, signature);
+		case "PS256":
+		case "PS384":
+		case "PS512":
+			return verify(
+				`sha${alg.slice(2)}`,
+				input,
+				{ key, padding: constants.RSA_PKCS1_PSS_PADDING, saltLength: constants.RSA_PSS_SALTLEN_DIGEST },
+				signature,
+			);
 	}
 };
 
