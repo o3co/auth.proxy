@@ -817,6 +817,34 @@ describe.each(SETUPS)("the app in injection mode, $name", (setup) => {
 		expect(grantsFor(requestId)).toEqual([sessionGrant("sess-post")]);
 	});
 
+	// The recording upstream is a plain node:http server, which refuses a
+	// request framed by both Transfer-Encoding and Content-Length.
+	it("forwards a chunked POST body intact, framed by Content-Length", async () => {
+		const requestId = `injection-${SETUPS.indexOf(setup)}-chunked`;
+		const body = JSON.stringify({ order: 43, note: "y".repeat(4096) });
+		fake.respond(TOKEN_PATH, issued("minted-chunked-post"));
+
+		const res = await send(proxy.origin, {
+			method: "POST",
+			path: "/orders",
+			headers: {
+				"x-request-id": requestId,
+				cookie: "sid=sess-chunked-post",
+				"content-type": "application/json",
+				"transfer-encoding": "chunked",
+			},
+			body,
+		});
+
+		expect(res.status).toBe(200);
+		const reached = upstream.receivedFor(requestId);
+		expect(reached.map((request) => [request.method, request.path, request.body.toString("utf8")])).toEqual([
+			["POST", "/orders", body],
+		]);
+		expect(headerPairs(reached[0].rawHeaders, "transfer-encoding")).toEqual([]);
+		expect(grantsFor(requestId)).toEqual([sessionGrant("sess-chunked-post")]);
+	});
+
 	it("generates a request id when none is sent, echoes it, and carries it to the provider, the upstream and the log", async () => {
 		fake.respond(TOKEN_PATH, issued("minted-generated"));
 

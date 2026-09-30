@@ -6,8 +6,8 @@
  *
  * What reaches it is what no stage answered: the upstream stage's own
  * failures — a body over the limit that declared no length, a body that
- * ended early, an upstream that refused the connection — and anything a
- * mode's middleware threw. Without it, express answers these with its HTML
+ * ended early, a transfer coding it cannot forward (`501`), an upstream that
+ * refused the connection — and anything a mode's middleware threw. Without it, express answers these with its HTML
  * page, and prints the stack to stderr outside the logger. With it, each is
  * a `StageRefusal` the mode logs and answers in its own vocabulary.
  *

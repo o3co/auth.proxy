@@ -10,7 +10,8 @@ import type { ModeRefusals } from "../../router/refusal.mjs";
  * `{ "code", "message" }` body every validation refusal has, and
  * `validation.*` events with the `Error` itself under `error`. A body over
  * the limit is the caller's to fix, as is any other `4xx`, so both are logged
- * at info; anything else is the proxy or its upstream failing, at error.
+ * at info; anything else is a `5xx`, logged at error — the proxy or its
+ * upstream failing, or a request the proxy cannot forward (`501`).
  */
 export const stageRefusals = (logger: Logger): ModeRefusals => ({
 	log: (requestId, refusal) => {

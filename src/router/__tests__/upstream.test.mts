@@ -12,7 +12,8 @@
  * `connection` and `host` onto the outbound request (lowercase names, as Node
  * parses them) and set `connection: close` (`reqHeaders` in
  * `lib/requestOptions.js`). These tests pin the delta the decorator makes on
- * top of that — a casing-only no-op on the wire.
+ * top of that: the body's inbound framing dropped, and otherwise a
+ * casing-only no-op on the wire.
  */
 import type { IncomingHttpHeaders } from "node:http";
 import proxy from "express-http-proxy";
@@ -102,7 +103,33 @@ describe("createUpstreamProxy", () => {
 		expect(builtOptions().limit).toBe(1_000_000 * 1024 ** 5);
 	});
 
-	describe("proxyReqOptDecorator is a casing-only no-op on what the library already copied", () => {
+	describe("proxyReqOptDecorator on what the library already copied", () => {
+		// The library reads the whole body and then frames what it sends by a
+		// Content-Length it sets itself; a Transfer-Encoding left beside it
+		// would frame the one message twice.
+		it("drops the inbound Transfer-Encoding and Trailer, and changes nothing else", async () => {
+			const chunked = { ...inbound, "transfer-encoding": "chunked", trailer: "X-Sum" };
+			const result = await decorate(chunked);
+			const { "transfer-encoding": _te, trailer: _trailer, ...rest } = libraryHeaders(chunked);
+			expect(result.headers).toEqual({ ...rest, Authorization: "Bearer inbound-7f3a" });
+		});
+
+		it.each([["CHUNKED"], [" chunked "]])("reads %j as chunked", async (coding) => {
+			const result = await decorate({ ...inbound, "transfer-encoding": coding });
+			expect(result.headers).not.toHaveProperty("transfer-encoding");
+		});
+
+		it.each([["gzip, chunked"], ["deflate"], ["chunked, gzip"]])(
+			"refuses the transfer coding %j with a 501 the router's error handler answers",
+			async (coding) => {
+				await expect(decorate({ ...inbound, "transfer-encoding": coding })).rejects.toMatchObject({
+					status: 501,
+				});
+			},
+		);
+	});
+
+	describe("proxyReqOptDecorator is otherwise a casing-only no-op on what the library already copied", () => {
 		it("adds Authorization in canonical casing beside the lowercase copy, leaves x-request-id as copied, touches nothing else", async () => {
 			const result = await decorate(inbound);
 			expect(result.headers).toEqual({

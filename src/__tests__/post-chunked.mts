@@ -37,7 +37,9 @@ export const postChunked = async (
 					path,
 					method: "POST",
 					agent: false,
-					headers: { ...headers, "transfer-encoding": "chunked" },
+					// A caller's own `transfer-encoding` (another coding before
+					// `chunked`) is sent as given; Node frames the body in chunks either way.
+					headers: { "transfer-encoding": "chunked", ...headers },
 				},
 				(res) => {
 					const parts: Buffer[] = [];
