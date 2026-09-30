@@ -3,24 +3,18 @@
 
 /**
  * A fake provider on a real socket, for tests that drive the proxy's provider
- * clients through Node's own `fetch` (#143). Test-only: nothing outside a test
+ * clients through Node's own `fetch`. Test-only: nothing outside a test
  * imports it.
  *
  * A `node:http` server on `127.0.0.1`, port 0. Each test programs what a path
- * answers, and the fake records every request it receives — method, target,
- * headers and raw body — together with the connection that carried it, so a
- * test can see whether a request was followed by another, which connection a
- * client reused, and when the client let a connection go.
+ * answers, and the fake records every request with the connection that
+ * carried it, so a test can see whether a request was followed by another,
+ * which connection a client reused, and when the client let a connection go.
  *
- * What an answer can be, beyond a status, headers and a body: a body that
- * trickles in chunks, one that stops mid-way and holds the connection open,
- * one that is dropped mid-way, one that never stops (it streams until the
- * client goes away), and no answer at all. Nothing here depends on how fast a
- * client reads: a body is past a bound because it never ends, not because it
- * arrived slowly, and a read times out because the fake never finishes it.
- *
- * A second instance serves as a cross-origin redirect target: its origin
- * differs from the first's by port.
+ * Nothing here depends on how fast a client reads: a body is past a bound
+ * because it never ends, not because it arrived slowly, and a read times out
+ * because the fake never finishes it. A second instance serves as a
+ * cross-origin redirect target: its origin differs from the first's by port.
  */
 
 import {

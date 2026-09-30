@@ -80,10 +80,10 @@ describe("validation router", () => {
 		await new Promise<void>((resolve, reject) => upstream.close((err) => err ? reject(err) : resolve()));
 	});
 
-	// #95 F10. The only cancellation is the provider timeout: no client takes a
-	// caller's signal, so a disconnect cannot abort a flight other waiters
-	// share. Proven rather than asserted about the code: the caller that
-	// disconnects is the one that started the flight.
+	// The only cancellation is the provider timeout: no client takes a caller's
+	// signal, so a disconnect cannot abort a flight other waiters share. Proven
+	// rather than asserted about the code: the caller that disconnects is the
+	// one that started the flight.
 	it("a disconnect does not abort the flight its waiters share, and the answer is still cached", async () => {
 		let releaseProvider!: () => void;
 		let announceAsked!: () => void;
@@ -165,7 +165,7 @@ describe("validation router", () => {
 		const fetchMock = vi.fn(async () => Response.json({ active: true, exp: start / 1000 + 1 }));
 		vi.stubGlobal("fetch", fetchMock);
 		expect((await request(app).get("/protected").set("Authorization", "Bearer t")).status).toBe(200);
-		// F14: the inbound bytes reach the upstream on the production path too.
+		// The inbound bytes reach the upstream on the production path too.
 		expect(upstreamHeaders[0].authorization).toBe("Bearer t");
 		clock.mockReturnValue(start + 1000);
 		expect((await request(app).get("/protected").set("Authorization", "Bearer t")).status).toBe(401);
@@ -203,13 +203,13 @@ describe("validation router", () => {
 			expect(res.body).toEqual({ code: 400, message: "Invalid Token Type" });
 			// Asserted by name rather than left implicit: RFC 6750 §3.1 keeps an
 			// error code off a request that attempted an unsupported method, and
-			// the challenge that would fit needs a realm, and this app configures none (#95 F29, F45).
+			// the challenge that would fit needs a realm, and this app configures
+			// none.
 			expect(res.headers["www-authenticate"]).toBeUndefined();
 			expect(upstreamCalls).toBe(0);
 			expect(fetchMock).not.toHaveBeenCalled();
 		});
 
-		// #95 F45, from the config to the header.
 		it("challenges with the configured realm, and names invalid_request on a malformed Bearer", async () => {
 			const fetchMock = vi.fn();
 			vi.stubGlobal("fetch", fetchMock);
@@ -235,7 +235,7 @@ describe("validation router", () => {
 			const res = await request(app).get("/protected").set("Authorization", "Bearer t");
 			expect(res.status).toBe(401);
 			expect(res.body).toEqual({ code: 401, message: "Invalid Token" });
-			// RFC 6750 §3, on the wire (#95 F29).
+			// RFC 6750 §3, on the wire.
 			expect(res.headers["www-authenticate"]).toBe('Bearer error="invalid_token"');
 			expect(upstreamCalls).toBe(0);
 			// The mapping was reached through introspection, not around it.
@@ -243,7 +243,7 @@ describe("validation router", () => {
 		});
 
 		// The same provider answer, read differently because the request carried
-		// a different credential (#95 F7). With client credentials configured
+		// a different credential. With client credentials configured
 		// the proxy authenticated as itself, so the 401 refused the proxy and
 		// the caller's token was never examined.
 		it("answers 502 Provider Configuration Error to a provider 401 when client credentials are configured", async () => {
@@ -261,7 +261,7 @@ describe("validation router", () => {
 
 			expect(res.status).toBe(502);
 			expect(res.body).toEqual({ code: 502, message: "Provider Configuration Error" });
-			// The proxy's own credential was refused, not the caller's (#95 F29).
+			// The proxy's own credential was refused, not the caller's.
 			expect(res.headers["www-authenticate"]).toBeUndefined();
 			expect(upstreamCalls).toBe(0);
 			expect(fetchMock).toHaveBeenCalledTimes(1);
@@ -270,7 +270,6 @@ describe("validation router", () => {
 			expect(headers.Authorization).toMatch(/^Basic /);
 		});
 
-		// #95 F43, on the wire.
 		it("answers 502 Provider Configuration Error when the introspection endpoint redirects", async () => {
 			const fetchMock = vi.fn(
 				async (_url: string, _init: RequestInit) =>
@@ -298,7 +297,7 @@ describe("validation router", () => {
 			const res = await request(app).get("/protected").set("Authorization", "Bearer t");
 			expect(res.status).toBe(502);
 			expect(res.body).toEqual({ code: 502, message: "Bad Gateway" });
-			// Not about the caller's credential, so no challenge (#95 F29).
+			// Not about the caller's credential, so no challenge.
 			expect(res.headers["www-authenticate"]).toBeUndefined();
 			expect(upstreamCalls).toBe(0);
 			expect(fetchMock).toHaveBeenCalledTimes(1);
@@ -330,13 +329,13 @@ describe("validation router", () => {
 
 			expect(res.status).toBe(200);
 			expect(upstreamCalls).toBe(1);
-			// F14: the first SP-delimited word is introspected, the inbound bytes are forwarded.
+			// The first SP-delimited word is introspected, the inbound bytes are forwarded.
 			expect(upstreamHeaders[0].authorization).toBe("Bearer t extra");
 			// The request id the decision hands over is the one the request-id middleware settled on.
 			expect(introspect).toHaveBeenCalledWith("t", "rid-abc");
 			expect(res.headers["x-request-id"]).toBe("rid-abc");
 			expect(fetchMock).not.toHaveBeenCalled();
-			// The same vocabulary as every other line, in both modes (#134).
+			// The same vocabulary as every other line, in both modes.
 			expect(injected.info).toHaveBeenCalledWith(
 				{
 					requestId: "rid-abc",

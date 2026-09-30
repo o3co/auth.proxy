@@ -2,7 +2,7 @@
 // SPDX-License-Identifier: Apache-2.0
 
 /**
- * The upstream stage on the wire, through the real express-http-proxy (#132).
+ * The upstream stage on the wire, through the real express-http-proxy.
  *
  * `upstream.test.mts` pins the options the stage hands to the library; this
  * file pins what the reason for keeping the decorator rests on: the header

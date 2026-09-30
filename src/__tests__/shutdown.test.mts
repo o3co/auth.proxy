@@ -2,20 +2,11 @@
 // SPDX-License-Identifier: Apache-2.0
 
 /**
- * Graceful shutdown, moved in from `@o3co/auth.utils` — and given the deadline
- * it never had.
- *
- * `auth.utils@0.0.4`'s `gracefulShutdown` called `server.close()` with no
- * timeout, so a single stuck in-flight request meant the process never exited
- * on its own and the orchestrator's SIGKILL cut it down mid-flight: the
- * opposite of a graceful shutdown, arriving only under the load that produces
- * a stuck request. Its cleanup-failure path also wrote to `console.error`, one
- * bare line in a service whose every other line is NDJSON, and it always
- * exited zero, so an orchestrator could not tell a clean drain from a
- * truncated one.
- *
- * `auth.provider` reached the same conclusion in its issue #290 and moved the
- * behaviour into the code it deploys. This is that contract, for this proxy.
+ * Graceful shutdown, against the guarantees in the header of
+ * `src/shutdown.mts`: draining has a deadline, so one stuck in-flight request
+ * cannot hold the process until the orchestrator's SIGKILL; failures are
+ * logged through the app logger, not `console.error`; and the exit code tells
+ * a clean drain from a truncated one.
  */
 import type { Server } from "node:http";
 import { describe, expect, it, vi } from "vitest";
@@ -201,9 +192,9 @@ describe("installGracefulShutdown", () => {
 	});
 
 	it("bounds cleanup so a hanging dispose cannot wedge the process (#81 review)", async () => {
-		// The docstring promised cleanup "never wedges the process", but `finish`
-		// awaited it with no deadline: a dispose that never settles meant `exit`
-		// was never reached and the drain deadline had already been cleared.
+		// The drain deadline is cleared once draining finishes, so a dispose that
+		// never settles reaches `exit` only through the cleanup budget
+		// (`cleanupTimeoutMs`, by default `drainTimeoutMs`).
 		vi.useFakeTimers();
 		try {
 			const { signals, finishDraining, exit, logger } = install({
@@ -251,9 +242,9 @@ describe("installGracefulShutdown", () => {
 	});
 
 	it("reports the cleanup outcome as the reason, not the drain that preceded it", async () => {
-		// `exitCode` became 1 while `reason` still said "drained", so the one line
-		// an operator alerts on contradicted itself. The drain outcome is still
-		// carried, under its own key, so neither fact is lost.
+		// The line an operator alerts on must not say "drained" next to a
+		// non-zero exit code. The drain outcome is still carried, under its own
+		// key, so neither fact is lost.
 		const { signals, finishDraining, logger, exit } = install({
 			cleanup: () => Promise.reject(new Error("teardown failed")),
 		});

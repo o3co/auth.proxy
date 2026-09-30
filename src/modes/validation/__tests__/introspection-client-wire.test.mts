@@ -3,7 +3,7 @@
 
 /**
  * The introspection client through Node's own `fetch`, against a fake
- * provider on a real socket (#143).
+ * provider on a real socket.
  *
  * `introspection-client.test.mts` pins the same contract against a stubbed
  * `fetch` that returns hand-built responses; this file pins what that stub

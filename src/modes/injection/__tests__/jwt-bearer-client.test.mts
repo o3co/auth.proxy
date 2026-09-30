@@ -215,7 +215,7 @@ describe("createJwtBearerClient.exchange", () => {
 
 	// Its own case rather than a row in the table above: the array is refused
 	// for the body it is, not for the access_token an array cannot carry, and
-	// the message is the only thing that tells those two routes apart (#95 F34).
+	// the message is the only thing that tells those two routes apart.
 	it("throws provider_invalid_response on a JSON array body, naming the body rather than a missing claim", async () => {
 		fetchMock.mockResolvedValueOnce(jsonResponse(200, [{ access_token: "tok", token_type: "Bearer" }]));
 
@@ -226,7 +226,7 @@ describe("createJwtBearerClient.exchange", () => {
 		});
 	});
 
-	// #95 F37: the redirect branch answers from the status alone, and an unread
+	// The redirect branch answers from the status alone, and an unread
 	// body holds its socket out of undici's pool until it is collected.
 	describe("a body nothing reads", () => {
 		const trackedRedirect = (onCancel: () => void = () => {}) => {
@@ -374,8 +374,8 @@ describe("createJwtBearerClient.exchange", () => {
 			});
 		}
 
-		// The mapping is unchanged; the provider's error code is now kept for
-		// the log line, validated like every other one.
+		// The same mapping, with the provider's error code kept for the log
+		// line, validated like every other one.
 		for (const [status, error] of [
 			[503, "temporarily_unavailable"],
 			[500, "server_error"],

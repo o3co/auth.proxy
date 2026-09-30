@@ -13,7 +13,7 @@ import { createRouter } from "../router.mjs";
 import { createTokenCache } from "../token-cache.mjs";
 import { listenForFlight } from "./flight-joined.mjs";
 
-// External credential exchange (#90): with auth.injection.exchange enabled, an
+// External credential exchange: with auth.injection.exchange enabled, an
 // inbound `Authorization: Bearer <JWT>` is submitted to the provider as an
 // RFC 7523 jwt-bearer assertion and only the issued token reaches upstream.
 

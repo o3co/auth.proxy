@@ -2,7 +2,7 @@
 // SPDX-License-Identifier: Apache-2.0
 
 /**
- * Authorization header parsing, moved in from `@o3co/auth.utils/express`.
+ * Authorization header parsing (`bearer.mts`).
  *
  * The proxy decides from this whether a request carries a credential at all,
  * so the grammar it accepts is part of the proxy's own contract and belongs
@@ -47,7 +47,7 @@ describe("extractBearerToken", () => {
 	});
 });
 
-// #95 F45: which of extractBearerToken's refusals named Bearer.
+// Which of extractBearerToken's refusals named Bearer.
 describe("namesBearerScheme", () => {
 	it.each(["Bearer", "Bearer ", "Bearer  t"])("is true for the malformed Bearer %j", (header) => {
 		expect(namesBearerScheme(header)).toBe(true);

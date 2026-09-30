@@ -200,7 +200,7 @@ describe("injection router", () => {
 		}
 	});
 
-	// #95 F10. No client takes a caller's signal, so the only cancellation is
+	// No client takes a caller's signal, so the only cancellation is
 	// AbortSignal.timeout — and a caller that leaves cannot abort a flight the
 	// other waiters share. The one that leaves here is the leader.
 	it("a disconnect does not abort the flight its waiters share, and the token is still cached", async () => {
@@ -304,8 +304,8 @@ describe("injection router", () => {
 		expect(upstream.received).toHaveLength(0);
 	});
 
-	// #95 F47, on the wire: the browser is not told to sign in again over the
-	// proxy's own client being refused.
+	// On the wire: the browser is not told to sign in again over the proxy's
+	// own client being refused.
 	it("returns 502 provider_config_error when the provider's 401 refused the proxy's client", async () => {
 		fetchMock.mockResolvedValueOnce(jsonResponse(401, { error: "invalid_client" }));
 		const app = mountApp(makeConfig(upstream.baseURL));
@@ -386,8 +386,8 @@ describe("injection router", () => {
 		expect(upstream.received[0].headers.authorization).toBe("Bearer tok-injected");
 	});
 
-	// #133, on the wire: with the exchange disabled, an empty Authorization
-	// reaches `inject`, and overwriting it is logged like any other value.
+	// On the wire: with the exchange disabled, an empty Authorization reaches
+	// `inject`, and overwriting it is logged like any other value.
 	it("overrides an empty inbound Authorization with the injected Bearer and logs injection.authorization_override (#133)", async () => {
 		const warnSpy = vi.spyOn(logger, "warn");
 		fetchMock.mockResolvedValueOnce(okGrantResponse("tok-injected"));
@@ -522,11 +522,11 @@ describe("injection router", () => {
 
 	it("re-fetches after cache expiry", async () => {
 		// Fake only Date: cache expiry is decided from Date.now() (token-cache.mts,
-		// cache-expiry.mts computeCacheExpiresAt), while supertest and the upstream recorder
-		// need real timers and real IO for their HTTP round trips. Faking
-		// setTimeout & co. would stall those, and a real 1.1 s sleep was slow and
-		// CI-flaky (#24). With the default ttlSeconds=60 / safetyMarginSeconds=5
-		// and expires_in=120 the effective TTL is 55 s.
+		// cache-expiry.mts computeCacheExpiresAt), while supertest and the upstream
+		// recorder need real timers and real IO for their HTTP round trips. Faking
+		// setTimeout & co. would stall those, and a real sleep is slow and flaky.
+		// With the default ttlSeconds=60 / safetyMarginSeconds=5 and
+		// expires_in=120 the effective TTL is 55 s.
 		vi.useFakeTimers({ toFake: ["Date"] });
 		fetchMock
 			.mockResolvedValueOnce(okGrantResponse("tok-1", 120))
@@ -596,8 +596,8 @@ describe("injection router", () => {
 	// not mint one — no cookie, or a cookie refused by the grammar check — the
 	// header is forwarded untouched, so an upstream service cannot read "a
 	// Bearer header arrived from the proxy" as "the proxy minted this".
-	// `stripInboundAuthorization` lets a deployment close that gap; it defaults
-	// to the pass-through behaviour so no existing deployment changes silently.
+	// `stripInboundAuthorization` lets a deployment close that gap; it is off
+	// by default.
 	describe("inbound Authorization on a request the proxy did not mint for", () => {
 		it("forwards an inbound Authorization untouched when the cookie is absent (default)", async () => {
 			const app = mountApp(makeConfig(upstream.baseURL));
@@ -624,8 +624,8 @@ describe("injection router", () => {
 			expect(fetchMock).not.toHaveBeenCalled();
 		});
 
-		// #95 F40, on the wire: an empty Authorization is a header the client
-		// sent, and with the flag on it does not reach the upstream either.
+		// On the wire: an empty Authorization is a header the client sent, and
+		// with the flag on it does not reach the upstream either.
 		it("strips an empty inbound Authorization when the flag is on", async () => {
 			const app = mountApp(
 				makeConfig(upstream.baseURL, { stripInboundAuthorization: true }),
@@ -747,7 +747,7 @@ describe("injection router", () => {
 			requestId: expect.any(String),
 		});
 		expect(eventsOf(injected.info)).toContain("injection.grant_success");
-		// The same vocabulary as every other line, in both modes (#134).
+		// The same vocabulary as every other line, in both modes.
 		expect(injected.info).toHaveBeenCalledWith(
 			{ requestId: "rid-in", event: "injection.incoming_request", method: "GET", path: "/any" },
 			"incoming request",
@@ -759,8 +759,8 @@ describe("injection router", () => {
 	it("accepts an injected tokenCache: a pre-seeded entry is a hit with no grant client call (#95 F4)", async () => {
 		const tokenCache = createTokenCache({ maxEntries: 10 });
 		const config = makeConfig(upstream.baseURL);
-		// Seeded under the router's own grant context, which is what the key
-		// carries since #95 F33 — the cookie hash alone no longer finds it.
+		// Seeded under the router's own grant context, which the key carries:
+		// the cookie hash alone does not find it.
 		tokenCache.set(sessionCacheKey(injectionOf(config), "s1"), "tok-seeded", Date.now() + 60_000);
 		const grantClient = { exchange: vi.fn() };
 		const app = express();

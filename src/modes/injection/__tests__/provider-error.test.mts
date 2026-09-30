@@ -112,11 +112,11 @@ describe("credential matching", () => {
 		expect(sanitizeErrorDescription("bad 12345678 here", ["12345678"])).toBe(null);
 	});
 
-	// Until #95 F30 a credential shorter than 8 characters was matched exactly
-	// and not as a substring, so `bad abc` reached a log line and a relayed
-	// error_description with the cookie value `abc` inside it. Length is not
-	// something the proxy can bound for a value the caller chose, and losing a
-	// provider's diagnostic costs less than putting a credential in a log.
+	// A credential shorter than 8 characters is matched as a substring too,
+	// not only as an exact echo, so `bad abc` with the cookie value `abc` is
+	// refused. Length is not something the proxy can bound for a value the
+	// caller chose, and losing a provider's diagnostic costs less than putting
+	// a credential in a log.
 	it.each([1, 2, 3, 7])(
 		"refuses text containing a credential of %d characters, not only an exact echo",
 		(length) => {
@@ -132,11 +132,10 @@ describe("credential matching", () => {
 		expect(sanitizeErrorDescription("c", ["c"])).toBe(null);
 	});
 
-	// The cost of the change, stated rather than discovered: a one-character
-	// credential refuses almost any text. The caller substitutes its own
-	// wording for a refusal, so what is lost is the provider's diagnostic and
-	// never the answer — `sanitizeErrorCode` classifies the raw value before
-	// this runs.
+	// The cost: a one-character credential refuses almost any text. The
+	// caller substitutes its own wording for a refusal, so what is lost is the
+	// provider's diagnostic and never the answer — `sanitizeErrorCode`
+	// classifies the raw value before this runs.
 	it("refuses ordinary text that happens to contain a very short credential", () => {
 		expect(sanitizeErrorCode("invalid_scope", ["c"])).toBe(INVALID_ERROR_CODE);
 		expect(sanitizeErrorDescription("unknown scope", ["c"])).toBe(null);
@@ -150,8 +149,8 @@ describe("credential matching", () => {
 	});
 });
 
-// The error path's bound, now that the reader it is passed to lives in
-// src/response-body.mts and has no default of its own (#95 F39).
+// The error path's bound: the reader it is passed to, in
+// src/response-body.mts, has no default of its own.
 describe("MAX_ERROR_BODY_BYTES", () => {
 	it("is 16 KiB", () => {
 		expect(MAX_ERROR_BODY_BYTES).toBe(16 * 1024);

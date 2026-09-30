@@ -3,22 +3,21 @@
 
 /**
  * A provider call's timeout, fired by the test at a point it can name rather
- * than after a guessed number of milliseconds (#143). Test-only: nothing
- * outside a test imports it.
+ * than after a guessed number of milliseconds. Test-only: nothing outside a
+ * test imports it.
  *
- * The real `AbortSignal.timeout` is enough to show that a call whose provider
- * never answers ends: whenever the timer fires, the answer is the same. It is
- * not enough for anything that depends on where the call was when it fired.
- * On a loaded runner a short timer can fire before the request has reached
- * the fake, so the fake has no connection to watch close; and a timer meant
- * to fire while the body is read can fire before the headers have been
+ * The real `AbortSignal.timeout` shows that a call whose provider never
+ * answers ends, but not anything that depends on where the call was when it
+ * fired. On a loaded runner a short timer can fire before the request has
+ * reached the fake, so the fake has no connection to watch close; and a timer
+ * meant to fire while the body is read can fire before the headers have been
  * processed, which the clients answer differently.
  *
- * So this takes over `AbortSignal.timeout` — the clients' only cancellation —
- * and aborts every signal it handed out when the test says: from a
- * responder, once the fake holds the whole request, or once undici reports a
- * response's headers (the `undici:request:headers` diagnostics channel) and
- * one `setImmediate` has passed. By then `fetch` has resolved: what is left
+ * So this takes over `AbortSignal.timeout`, the clients' only cancellation,
+ * and aborts every signal it handed out when the test says: from a responder,
+ * once the fake holds the whole request, or once undici reports a response's
+ * headers (the `undici:request:headers` diagnostics channel) and one
+ * `setImmediate` has passed. By then `fetch` has resolved: what is left
  * between the headers and the resolution is promise reactions, which run
  * before any `setImmediate`. The abort reason is the `TimeoutError` a real
  * timeout carries, and the real `fetch` on the real socket does the rest.

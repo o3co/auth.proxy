@@ -2,17 +2,11 @@
 // SPDX-License-Identifier: Apache-2.0
 
 /**
- * The proxy's logger, moved in from `@o3co/auth.utils`.
+ * The proxy's logger: the NDJSON shape an aggregator ingests, the level, and
+ * what an Error logged under `error` or `err` keeps.
  *
- * Moving it fixes a packaging defect as well as the indirection. `auth.utils`
- * took pino as an *optional* peer and fell back to `console` when the import
- * failed; this repo satisfied that peer from **devDependencies**, and the
- * Dockerfile runs `pnpm prune --prod` before copying `node_modules` into the
- * runtime stage. So the deployed proxy had no pino and logged bare
- * `[proxy] ...` lines through the console fallback — not the NDJSON its
- * operators' aggregator ingests, and not what any local run showed.
- *
- * pino is a direct dependency now, and these tests pin the output shape.
+ * pino belongs in `dependencies`, not `devDependencies`: the Dockerfile runs
+ * `pnpm prune --prod` before copying `node_modules` into the runtime stage.
  */
 import { PassThrough } from "node:stream";
 import { afterEach, describe, expect, it } from "vitest";
@@ -67,11 +61,11 @@ describe("createProxyLogger", () => {
 		expect(entry.msg).toBe("rejected");
 	});
 
-	// #95 F48: pino serialises an Error only under `err`; validation logs its
-	// failures under `error`, where JSON.stringify kept the enumerable fields
-	// alone — no message, no stack, no cause.
+	// pino serialises an Error only under `err`; validation logs its failures
+	// under `error`, where without a serialiser JSON.stringify would keep the
+	// enumerable fields alone — no message, no stack, no cause.
 	it("serialises an Error under `error` with its message, stack and cause chain", async () => {
-		// The shape of a refused introspection call since F42: the wrapper, then
+		// The shape of a refused introspection call: the wrapper, then
 		// undici's `fetch failed`, then the socket's own error.
 		const refused = Object.assign(new Error("connect ECONNREFUSED 127.0.0.1:1"), {
 			code: "ECONNREFUSED",
@@ -97,8 +91,8 @@ describe("createProxyLogger", () => {
 		expect(entry.error).toBe("session expired");
 	});
 
-	// Codex on #95 F48: an allowlist, because undici's HTTPParserError keeps
-	// the unparsed response in `data`, and a provider may echo the token.
+	// An allowlist, because undici's HTTPParserError keeps the unparsed
+	// response in `data`, and a provider may echo the token.
 	it("logs only the allowlisted fields of an error in the chain", async () => {
 		const parser = Object.assign(new Error("Response does not match the HTTP/1.1 protocol"), {
 			code: "HPE_INVALID_CONSTANT",
@@ -141,7 +135,7 @@ describe("createProxyLogger", () => {
 		expect(entry.error.message).toContain("https://***@auth.test/introspect");
 	});
 
-	// #140: `fetch` quotes a URL in its refusals exactly as it was given, not
+	// `fetch` quotes a URL in its refusals exactly as it was given, not
 	// normalised, so the redaction cannot rely on the WHATWG spelling — where a
 	// space is `%20`, an interior `@` is `%40`, and `?` and `#` never appear in
 	// userinfo at all.

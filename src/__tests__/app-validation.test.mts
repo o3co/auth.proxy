@@ -2,18 +2,18 @@
 // SPDX-License-Identifier: Apache-2.0
 
 /**
- * Validation mode as it runs (#144): `src/app.mts` in a child process,
- * configured by environment variables over the shipped conf, in front of a
- * recording upstream, asking the fake provider over the real `fetch`.
- * Nothing is mocked — not a router, a client, `fetch` or the schema.
+ * Validation mode as it runs: `src/app.mts` in a child process, configured by
+ * environment variables over the shipped conf, in front of a recording
+ * upstream, asking the fake provider over the real `fetch`. Nothing is mocked
+ * — not a router, a client, `fetch` or the schema.
  *
  * Each configuration the README distinguishes gets its own process: without
  * client credentials, with `CLIENT_ID` / `CLIENT_SECRET`, and with
- * `VALIDATION_REALM`. Each is sent the request shapes validation answers,
- * and each case asserts the answer (status, body, `WWW-Authenticate`), what
- * the upstream received (its `Authorization`, names as sent), what the
- * provider received (the endpoint, the credential, the form) and the log
- * events written for the request.
+ * `VALIDATION_REALM`. Each is sent the request shapes validation answers, and
+ * each case asserts the answer (status, body, `WWW-Authenticate`), what the
+ * upstream received (its `Authorization`, names as sent), what the provider
+ * received (the endpoint, the credential, the form) and the log events written
+ * for the request.
  *
  * The expected values are the documented contract, not the code's: the
  * README's challenge table and "What a provider 401 means", the validation
@@ -58,7 +58,7 @@ const INCOMING: Line = { event: "validation.incoming_request", level: "info", ms
  * A provider failure line: the event, the level and the message the README
  * and the v0.7.0 CHANGELOG name, and the error itself under `error`, through
  * the logger's allowlist — an object with the class and the message, never
- * the string injection logs (`src/README.md`, #95 F48).
+ * the string injection logs (`src/README.md`).
  */
 const failure = (event: string, level: string, msg: string): Line => ({
 	event,
@@ -111,7 +111,7 @@ const SETUPS: Setup[] = [
 		introspectionCredential: () =>
 			`Basic ${Buffer.from("orders-proxy:s3%3Acr%20t%2B%2F%25").toString("base64")}`,
 		challenge: NO_REALM,
-		// The provider refused the proxy, not the caller (#95 F7).
+		// The provider refused the proxy, not the caller.
 		provider401: {
 			status: 502,
 			message: "Provider Configuration Error",

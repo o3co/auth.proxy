@@ -19,8 +19,7 @@
  * validation middleware, then the shared upstream stage.
  *
  * `createRouter` builds the introspector over a client, a cache and a flight
- * table of its own (`buildIntrospector`), or takes one from `deps.introspect`
- * (#95 F3).
+ * table of its own (`buildIntrospector`), or takes one from `deps.introspect`.
  */
 
 import type { NextFunction, Request, Response } from "express";
@@ -46,13 +45,13 @@ import {
 
 type ValidationConfig = Extract<AppConfig["auth"], { mode: "validation" }>;
 
-/** What `createRouter` builds by default and a caller may supply instead (#95 F3). */
+/** What `createRouter` builds by default and a caller may supply instead. */
 export type ValidationDepsOverrides = Partial<ValidationDeps>;
 
 /**
  * Reads the two headers, lets `decideValidation` decide, applies the outcome.
  * `forward` leaves `req.headers` untouched, so the upstream receives the
- * inbound `Authorization` bytes (F14). An outcome kind this switch does not
+ * inbound `Authorization` bytes. An outcome kind this switch does not
  * know throws rather than leaving the request unanswered and the socket held.
  */
 const validationMiddleware =
@@ -90,8 +89,8 @@ const validationMiddleware =
 /**
  * The bundled introspector for this router: the provider's endpoint behind
  * `IntrospectionClient`, a cache this router owns, and the reading of the
- * response between them (#95 F5). Each router builds its own — the cache was
- * module state shared by every router in the process until then.
+ * response between them. Each router builds its own, so routers in one
+ * process share no cache.
  */
 const buildIntrospector = (validation: ValidationConfig["validation"]): Introspector => {
 	const { clientId, clientSecret } = validation.client;
@@ -107,7 +106,7 @@ const buildIntrospector = (validation: ValidationConfig["validation"]): Introspe
 		cache: createIntrospectionCache({ maxEntries: validation.introspect.cacheMaxEntries }),
 		// The router's own, like the cache: not supplied through `deps`, because
 		// a caller that supplies `deps.introspect` replaces everything below
-		// this seam and owns its own coalescing (#95 F3, F6).
+		// this seam and owns its own coalescing.
 		singleFlight: createSingleFlight<IntrospectionResult>(),
 		cacheTtlSec: validation.introspect.cacheTtlSec,
 	});

@@ -2,10 +2,10 @@
 // SPDX-License-Identifier: Apache-2.0
 
 /**
- * The introspection client on its own (#95 F5): one `POST` per call and the
- * reading of the response as an RFC 7662 response — the status, the JSON, and
- * `active` being a boolean. What the proxy then does with a valid response,
- * and what is cached, is `introspect.test.mts`.
+ * The introspection client on its own: one `POST` per call and the reading of
+ * the response as an RFC 7662 response — the status, the JSON, and `active`
+ * being a boolean. What the proxy then does with a valid response, and what
+ * is cached, is `introspect.test.mts`.
  */
 import { afterEach, beforeEach, describe, expect, it, vi } from "vitest";
 
@@ -231,8 +231,6 @@ describe("createIntrospectionClient", () => {
 		});
 	});
 
-	// #95 F39: the injection clients have read their 200 at a bound since F35;
-	// this one buffered whatever the provider sent, per in-flight request.
 	describe("the bound on a 200 body", () => {
 		const bodyOfExactly = (bytes: number): string => {
 			const wrapper = '{"active":true,"pad":""}';
@@ -308,9 +306,8 @@ describe("createIntrospectionClient", () => {
 			expect(MAX_INTROSPECTION_BODY_BYTES).toBe(64 * 1024);
 		});
 
-		// resp.json(), which this used before F39, decodes as UTF-8 and drops a
-		// leading BOM. The bounded reader decodes the same way (F35), and a
-		// provider emitting one must keep working.
+		// The bounded reader decodes as UTF-8 and drops a leading BOM, as
+		// resp.json() does, so a provider emitting one is read.
 		it("reads a body behind a UTF-8 BOM", async () => {
 			fetchMock.mockResolvedValueOnce(new Response('\uFEFF{"active":true}', { status: 200 }));
 
@@ -326,12 +323,12 @@ describe("createIntrospectionClient", () => {
 		await expect(p).rejects.toMatchObject({ status: 503 });
 	});
 
-	// Nothing here reads an error body (#95 F28). Past undici's 64 KiB
+	// Nothing here reads an error body. Past undici's 64 KiB
 	// read-ahead an unread one would hold its socket until the response is
 	// collected; within it undici has already pooled the socket, so this is
 	// defensive. The non-2xx path is the only one that throws before the body
 	// is dealt with: every other refusal runs after readBoundedJsonObject has
-	// read it to the end or cancelled it at the bound (#95 F39).
+	// read it to the end or cancelled it at the bound.
 	it.each([401, 503])(
 		"cancels the body of a %d response instead of leaving it unread",
 		async (status) => {
@@ -387,7 +384,7 @@ describe("createIntrospectionClient", () => {
 
 	// RFC 7662 section 2.3: the introspection request is authenticated. Which
 	// credential it carried decides what the provider's 401 is about, and only
-	// this module knows which one it sent (#95 F7).
+	// this module knows which one it sent.
 	it("marks a 401 as the proxy's own client credentials when they are configured", async () => {
 		fetchMock.mockResolvedValueOnce(new Response("", { status: 401 }));
 
@@ -419,10 +416,10 @@ describe("createIntrospectionClient", () => {
 		).rejects.toMatchObject({ status, refusedCredential: null });
 	});
 
-	// #95 F43, the validation counterpart of F8. The introspection endpoint is
-	// configuration; a followed redirect re-sends the credential this request
-	// carries (the inbound token, or the proxy's Basic header) to a path
-	// nothing configured on a same-origin 307/308, and loses it cross-origin.
+	// The introspection endpoint is configuration; a followed redirect re-sends
+	// the credential this request carries (the inbound token, or the proxy's
+	// Basic header) to a path nothing configured on a same-origin 307/308, and
+	// loses it cross-origin.
 	it("asks fetch not to follow a redirect", async () => {
 		fetchMock.mockResolvedValueOnce(jsonResponse(200, { active: true }));
 
@@ -458,10 +455,10 @@ describe("createIntrospectionClient", () => {
 		},
 	);
 
-	// #95 F42: a call that never answered is the provider failing, as a 5xx
-	// is, so it is an IntrospectHttpError too — the decision answers every one
-	// of those 502, and keeps 500 for what the proxy did not expect. The
-	// original stays reachable as the cause.
+	// A call that never answered is the provider failing, as a 5xx is, so it
+	// is an IntrospectHttpError too — the decision answers every one of those
+	// 502, and keeps 500 for what the proxy did not expect. The original stays
+	// reachable as the cause.
 	it.each([
 		["a timeout", new DOMException("The operation was aborted due to timeout", "TimeoutError")],
 		["a network error", new TypeError("fetch failed")],

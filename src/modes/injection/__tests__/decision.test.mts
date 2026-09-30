@@ -2,7 +2,7 @@
 // SPDX-License-Identifier: Apache-2.0
 
 /**
- * The session decision on its own (#95 F1 / F4): `decideInjection` takes three
+ * The session decision on its own: `decideInjection` takes three
  * plain header values and the injectable deps, and returns an outcome the
  * middleware applies. Nothing here touches Express; the wire shape of each
  * outcome is pinned by `router.test.mts`, the exchange path's refusals by
@@ -85,11 +85,11 @@ const eventsOf = (spy: ReturnType<typeof vi.fn>): unknown[] =>
 const keyFor = (cookieValue: string, cfgOverrides: Partial<InjectionCfg> = {}): string =>
 	sessionCacheKey({ ...baseCfg, ...cfgOverrides }, cookieValue);
 
-// The cache and the flight table may be supplied (#95 F4), so one instance can
-// serve two routers. Until F33 the key was the cookie hash alone, and the
-// second router served the first router's token: a different provider, client,
-// scope or cookie name asks the provider a different question about the same
-// cookie value, and got the wrong answer back.
+// The cache and the flight table may be supplied, so one instance can serve
+// two routers, and the key covers the context as well as the cookie: a
+// different provider, client, scope or cookie name asks the provider a
+// different question about the same cookie value, and must not be served
+// another router's answer.
 describe("sessionCacheKey", () => {
 	it("never contains the cookie value", () => {
 		expect(keyFor("s3cret-session")).not.toContain("s3cret-session");
@@ -109,7 +109,7 @@ describe("sessionCacheKey", () => {
 	});
 
 	// A caller may hand the same TokenCache to deps.tokenCache and
-	// deps.exchange.tokenCache (#95 F2, F4), and then one cookie value that
+	// deps.exchange.tokenCache, and then one cookie value that
 	// happens to equal an assertion must not read the other's entry. The grant
 	// type leading each array is the namespace that says so; the arrays also
 	// differ in shape, so dropping it alone would not collide — it is the
@@ -182,11 +182,10 @@ describe("decideInjection", () => {
 			expect(grantClient.exchange).not.toHaveBeenCalled();
 		});
 
-		// #95 F40. An `Authorization:` with an empty value is a header the client
-		// sent, and Express keeps it as "" rather than dropping it. The exchange
-		// hand-off has always counted it as present (`!== undefined`), while the
-		// strip read truthiness and let it through to the upstream. Both read
-		// presence the same way now.
+		// An `Authorization:` with an empty value is a header the client sent,
+		// and Express keeps it as "" rather than dropping it. The strip reads
+		// presence (`!== undefined`), as the exchange hand-off does, not
+		// truthiness.
 		it("strips an empty inbound Authorization like any other when stripping is on", async () => {
 			const { deps, logger } = makeDeps({ stripInboundAuthorization: true });
 
@@ -261,9 +260,8 @@ describe("decideInjection", () => {
 
 	});
 
-	// Both lines used to say action: "forward" and then strip anyway (#95 F31):
-	// they are written before forwardWithoutInjection runs, and it is what
-	// decides between the two outcomes.
+	// Both lines are written before forwardWithoutInjection runs, which decides
+	// between the two outcomes; their `action` must still name the one it takes.
 	describe("action on the two lines that report a forward without injection", () => {
 		const messageOf = (spy: ReturnType<typeof vi.fn>, event: string): unknown =>
 			spy.mock.calls.find(
@@ -280,7 +278,7 @@ describe("decideInjection", () => {
 				"injection.cookie_rejected",
 				"Bearer own",
 			],
-			// #95 F40: present and empty is stripped too.
+			// Present and empty is stripped too.
 			["no_cookie, empty header", {}, (l: FakeLogger) => l.debug, "injection.no_cookie", ""],
 			[
 				"cookie_rejected, empty header",
@@ -404,9 +402,9 @@ describe("decideInjection", () => {
 			);
 		});
 
-		// #133: presence, not truthiness, as the exchange hand-off and the strip
-		// read it (#95 F40). An empty `Authorization:` is a header the client
-		// sent, and replacing it is an override like any other.
+		// Presence, not truthiness, as the exchange hand-off and the strip read
+		// it. An empty `Authorization:` is a header the client sent, and
+		// replacing it is an override like any other.
 		it("logs injection.authorization_override when an empty inbound Authorization is about to be replaced (#133)", async () => {
 			const { deps, logger, grantClient } = makeDeps();
 			grantClient.exchange.mockResolvedValueOnce(grant("tok-1"));
@@ -510,11 +508,9 @@ describe("decideInjection", () => {
 		});
 
 		// The four cases above are what the bundled client throws, and it always
-		// pairs the code with the status. A supplied grant client (F4) need not,
-		// and the branch used to read the code for the body and the status for
-		// the log line — so an unpaired error was reported as one thing and
-		// answered as another (#95 F32). The code decides both now; the status
-		// decides the status, which is its own job.
+		// pairs the code with the status. A supplied grant client need not, so
+		// the code decides both the body and the log line, and the status only
+		// the status.
 		it.each([
 			{
 				label: "a 401 that is not a session problem is not logged as one",
@@ -546,10 +542,10 @@ describe("decideInjection", () => {
 			expect(fieldsOf(logger[level])).toContainEqual(
 				expect.objectContaining({ event, requestId: "rid-1", error: err.message }),
 			);
-			// Not `.not.toContain(event)`: the old code never logged this event
-			// at the other level, it logged a different one, so that assertion
-			// would pass with the defect in place. The other level carries
-			// nothing but the attempt.
+			// Not `.not.toContain(event)`: a line keyed on the status logs a
+			// different event at the other level, not this one, so that assertion
+			// would pass with the defect. The other level carries nothing but the
+			// attempt.
 			expect(eventsOf(logger[level === "info" ? "error" : "info"])).toEqual(
 				level === "info" ? [] : ["injection.grant_fetch"],
 			);
@@ -559,7 +555,7 @@ describe("decideInjection", () => {
 		// also Object.prototype members are the ones a plain-object lookup
 		// answers with an inherited value: the fallback would not fire, the
 		// line would be logged with undefined fields, and the throw would
-		// escape the catch that exists to answer a refusal. Found by Copilot.
+		// escape the catch that exists to answer a refusal.
 		it.each(["constructor", "toString", "__proto__", "hasOwnProperty", "not_a_real_code"])(
 			"answers and logs a refusal for the undeclared code %j",
 			async (code) => {

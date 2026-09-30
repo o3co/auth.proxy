@@ -114,7 +114,7 @@ export const computeExchangeExpiresAt = ({
 		? null
 		: computeCacheExpiresAt({ ...rest, notAfter: assertionExpiresAt * 1000 });
 
-/** What the exchange decision reads and calls (#95 F2, F4). */
+/** What the exchange decision reads and calls. */
 export interface ExchangeDeps {
 	/** The cache key's context, derived once by `exchangeContext`. */
 	context: ExchangeContext;
@@ -124,15 +124,14 @@ export interface ExchangeDeps {
 	cachePolicy: { ttlSeconds: number; safetyMarginSeconds: number };
 	client: JwtBearerClient;
 	/**
-	 * The exchange path's own instances — the session path's never see an
-	 * exchange entry, and vice versa, which the grant type leading each key
-	 * says even when a caller hands both paths one instance. `exchangeCacheKey`
-	 * carries the context (endpoint, client id, scope, audience, resource), so
-	 * routers differing in any of those may share one. Three things it cannot
-	 * carry, and which the caller must therefore match: `clientSecret`, which
-	 * is not part of the context; the supplied `client`, which cannot be
-	 * hashed; and the cache policy, which decides how long an entry lives
-	 * rather than which token comes back (#95 F33).
+	 * The exchange path's own instances. A caller may hand both paths one
+	 * instance: the grant type leading each key keeps their entries apart.
+	 * `exchangeCacheKey` carries the context (endpoint, client id, scope,
+	 * audience, resource), so routers differing in any of those may share one.
+	 * The caller must match what it cannot carry: `clientSecret`, which is not
+	 * part of the context; the supplied `client`, which cannot be hashed; and
+	 * the cache policy, which decides how long an entry lives rather than which
+	 * token comes back.
 	 */
 	tokenCache: TokenCache;
 	/** Same key space, same sharing contract as `tokenCache`. */
@@ -167,14 +166,13 @@ interface ExchangeFailureLine {
 }
 
 /**
- * The line each JwtBearerErrorCode is logged as (#95 F41), the exchange
- * path's counterpart of the session path's SESSION_FAILURE_LINES (F32).
+ * The line each JwtBearerErrorCode is logged as, the exchange path's
+ * counterpart of the session path's SESSION_FAILURE_LINES.
  *
  * `satisfies` on the literal keeps it exhaustive: a code added to the union
  * fails the build here. The lookup is a Map keyed by string because a
- * supplied client (F2) is not bound by the union at runtime — and a plain
- * object would answer `constructor` or `__proto__` with an inherited value,
- * which #109 found on the session path.
+ * supplied client is not bound by the union at runtime, and a plain object
+ * would answer `constructor` or `__proto__` with an inherited value.
  */
 const EXCHANGE_FAILURE_LINES = new Map<string, ExchangeFailureLine>(
 	Object.entries({
@@ -207,10 +205,9 @@ const EXCHANGE_FAILURE_LINES = new Map<string, ExchangeFailureLine>(
 );
 
 /**
- * A code no version of this proxy declared, from a supplied client. It used
- * to fall out of a switch with no default, so the refusal was answered with
- * no log line at all; a refusal that leaves no trace is worse than one logged
- * under a general name.
+ * The line for a code no version of this proxy declares, from a supplied
+ * client: a refusal that leaves no trace is worse than one logged under a
+ * general name.
  */
 const UNKNOWN_EXCHANGE_FAILURE: ExchangeFailureLine = {
 	level: "error",
@@ -228,10 +225,10 @@ const logFailure = (logger: Logger, requestId: string, err: JwtBearerError): voi
 };
 
 /**
- * The external credential exchange (#90) — the injection-mode decision for a
- * request that carries an `Authorization` header while
+ * The external credential exchange: the injection-mode decision for a request
+ * that carries an `Authorization` header while
  * `auth.injection.exchange.enabled` is on. The session decision hands off to it
- * with `ExchangeArgs`; it never sees Express (#95 F2).
+ * with `ExchangeArgs`; it never sees Express.
  *
  * The proxy is a token-endpoint client here and nothing more: it submits the
  * inbound JWT as an RFC 7523 assertion to its configured provider, and on

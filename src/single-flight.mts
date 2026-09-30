@@ -41,10 +41,10 @@ export const createSingleFlight = <T,>(): SingleFlight<T> => {
 				const value = await existing;
 				return { value, wasWaiter: true };
 			}
-			// Started here, before `run` yields, as a leader always has been. A
-			// fetcher that throws synchronously becomes this flight's rejection:
-			// inside an async wrapper its `finally` would run before the entry
-			// was set, and the rejection would then be pinned under the key.
+			// Started here, before `run` yields. A fetcher that throws
+			// synchronously becomes this flight's rejection: inside an async
+			// wrapper its `finally` would run before the entry was set, and the
+			// rejection would then be pinned under the key.
 			let started: Promise<T>;
 			try {
 				started = Promise.resolve(fetch());

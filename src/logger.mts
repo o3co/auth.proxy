@@ -20,14 +20,14 @@
  * stdout at the level `LOG_LEVEL` names (default `info`).
  *
  * Anything logged under the `error` or the `err` key goes through
- * `serializeLoggedError`, an allowlist (#95 F48): an Error keeps its class
- * name, message, stack and the fields in `LOGGED_ERROR_FIELDS`, follows `cause`
- * at most `MAX_CAUSE_DEPTH` levels, and has URL credentials redacted; every
- * other property is dropped. The validation path logs under `error`,
- * `shutdown.mts` under `err`; a key the allowlist does not name is serialised
- * by pino as it is, so an Error belongs under one of these two. Only an
- * `Error` instance is recognised: an error-like value from another realm, or a
- * plain object with a `message`, passes through as it is.
+ * `serializeLoggedError`, an allowlist: an Error keeps its class name, message,
+ * stack and the fields in `LOGGED_ERROR_FIELDS`, follows `cause` at most
+ * `MAX_CAUSE_DEPTH` levels, and has URL credentials redacted; every other
+ * property is dropped. The validation path logs under `error`, `shutdown.mts`
+ * under `err`; any other key is serialised by pino as it is, so an Error
+ * belongs under one of these two. Only an `Error` instance is recognised: an
+ * error-like value from another realm, or a plain object with a `message`,
+ * passes through as it is.
  */
 
 import pino, { type DestinationStream } from "pino";
@@ -47,7 +47,7 @@ export interface Logger {
 }
 
 /**
- * The fields of an Error that reach a log line (#95 F48). An allowlist, not
+ * The fields of an Error that reach a log line. An allowlist, not
  * pino's `errWithCause`: that copies every enumerable property, and some
  * errors carry bytes nobody chose to log — undici's `HTTPParserError.data` is
  * the unparsed rest of the provider's response, which may echo the token the
@@ -64,16 +64,16 @@ const MAX_CAUSE_DEPTH = 5;
  * `scheme://user:pass@host` → `scheme://***@host`: everything after `://` up to
  * the last `@` before the next `/` or the end of the line.
  *
- * An error message quotes a URL as it was given, not normalised: `fetch`'s
- * refusal of a URL with credentials and its failure to parse one both do
- * (#140). So userinfo may carry a space, an `@`, a `?` or a `#` unencoded, and
- * only `/` and the end of a line are taken as the end of the authority.
+ * An error message quotes a URL as it was given, not normalised (`fetch`'s
+ * refusal of a URL with credentials and its failure to parse one both do), so
+ * userinfo may carry a space, an `@`, a `?` or a `#` unencoded, and only `/`
+ * and the end of a line are taken as the end of the authority.
  *
  * Known limit: a `/` inside a raw password cannot be told from the start of a
  * path, and the part after it is not redacted. The schema refuses a configured
  * introspection URL with userinfo, so no credential-bearing URL of the
- * proxy's own reaches `fetch`; this keeps the helper sound for any other raw
- * URL that reaches a message.
+ * proxy's own reaches `fetch`; the redaction is for any other raw URL that
+ * reaches a message.
  *
  * It errs towards redacting: after a bare origin with no path, an `@` later on
  * the same line — in a query, a fragment or plain text — takes the text before
@@ -128,11 +128,11 @@ export function createProxyLogger(options?: ProxyLoggerOptions): pino.Logger {
 		name: "proxy",
 		level,
 		// pino serialises an Error only under `err`, with a serialiser that
-		// copies every enumerable property; the validation path logs its
-		// failures under `error`, where an Error became `{}` plus whatever
-		// fields it declared — no message, no stack, no cause (#95 F48). Both
-		// keys get the allowlist, so the guarantee does not depend on which
-		// name a log line chose: see `LOGGED_ERROR_FIELDS`.
+		// copies every enumerable property; under `error`, where the validation
+		// path logs its failures, an Error would be `{}` plus whatever fields it
+		// declared — no message, no stack, no cause. Both keys get the
+		// allowlist, so the guarantee does not depend on which name a log line
+		// chose: see `LOGGED_ERROR_FIELDS`.
 		serializers: {
 			error: (value: unknown) => serializeLoggedError(value),
 			err: (value: unknown) => serializeLoggedError(value),

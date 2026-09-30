@@ -23,19 +23,15 @@
  *
  * How each answer maps to a {@link SessionGrantErrorCode}:
  *
- *   - `session_unauthorized` (401)       a 401, or a 400 `invalid_grant` — an
- *                                        expired or unknown session. A 401
- *                                        body past `MAX_ERROR_BODY_BYTES` is
- *                                        abandoned and read as this.
- *   - `provider_config_error` (502)      a 401 `invalid_client` (the proxy's
- *                                        own `clientId`, #95 F47), any other
- *                                        400, or a redirect
- *   - `provider_unavailable` (502)       5xx, network error, a timeout before
- *                                        the response headers arrive, an
- *                                        unexpected 4xx or a 2xx other than 200
- *   - `provider_invalid_response` (502)  a 200 that is not a JSON object, is
- *                                        over `MAX_TOKEN_BODY_BYTES`, or lacks
- *                                        an `access_token`
+ *   - `session_unauthorized` (401): a 401, or a 400 `invalid_grant` — an
+ *     expired or unknown session. A 401 body past `MAX_ERROR_BODY_BYTES` is
+ *     abandoned and read as this.
+ *   - `provider_config_error` (502): a 401 `invalid_client` (the proxy's own
+ *     `clientId`), any other 400, or a redirect.
+ *   - `provider_unavailable` (502): 5xx, network error, a timeout before the
+ *     response headers arrive, an unexpected 4xx or a 2xx other than 200.
+ *   - `provider_invalid_response` (502): a 200 that is not a JSON object, is
+ *     over `MAX_TOKEN_BODY_BYTES`, or lacks an `access_token`.
  *
  * A timeout while a body is being read is not `provider_unavailable`:
  * `readBoundedJsonObject` answers `null` for it, so the status decides — a 200
@@ -86,7 +82,7 @@ export interface SessionGrantClientConfig {
 
 export interface SessionGrantClient {
 	/**
-	 * No signal parameter, deliberately (#95 F10): the only cancellation is
+	 * No signal parameter, deliberately: the only cancellation is
 	 * `AbortSignal.timeout(cfg.timeoutMs)`, and a caller's disconnect must not
 	 * abort a grant other waiters are coalesced onto.
 	 */
@@ -116,7 +112,7 @@ export const createSessionGrantClient = (
 					headers: {
 						"Content-Type": "application/x-www-form-urlencoded",
 						// Both halves are grammar-checked before they get here: the name by
-						// the Zod schema at boot (#75), the value by extractCookie (#23).
+						// the Zod schema at boot, the value by extractCookie.
 						Cookie: `${cfg.sessionCookieName}=${sessionCookieValue}`,
 						"X-Request-Id": requestId,
 						Accept: "application/json",
@@ -124,14 +120,11 @@ export const createSessionGrantClient = (
 					body,
 					// The token endpoint is configuration, not somewhere a provider
 					// moves at runtime, and neither way a redirect goes is one this
-					// call can report honestly (#95 F8). Same-origin, `fetch` keeps
-					// the Cookie and re-sends it to a path nothing configured, with
-					// the method changed to GET on a 301/302/303. Cross-origin it
-					// strips the Cookie, so the provider sees an unauthenticated
-					// request, answers 401, and the caller is told to authenticate
-					// again over a misconfigured endpoint. The jwt-bearer client has
-					// always refused a redirect; this one inherited `fetch`'s default
-					// of following up to twenty.
+					// call can report honestly. Same-origin, `fetch` keeps the Cookie
+					// and re-sends it to a path nothing configured, with the method
+					// changed to GET on a 301/302/303. Cross-origin it strips the
+					// Cookie, so the provider answers 401 and the caller is told to
+					// authenticate again over a misconfigured endpoint.
 					redirect: "manual",
 					signal: AbortSignal.timeout(cfg.timeoutMs),
 				});
@@ -148,8 +141,7 @@ export const createSessionGrantClient = (
 
 			// RFC 6749 §5.1: a successful token response is a 200. Any other 2xx
 			// reaches the unexpected-status tail below, as it does in the
-			// jwt-bearer client — until #95 F38 this was `resp.ok`, and a 204
-			// was refused as "provider returned 200 …", a status it never sent.
+			// jwt-bearer client.
 			if (resp.status === 200) {
 				const data = await parseJsonBody(resp);
 				if (data === null) {
@@ -189,14 +181,12 @@ export const createSessionGrantClient = (
 				// Almost always an expired or unknown session — but RFC 6749
 				// section 5.2 also answers 401 invalid_client when the client fails
 				// authentication, which for this public client means the proxy's
-				// own clientId is wrong (#95 F47). Reporting that as an expired
-				// session told every browser to sign in again, over something
-				// signing in cannot fix. Only the body's `error` tells the two
-				// apart, so it is read — bounded, like every error body here. A
-				// provider that trickles this body now holds the request (and any
-				// waiter coalesced onto it) until AbortSignal.timeout ends the
-				// read, which then lands as the expired session; the 400 branch
-				// has always read its body the same way.
+				// own clientId is wrong, something signing in again cannot fix.
+				// Only the body's `error` tells the two apart, so it is read —
+				// bounded, like every error body here. A provider that trickles
+				// this body holds the request (and any waiter coalesced onto it)
+				// until AbortSignal.timeout ends the read, which then lands as the
+				// expired session.
 				const data = await readBoundedJsonObject(resp, MAX_ERROR_BODY_BYTES);
 				if (data?.error === "invalid_client") {
 					// The description is relayed to the client, as on the 400
@@ -222,8 +212,8 @@ export const createSessionGrantClient = (
 			if (resp.status === 400) {
 				const data = await readBoundedJsonObject(resp, MAX_ERROR_BODY_BYTES);
 				// A revoked/expired session is a rejected grant, not a proxy
-				// configuration error. Preserve the existing session_required
-				// response so the caller can recover by authenticating again.
+				// configuration error: it is answered session_required, so the
+				// caller can recover by authenticating again.
 				if (data?.error === "invalid_grant") {
 					throw new SessionGrantError(
 						"session_unauthorized", 401, "provider rejected the session grant", retryAfter,

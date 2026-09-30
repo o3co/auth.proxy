@@ -2,7 +2,7 @@
 // SPDX-License-Identifier: Apache-2.0
 
 /**
- * A real upstream for the composition tests (#144): a `node:http` server on
+ * A real upstream for the composition tests: a `node:http` server on
  * `127.0.0.1`, port 0, that records every request the proxy forwards —
  * method, target, headers (names as sent) and body — and answers each one
  * `200 {"upstream":"reached","path":<target>}`, so a test can tell an answer

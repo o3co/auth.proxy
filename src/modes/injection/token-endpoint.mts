@@ -17,9 +17,8 @@
 import { readBoundedJsonObject } from "../../response-body.mjs";
 
 /**
- * What every call to the provider's token endpoint needs, wherever it is made
- * from (#95 F19). The session grant, the jwt-bearer exchange and the exchange
- * handler each had to reach into one of the others for these; they belong to
+ * What every call to the provider's token endpoint needs. The session grant,
+ * the jwt-bearer exchange and the exchange handler all use it; it belongs to
  * none of them, the way `provider-error.mts` belongs to none of them.
  */
 
@@ -31,34 +30,31 @@ export const buildTokenUrl = (providerOrigin: string): string => {
 };
 
 /**
- * How much of a token response is read before giving up on it (#95 F35).
+ * How much of a token response is read before giving up on it. It is a memory
+ * bound, not a validity check.
  *
- * Four times the error path's bound, which is the asymmetry that makes this
- * worth its own constant: an error body carries a code and a sentence, while a
- * token response can carry an `id_token` with a full claim set beside the
- * access and refresh tokens. Still far above anything a provider sends — a
- * large one is single-digit kilobytes — so the bound is reached only by a
- * provider streaming a body that is not a token response at all. The headroom
- * is deliberate rather than tight: the issued token goes back out in an
- * upstream `Authorization` header, and typical header limits are 8-16 KB, so a
- * token response anywhere near this bound is unusable downstream whatever this
- * says. It is a memory bound, not a validity check.
+ * Four times the error path's bound: an error body carries a code and a
+ * sentence, while a token response can carry an `id_token` with a full claim
+ * set beside the access and refresh tokens. A large token response is
+ * single-digit kilobytes, so only a provider streaming something that is not a
+ * token response reaches the bound. The headroom is deliberate: the issued
+ * token goes out in an upstream `Authorization` header, where typical limits
+ * are 8-16 KB, so a response anywhere near this bound is unusable downstream
+ * anyway.
  */
 export const MAX_TOKEN_BODY_BYTES = 64 * 1024;
 
 /**
  * A response body as an object, or `null` when it is not one — empty, not
- * JSON, JSON that is not an object (arrays included, #95 F34), or larger than
+ * JSON, JSON that is not an object (arrays included), or larger than
  * {@link MAX_TOKEN_BODY_BYTES}. Never throws: a provider that answers with
  * HTML, cuts the body short, or does not stop sending is answering badly
  * rather than saying something the caller must parse.
  *
  * The reading is `readBoundedJsonObject`'s, with this bound in place of the
- * error path's (#95 F35): the success path used to buffer whatever arrived
- * while the path for a misbehaving provider capped at 16 KiB, which had it
- * backwards. One reader now, two bounds. A caller cannot tell an over-bound
- * body from an unparseable one — both are `null`, and a provider that reaches
- * either is refused the same way.
+ * error path's. A caller cannot tell an over-bound body from an unparseable
+ * one — both are `null`, and a provider that reaches either is refused the
+ * same way.
  */
 export const parseJsonBody = async (resp: Response): Promise<Record<string, unknown> | null> =>
 	readBoundedJsonObject(resp, MAX_TOKEN_BODY_BYTES);

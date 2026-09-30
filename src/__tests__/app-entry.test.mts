@@ -2,9 +2,9 @@
 // SPDX-License-Identifier: Apache-2.0
 
 /**
- * The entry point itself (#144): what `src/app.mts` does before and around
- * the mode router, in a child process configured by environment variables
- * over the shipped conf.
+ * The entry point itself: what `src/app.mts` does before and around the mode
+ * router, in a child process configured by environment variables over the
+ * shipped conf.
  *
  * - A configuration the documentation says is refused stops the process
  *   before it listens: non-zero exit, no `Server ready` line, the key named

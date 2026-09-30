@@ -2,7 +2,7 @@
 // SPDX-License-Identifier: Apache-2.0
 
 /**
- * The fake provider itself (#143), through Node's own `fetch`: what it
+ * The fake provider itself, through Node's own `fetch`: what it
  * records, and that each kind of answer is on the wire what the client tests
  * rely on it being. A client test that passes against a fake that does not do
  * what it says would pin nothing. The timeout the client tests fire mid-body

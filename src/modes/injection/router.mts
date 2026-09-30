@@ -20,8 +20,8 @@
  *
  * `createRouter` builds the session path's cache, flight table and grant
  * client and — with the exchange on — the exchange's context, client, cache
- * and flight table, or takes them from `deps` (#95 F2, F4); the exchange
- * context is always derived from config, never supplied.
+ * and flight table, or takes them from `deps`; the exchange context is always
+ * derived from config, never supplied.
  */
 
 import type { NextFunction, Request, Response } from "express";
@@ -46,13 +46,13 @@ import { createTokenCache } from "./token-cache.mjs";
 type InjectionConfig = Extract<AppConfig["auth"], { mode: "injection" }>;
 
 /**
- * The exchange path's client, cache and flight table a caller may supply
- * (#95 F2, F4). See `ExchangeDeps` for what each is and for the sharing
- * contract on the cache and the flight table (#95 F33).
+ * The exchange path's client, cache and flight table a caller may supply. See
+ * `ExchangeDeps` for what each is and for the sharing contract on the cache
+ * and the flight table.
  */
 export type ExchangeDepsOverrides = Partial<Pick<ExchangeDeps, "client" | "tokenCache" | "singleFlight">>;
 
-/** What `createRouter` builds by default and a caller may supply instead (#95 F4). */
+/** What `createRouter` builds by default and a caller may supply instead. */
 export type InjectionDepsOverrides = Partial<
 	Pick<InjectionDeps, "tokenCache" | "singleFlight" | "grantClient" | "logger">
 > & {
@@ -81,12 +81,11 @@ const requireExchange = (exchange: ExchangeDeps | null): ExchangeDeps => {
  * Reads the three headers, lets `decideInjection` decide — and, on its
  * `exchange` hand-off, `decideExchange` — then applies the outcome.
  *
- * `inject` and `forward_stripped` act on `req.headers`, before the upstream
- * stage, rather than in the proxy's `proxyReqOptDecorator`: express-http-proxy
- * copies `req.headers` wholesale into the outbound request, so the decorator
- * alone would leave the original copy in place. An outcome kind this switch
- * does not know throws rather than leaving the request unanswered and the
- * socket held.
+ * `inject` and `forward_stripped` act on `req.headers` before the upstream
+ * stage, not in the proxy's `proxyReqOptDecorator`: express-http-proxy copies
+ * `req.headers` wholesale into the outbound request, so the decorator alone
+ * would leave the original copy in place. An outcome kind this switch does not
+ * know throws rather than leaving the request unanswered and the socket held.
  */
 const injectionMiddleware =
 	(deps: InjectionDeps, exchange: ExchangeDeps | null) =>

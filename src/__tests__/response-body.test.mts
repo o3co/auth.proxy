@@ -2,10 +2,8 @@
 // SPDX-License-Identifier: Apache-2.0
 
 /**
- * What to do with a provider response body, for every path that has one
- * (#95 F28, F35, F37, F39): read at most a bound of it as a JSON object, or
- * release it unread. Moved here from `modes/injection/provider-error.mts`
- * when validation became the third caller of the reader.
+ * What to do with a provider response body, for every path that has one:
+ * read at most a bound of it as a JSON object, or release it unread.
  */
 import { describe, expect, it } from "vitest";
 import { discardBody, readBoundedJsonObject } from "../response-body.mjs";
@@ -23,8 +21,7 @@ describe("readBoundedJsonObject", () => {
 	});
 
 	// The bytes are decoded as UTF-8, which drops a leading BOM — the same
-	// reading Response.text() and Response.json() give, which every caller
-	// replaced when it started reading through here (#95 F35, F39).
+	// reading Response.text() and Response.json() give.
 	it("decodes as UTF-8, so a leading BOM does not cost the diagnostic", async () => {
 		await expect(readBoundedJsonObject(body('\uFEFF{"error":"invalid_grant"}'), BOUND)).resolves.toEqual({
 			error: "invalid_grant",

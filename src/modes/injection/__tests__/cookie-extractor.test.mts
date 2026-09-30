@@ -103,7 +103,7 @@ describe("extractCookie", () => {
 
 	// A pair with the requested name exists but cannot be forwarded. The result
 	// carries only a bounded reason class — never the value bytes — so the router
-	// can log it without leaking the cookie (#73).
+	// can log it without leaking the cookie.
 	describe("rejected — a same-name pair that cannot be forwarded (#73)", () => {
 		it("reports reason 'empty' for an empty bare value", () => {
 			expect(extractCookie("sid=; other=foo", "sid")).toEqual(rejected("empty"));
@@ -134,7 +134,7 @@ describe("extractCookie", () => {
 		});
 	});
 
-	// RFC 6265 section 4.1.1 cookie-octet grammar (#23). The extracted value is
+	// RFC 6265 section 4.1.1 cookie-octet grammar. The extracted value is
 	// interpolated verbatim into the outbound `Cookie` header of the session
 	// grant call, so anything outside the grammar must not be forwarded.
 	describe("cookie-octet grammar (#23)", () => {

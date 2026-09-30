@@ -21,7 +21,7 @@
  */
 
 /**
- * Releases a body nothing is going to read (#95 F28, F37).
+ * Releases a body nothing is going to read.
  *
  * Every client in this proxy answers some statuses from the status alone — a
  * refusal, a redirect, an outage — and throws without touching the body.
@@ -30,19 +30,15 @@
  * undici has already read the whole body and returned the socket to the pool,
  * cancelled or not — and every realistic refusal body is tens of bytes.
  * Beyond that buffer an unread body holds its socket until the `Response` is
- * garbage-collected, and a provider sending large refusal bodies under load
- * accumulates held sockets for as long as the collector allows. Cancelling
- * bounds that: the socket is closed rather than returned to the pool, so the
- * next request connects afresh, but nothing accumulates.
+ * garbage-collected, so large refusal bodies under load accumulate held
+ * sockets. Cancelling bounds that: the socket is closed rather than returned
+ * to the pool, so the next request connects afresh, but nothing accumulates.
+ * This is defensive, not a fix for anything a well-behaved provider does.
  *
- * So this is defensive rather than a fix for anything a well-behaved provider
- * does, and it is cheap enough to be right to call anyway.
- *
- * A cancel that itself fails is swallowed. It is not the answer: a stream
- * that is already errored — the connection reset before anything read it —
- * rejects its own cancel with the stored error, and letting that propagate
- * would replace the refusal the caller is about to throw with a failure of
- * releasing a stream nobody wanted.
+ * A cancel that itself fails is swallowed: a stream that is already errored —
+ * the connection reset before anything read it — rejects its own cancel with
+ * the stored error, and letting that propagate would replace the refusal the
+ * caller is about to throw with a failure to release a stream nobody wanted.
  */
 export const discardBody = async (resp: Response): Promise<void> => {
 	await resp.body?.cancel().catch(() => undefined);
@@ -53,11 +49,9 @@ export const discardBody = async (resp: Response): Promise<void> => {
  *
  * `TextDecoder` rather than `Buffer.toString("utf8")` because the two differ
  * on one input: a leading BOM. `TextDecoder` drops it (`ignoreBOM` defaults to
- * `false`), `Buffer` keeps it, and `JSON.parse` then refuses the body. Dropping
- * it is what `Response.text()` does, which is what the success path used until
- * it started reading through here (#95 F35) — so this keeps both paths reading
- * a BOM-prefixed body the way the success path always did. Neither is `fatal`,
- * so invalid UTF-8 is U+FFFD in both.
+ * `false`), as `Response.text()` does; `Buffer` keeps it, and `JSON.parse`
+ * then refuses the body. Neither is `fatal`, so invalid UTF-8 is U+FFFD in
+ * both.
  */
 const utf8 = new TextDecoder();
 
@@ -65,18 +59,17 @@ const utf8 = new TextDecoder();
  * A provider response's body as a JSON object, or `null` — read at most
  * `maxBytes` of it, decoded as UTF-8.
  *
- * There is no reason to buffer an unbounded body on either path: a body over
- * the limit is abandoned (the stream is cancelled) rather than read to the
- * end. An empty, non-JSON or non-object body, an array, or a stream that fails
- * mid-read, is `null` — never an exception that would change how the response
- * is answered.
+ * A body over the limit is abandoned (the stream is cancelled) rather than
+ * read to the end. An empty, non-JSON or non-object body, an array, or a
+ * stream that fails mid-read, is `null` — never an exception that would
+ * change how the response is answered.
  *
  * The bound is the caller's and has no default, because every path has its
  * own and a default would be one path's bound inherited silently by another:
  * an error body is consulted only for its diagnostic `error` code
  * (`MAX_ERROR_BODY_BYTES` in `modes/injection/provider-error.mts`), a token
- * response is the answer itself and is allowed more (`MAX_TOKEN_BODY_BYTES`,
- * #95 F35), and so is an introspection response (#95 F39).
+ * response is the answer itself and is allowed more (`MAX_TOKEN_BODY_BYTES`),
+ * and so is an introspection response (`MAX_INTROSPECTION_BODY_BYTES`).
  */
 export const readBoundedJsonObject = async (
 	resp: Response,
@@ -108,10 +101,9 @@ export const readBoundedJsonObject = async (
 		return null;
 	}
 	try {
-		// TextDecoder, not Buffer.toString("utf8"): it is the UTF-8 decode
-		// Response.text() performs, which drops a leading BOM. Buffer keeps it
-		// and JSON.parse then refuses the body — which would cost the diagnostic
-		// here, and a whole token response on the success path (#95 F35).
+		// `utf8`, not Buffer.toString("utf8"): Buffer keeps a leading BOM and
+		// JSON.parse then refuses the body — the diagnostic on an error path, a
+		// whole token response on the success path.
 		const parsed: unknown = JSON.parse(utf8.decode(Buffer.concat(chunks)));
 		return typeof parsed === "object" && parsed !== null && !Array.isArray(parsed)
 			? (parsed as Record<string, unknown>)

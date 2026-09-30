@@ -2,11 +2,11 @@
 // SPDX-License-Identifier: Apache-2.0
 
 /**
- * The introspector's own work (#95 F5): what it accepts on top of a valid
- * RFC 7662 response, and what it caches. The client is a fake here — its
- * request shape and response validation are `introspection-client.test.mts` —
- * and the cache is the real one, since the bound and the eviction are half of
- * what this composes.
+ * The introspector's own work: what it accepts on top of a valid RFC 7662
+ * response, and what it caches. The client is a fake here — its request shape
+ * and response validation are `introspection-client.test.mts` — and the cache
+ * is the real one, since the bound and the eviction are half of what this
+ * composes.
  */
 import { createHash } from "node:crypto";
 import { describe, expect, it, vi } from "vitest";
@@ -35,10 +35,10 @@ const build = ({
 	return { introspector, cache, introspect, singleFlight };
 };
 
-// Injection has coalesced concurrent misses since it had a cache; validation
-// asked the provider once per request, so a burst on one token multiplied
-// into a burst at the provider — against the rate limit the root README
-// warns about, and the more so the shorter the cache TTL (#95 F6).
+// Concurrent misses on one token share one provider call, as on the injection
+// path. Otherwise a burst on one token is a burst at the provider — against
+// the rate limit the root README warns about, and the more so the shorter the
+// cache TTL.
 describe("the single flight", () => {
 	const deferred = () => {
 		let resolve!: (value: IntrospectionResult) => void;
@@ -232,12 +232,9 @@ describe("createIntrospector", () => {
 		});
 
 		it("evicts once for a token two concurrent requests ask about (#95 F5, F6)", async () => {
-			// One flight, so one write. Before F6 both requests called the
-			// provider and both wrote, and the second write was for a key the
-			// cache already held — which is where the fused function this
-			// replaced would have dropped a second live entry. That double write
-			// is no longer reachable here; `set` is idempotent for a held key
-			// either way, which `introspection-cache.test.mts` owns.
+			// One flight, so one write: no second write for a key the cache
+			// already holds. `set` is idempotent for a held key either way, which
+			// `introspection-cache.test.mts` owns.
 			const { introspector, cache, introspect } = build({ maxEntries: 2 });
 			introspect.mockResolvedValue({ active: true });
 			await introspector("older", "r1");
