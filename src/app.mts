@@ -18,8 +18,9 @@
  * The composition root: the process entry point, which runs at import — there
  * is no exported factory. It parses and validates `../config/application.conf`
  * once, then mounts, in this order, the healthcheck and CORS at the root and
- * the mode router under `http.pathPrefix`, listens, and installs graceful
- * shutdown.
+ * the mode router under `http.pathPrefix`, listens, answers
+ * `Expect: 100-continue` against the body limit (`continueWithinLimit`), and
+ * installs graceful shutdown.
  */
 
 import { parseFile } from "@o3co/ts.hocon";
@@ -29,6 +30,7 @@ import express from "express";
 import { type AppConfig, AppConfigSchema } from "../config/application.schema.mjs";
 import { resolveRouter } from "./app-internal.mjs";
 import logger from "./logger.mjs";
+import { bodyLimitBytes, continueWithinLimit } from "./router/body-limit.mjs";
 import * as routers from "./router/index.mjs";
 import { installGracefulShutdown } from "./shutdown.mjs";
 
@@ -55,5 +57,7 @@ const server = app
 	.listen(config.http.port, config.http.hostname, () => {
 		logger.info(`Server ready at http://${config.http.hostname}:${config.http.port}`);
 	});
+
+server.on("checkContinue", continueWithinLimit(bodyLimitBytes(config), app));
 
 installGracefulShutdown(server, { logger });

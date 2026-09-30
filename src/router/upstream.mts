@@ -64,11 +64,16 @@ const upstreamLimit = (bytes: number): number | string => (bytes === 0 ? "0" : b
  * any other transfer coding is refused `501` (RFC 9112 §6.1) rather than
  * forwarded as if its coded bytes were the body.
  *
- * What it does not do: choose which fields are forwarded, beyond that
- * framing. Every other choice is made before this stage, on `req.headers`.
- * express-http-proxy copies every inbound header except `connection` and
- * `host` onto the outbound request and sets `connection: close` before any
- * decorator runs (`reqHeaders` in
+ * It drops the inbound `Expect` too. The stage already holds the whole body,
+ * so there is nothing to ask the upstream to wait for, and a forwarded
+ * `100-continue` makes Node send the outbound headers at once, before the
+ * library sets that `Content-Length`, which then fails.
+ *
+ * What it does not do: choose which fields are forwarded, beyond the body's
+ * framing and the expectation. Every other choice is made before this stage,
+ * on `req.headers`. express-http-proxy copies every inbound header except
+ * `connection` and `host` onto the outbound request and sets
+ * `connection: close` before any decorator runs (`reqHeaders` in
  * `express-http-proxy/lib/requestOptions.js`). Node lower-cases every inbound
  * header name in `req.headers`, so that copy already carries `authorization`.
  * Node's `setHeader` dedups header names case-insensitively and the last
@@ -105,6 +110,7 @@ export const createUpstreamProxy = (config: UpstreamStageConfig): RequestHandler
 			}
 			delete proxyReqOpts.headers["transfer-encoding"];
 			delete proxyReqOpts.headers.trailer;
+			delete proxyReqOpts.headers.expect;
 			return proxyReqOpts;
 		},
 	});

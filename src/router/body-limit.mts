@@ -15,6 +15,7 @@
  * same way.
  */
 
+import type { IncomingMessage, RequestListener, ServerResponse } from "node:http";
 import type { RequestHandler } from "express";
 import { parseByteSize } from "../byte-size.mjs";
 import { type ModeRefusals, refuse } from "./refusal.mjs";
@@ -64,3 +65,25 @@ export const createBodyLimitGuard = ({
 		next();
 	};
 };
+
+/**
+ * The server's `checkContinue` listener: the body limit for a request that
+ * sends `Expect: 100-continue` and waits to be told to send its body. Node
+ * says `100 Continue` itself unless a listener is installed, so without this
+ * one an oversized upload is invited, sent in full, and only then refused.
+ *
+ * It says `100 Continue` when the declared length is within the limit, or
+ * none is declared, and hands the request to `handle` either way. An
+ * oversized one reaches `createBodyLimitGuard` without the client having been
+ * told to send, and is refused there, in the mode's own shape, before its
+ * body is sent; Node closes the connection after that answer.
+ */
+export const continueWithinLimit =
+	(limitBytes: number, handle: RequestListener) =>
+	(req: IncomingMessage, res: ServerResponse): void => {
+		const declared = req.headers["content-length"];
+		if (declared === undefined || Number(declared) <= limitBytes) {
+			res.writeContinue();
+		}
+		handle(req, res);
+	};
