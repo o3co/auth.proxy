@@ -278,7 +278,7 @@ describe("createIntrospectionClient", () => {
 		});
 	});
 
-	it("throws IntrospectHttpError with matching status on non-2xx response", async () => {
+	it("throws IntrospectHttpError with matching status on a non-200 response", async () => {
 		fetchMock.mockResolvedValueOnce(new Response("", { status: 503 }));
 
 		const p = clientFor().introspect("t", "r");
@@ -286,10 +286,38 @@ describe("createIntrospectionClient", () => {
 		await expect(p).rejects.toMatchObject({ status: 503 });
 	});
 
+	// RFC 7662 §2.2 answers with a 200, and only a 200 is read. Any other 2xx
+	// — even one carrying a live token — is refused with its own status, as
+	// the injection token clients refuse it. Every 2xx that may carry a body
+	// here, and the two that may not below, so no single status can slip
+	// through.
+	it.each([201, 202, 203, 206, 207, 208, 226, 299])(
+		"refuses a %d carrying a live token with its own status",
+		async (status) => {
+			fetchMock.mockResolvedValueOnce(Response.json({ active: true }, { status }));
+
+			const p = clientFor().introspect("t", "r");
+			await expect(p).rejects.toBeInstanceOf(IntrospectHttpError);
+			await expect(p).rejects.toMatchObject({
+				status,
+				message: `introspect returned ${status}`,
+				refusedCredential: null,
+			});
+		},
+	);
+
+	it.each([204, 205])("refuses a %d with its own status, not as a malformed 200", async (status) => {
+		fetchMock.mockResolvedValueOnce(new Response(null, { status }));
+
+		const p = clientFor().introspect("t", "r");
+		await expect(p).rejects.toBeInstanceOf(IntrospectHttpError);
+		await expect(p).rejects.toMatchObject({ status, message: `introspect returned ${status}` });
+	});
+
 	// Nothing here reads an error body. Past undici's 64 KiB
 	// read-ahead an unread one would hold its socket until the response is
 	// collected; within it undici has already pooled the socket, so this is
-	// defensive. The non-2xx path is the only one that throws before the body
+	// defensive. The non-200 path is the only one that throws before the body
 	// is dealt with: every other refusal runs after readBoundedJsonObject has
 	// read it to the end or cancelled it at the bound.
 	it.each([401, 503])(
