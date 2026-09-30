@@ -83,4 +83,21 @@ describe("injection's stage refusals", () => {
 			error_description: "Gateway Timeout",
 		});
 	});
+
+	// Node's connection attempts to every address of a host fail together as
+	// an aggregate error whose message is empty; its code says what happened.
+	it("logs the code of an error whose message is empty", () => {
+		const logger = makeLogger();
+
+		stageRefusals(logger).log("rid-5", {
+			reason: "upstream_unavailable",
+			status: 502,
+			error: Object.assign(new Error(""), { code: "ECONNREFUSED" }),
+		});
+
+		expect(logger.error).toHaveBeenCalledWith(
+			{ requestId: "rid-5", event: "injection.upstream_unavailable", error: "ECONNREFUSED" },
+			"upstream unavailable",
+		);
+	});
 });

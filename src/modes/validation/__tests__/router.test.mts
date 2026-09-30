@@ -495,9 +495,8 @@ describe("validation router", () => {
 		});
 	});
 
-	// Whatever no stage answered reaches the router's error handler and is
-	// refused in this mode's shape: an upstream that refuses the connection
-	// has no status of its own, so it is a 500.
+	// An upstream that could not be reached is the upstream failing: 502, in
+	// this mode's refusal shape.
 	it("refuses an unreachable upstream 502 Bad Gateway in the refusal shape", async () => {
 		vi.stubGlobal("fetch", vi.fn(async () => Response.json({ active: true })));
 		const closed = createServer();
@@ -515,8 +514,8 @@ describe("validation router", () => {
 		expect(res.body).toEqual({ code: 502, message: "Bad Gateway" });
 	});
 
-	// A reset used to be answered by the upstream library itself, a bodyless
-	// 504 no line recorded; it reaches the router's error handler now.
+	// A reset reaches the router's error handler through the stage's
+	// proxyErrorHandler, not the library's default handler.
 	it("refuses an upstream that resets the connection 502 Bad Gateway in the refusal shape", async () => {
 		vi.stubGlobal("fetch", vi.fn(async () => Response.json({ active: true })));
 		const resetting = createNetServer((socket) => socket.on("data", () => socket.resetAndDestroy()));
@@ -533,6 +532,44 @@ describe("validation router", () => {
 			expect(res.body).toEqual({ code: 502, message: "Bad Gateway" });
 		} finally {
 			resetting.close();
+		}
+	});
+
+	// A caller that hangs up before a slow upstream answers makes the library
+	// abort its own request; that is the caller leaving, not the upstream
+	// failing, so nothing is logged as an unavailable upstream.
+	it("logs no unavailable upstream when the caller leaves before a slow upstream answers", async () => {
+		vi.stubGlobal("fetch", vi.fn(async () => Response.json({ active: true })));
+		const slow = createServer((_req, res) => {
+			setTimeout(() => res.end("late"), 400);
+		});
+		slow.listen(0, "127.0.0.1");
+		await once(slow, "listening");
+		const logged = { info: vi.fn(), warn: vi.fn(), error: vi.fn(), debug: vi.fn() };
+		const front = express()
+			.use(createRouter({ config: makeConfig((slow.address() as AddressInfo).port), deps: { logger: logged } }))
+			.listen(0, "127.0.0.1");
+		await once(front, "listening");
+		try {
+			const caller = httpRequest({
+				host: "127.0.0.1",
+				port: (front.address() as AddressInfo).port,
+				path: "/protected",
+				headers: { Authorization: "Bearer t" },
+			});
+			caller.on("error", () => {});
+			caller.end();
+			await new Promise((resolve) => setTimeout(resolve, 100));
+			caller.destroy();
+			await new Promise((resolve) => setTimeout(resolve, 500));
+
+			const events = logged.error.mock.calls.map(([fields]) => (fields as { event?: string }).event);
+			expect(events).not.toContain("validation.upstream_unavailable");
+		} finally {
+			front.closeAllConnections();
+			front.close();
+			slow.closeAllConnections();
+			slow.close();
 		}
 	});
 });

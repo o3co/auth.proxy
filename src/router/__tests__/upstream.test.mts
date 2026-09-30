@@ -107,14 +107,16 @@ describe("createUpstreamProxy", () => {
 	// the upstream becomes an UpstreamUnavailableError, and anything else — a
 	// body refused, a coding refused — goes on as it came.
 	describe("proxyErrorHandler", () => {
-		const handed = (err: unknown): unknown => {
+		const handedFrom = (err: unknown, res: object) => {
 			const handler = builtOptions().proxyErrorHandler as (e: unknown, res: unknown, next: (e?: unknown) => void) => void;
-			let passed: unknown;
-			handler(err, {}, (e) => {
-				passed = e;
+			const outcome: { called: boolean; passed?: unknown } = { called: false };
+			handler(err, res, (e) => {
+				outcome.called = true;
+				outcome.passed = e;
 			});
-			return passed;
+			return outcome;
 		};
+		const handed = (err: unknown): unknown => handedFrom(err, { destroyed: false }).passed;
 		const systemError = (code: string, syscall?: string) =>
 			Object.assign(new Error(`${syscall ?? ""} ${code}`), { code, ...(syscall ? { syscall } : {}) });
 
@@ -124,11 +126,25 @@ describe("createUpstreamProxy", () => {
 			["a reset", 502, systemError("ECONNRESET", "read")],
 			["a hang-up", 502, systemError("ECONNRESET")],
 			["an answer that is not HTTP", 502, systemError("HPE_INVALID_CONSTANT")],
+			["a host that is down", 502, systemError("EHOSTDOWN", "connect")],
+			["a network that is down", 502, systemError("ENETDOWN", "connect")],
+			["an expired upstream certificate", 502, systemError("CERT_HAS_EXPIRED")],
+			["a certificate for another name", 502, systemError("ERR_TLS_CERT_ALTNAME_INVALID")],
+			["a self-signed upstream certificate", 502, systemError("DEPTH_ZERO_SELF_SIGNED_CERT")],
+			["a TLS handshake that failed", 502, systemError("EPROTO")],
 			["a connect timeout", 504, systemError("ETIMEDOUT", "connect")],
 		])("hands on %s as UpstreamUnavailableError %d, the cause kept", (_label, status, err) => {
 			const passed = handed(err);
 			expect(passed).toBeInstanceOf(UpstreamUnavailableError);
 			expect(passed).toMatchObject({ status, cause: err });
+		});
+
+		// The caller hung up while the upstream had not answered: the library
+		// aborts its own request, which fails as a hang-up. Nothing can be
+		// answered, and the upstream did not fail, so nothing is handed on.
+		it("hands nothing on once the caller has closed its connection", () => {
+			const outcome = handedFrom(systemError("ECONNRESET"), { destroyed: true });
+			expect(outcome.called).toBe(false);
 		});
 
 		it.each([
