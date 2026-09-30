@@ -33,23 +33,19 @@ export const JWT_BEARER_GRANT_TYPE = "urn:ietf:params:oauth:grant-type:jwt-beare
  * How a failed exchange is answered. Each code is also the `error` of the
  * proxy's response body.
  *
- *   - `credential_rejected` (401)       the provider refused the assertion
- *                                       (`invalid_grant`)
- *   - `exchange_not_permitted` (403)    the assertion may be fine, but not for
- *                                       this client / scope / target
- *                                       (`invalid_scope`, `invalid_target`,
- *                                       `unauthorized_client`)
- *   - `provider_config_error` (502)     the provider refused the proxy itself:
- *                                       a 401 (`invalid_client`), any other 400,
- *                                       or a redirect
- *   - `provider_unavailable` (502)      5xx, 429, a network error or timeout
- *                                       before the response arrives, or an
- *                                       unexpected status
- *   - `provider_invalid_response` (502) a 200 whose body is not a JSON object,
- *                                       is over `MAX_TOKEN_BODY_BYTES` or could
- *                                       not be read — a timeout or a dropped
- *                                       connection mid-body included — or that
- *                                       is not a Bearer token response
+ *   - `credential_rejected` (401): the provider refused the assertion
+ *     (`invalid_grant`).
+ *   - `exchange_not_permitted` (403): the assertion may be fine, but not for
+ *     this client / scope / target (`invalid_scope`, `invalid_target`,
+ *     `unauthorized_client`).
+ *   - `provider_config_error` (502): the provider refused the proxy itself —
+ *     any 401 (the proxy's `client_secret_basic` refused), any other 400, or a
+ *     redirect.
+ *   - `provider_unavailable` (502): 5xx, 429, a network error or timeout before
+ *     the response arrives, or an unexpected status.
+ *   - `provider_invalid_response` (502): a 200 whose body is not a JSON object,
+ *     is over `MAX_TOKEN_BODY_BYTES` or could not be read (a timeout or a
+ *     dropped connection mid-body included), or is not a Bearer token response.
  */
 export type JwtBearerErrorCode =
 	| "credential_rejected"
@@ -92,7 +88,7 @@ export interface JwtBearerClientConfig {
 
 export interface JwtBearerClient {
 	/**
-	 * No signal parameter, deliberately (#95 F10): the only cancellation is
+	 * No signal parameter, deliberately: the only cancellation is
 	 * `AbortSignal.timeout(cfg.timeoutMs)`, and a caller's disconnect must not
 	 * abort an exchange other waiters are coalesced onto.
 	 */
@@ -106,19 +102,18 @@ const NOT_PERMITTED: ReadonlySet<string> = new Set([
 ]);
 
 /**
- * The token-endpoint client for the external credential exchange (#90).
+ * The token-endpoint client for the external credential exchange.
  *
- * It submits an assertion exactly once per call: there is no retry, because
- * an ID-JAG assertion is accepted once and a second submission would be
- * refused as a replay. Deciding whether the assertion is trustworthy, for which
- * client, scope and audience, is the provider's; this client only maps the
- * answer.
+ * It submits an assertion exactly once per call, with no retry: an ID-JAG
+ * assertion is accepted once and a second submission would be refused as a
+ * replay. Whether the assertion is trustworthy, for which client, scope and
+ * audience, is the provider's decision; this client only maps the answer.
  *
  * Same origin, URL construction and timeout as the session grant client. It
- * authenticates with `client_secret_basic`, so the body carries no `client_id`.
- * Redirects are not followed: the body carries a bearer credential and the
- * header the proxy's own secret, and a token endpoint that redirects is a
- * misconfigured one.
+ * authenticates with `client_secret_basic`, so the body carries no
+ * `client_id`. Redirects are not followed: the body carries a bearer
+ * credential and the header the proxy's own secret, and a token endpoint that
+ * redirects is misconfigured.
  */
 export const createJwtBearerClient = (cfg: JwtBearerClientConfig): JwtBearerClient => {
 	const url = buildTokenUrl(cfg.providerOrigin);

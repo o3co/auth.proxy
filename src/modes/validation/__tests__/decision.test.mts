@@ -2,11 +2,13 @@
 // SPDX-License-Identifier: Apache-2.0
 
 /**
- * The validation decision on its own (#95 F3): `decideValidation` takes the
- * two header values and the injectable deps, and returns `forward` or
- * `reject` for the middleware to apply. Nothing here touches Express or
- * `fetch`; the wire shape of each outcome and the real introspection call are
- * pinned by `router.test.mts` and `introspect.test.mts`.
+ * The validation decision on its own: `decideValidation` takes the two header
+ * values and the injectable deps, and returns `forward` or `reject` for the
+ * middleware to apply. Nothing here touches Express or `fetch`: the wire
+ * shape of each outcome is pinned by `router.test.mts`, what the bundled
+ * introspector accepts and caches by `introspect.test.mts`, and the
+ * introspection call itself by `introspection-client.test.mts` and
+ * `introspection-client-wire.test.mts`.
  */
 import { PassThrough } from "node:stream";
 import { describe, expect, it, vi } from "vitest";
@@ -36,10 +38,9 @@ const inputs = (authorization: string | undefined, requestId = "rid-1"): Validat
 
 // RFC 6750 §3 makes `WWW-Authenticate` a MUST on a refusal and a SHOULD to
 // name the `error` when the request included an access token: the 401's
-// `invalid_token` (#95 F29) and a malformed Bearer's `invalid_request` (F45).
-// Every refusal's challenge is stated here rather than left to be read off the
-// outcome tables below, which is what F27's `toEqual` on the body used to
-// leave implicit.
+// `invalid_token` and a malformed Bearer's `invalid_request`. Every refusal's
+// challenge is stated here rather than left to be read off the outcome tables
+// below.
 describe("the RFC 6750 challenge", () => {
 	const rejectionOf = async (
 		authorization: string | undefined,
@@ -75,7 +76,7 @@ describe("the RFC 6750 challenge", () => {
 	// authentication method" SHOULD NOT carry an error code, and §3's SHOULD is
 	// conditioned on an access token having been included. What §3 offers
 	// instead is `Bearer realm="…"`, and with no realm configured there is no
-	// auth-param to satisfy its "one or more", so no challenge at all (#95 F45).
+	// auth-param to satisfy its "one or more", so no challenge at all.
 	// A lowercase `bearer` is refused by this proxy's own stricter rule
 	// (`extractBearerToken`), so it is read as another method, not as malformed.
 	it.each(["Basic dXNlcjpwYXNz", "bearer t", "Token t"])(
@@ -86,7 +87,7 @@ describe("the RFC 6750 challenge", () => {
 	);
 
 	// A `Bearer` with no usable token after it is §3.1's "otherwise malformed"
-	// request: `invalid_request`, which is also the auth-param §3 needs (#95 F45).
+	// request: `invalid_request`, which is also the auth-param §3 needs.
 	it.each(["Bearer", "Bearer ", "Bearer  t"])(
 		"names invalid_request for the malformed Bearer %j",
 		async (authorization) => {
@@ -97,7 +98,7 @@ describe("the RFC 6750 challenge", () => {
 		},
 	);
 
-	describe("with auth.validation.realm configured (#95 F45)", () => {
+	describe("with auth.validation.realm configured", () => {
 		it.each(["Basic dXNlcjpwYXNz", "bearer t"])(
 			"answers %j with the realm alone, as §3.1's own example does",
 			async (authorization) => {
@@ -241,7 +242,7 @@ describe("decideValidation", () => {
 		// Without client credentials the inbound token IS the introspection
 		// credential, so the provider's 401 is about it. With them the proxy
 		// authenticates as itself, and a 401 means the provider refused the
-		// proxy — an operator's configuration, not the caller's token (#95 F7).
+		// proxy — an operator's configuration, not the caller's token.
 		it("answers 502 when the provider refused the proxy's own client credentials", async () => {
 			const { deps, introspect, logger } = makeDeps();
 			const err = new IntrospectHttpError(401, "introspect returned 401", "client");
@@ -258,7 +259,7 @@ describe("decideValidation", () => {
 			// One line, not both: the generic `introspect failed` must not also
 			// fire, or an operator filtering on it sees the config error twice
 			// and under the wrong name. At error, because the proxy's own
-			// configuration is refused, not the caller's token (#134).
+			// configuration is refused, not the caller's token.
 			expect(logger.error).toHaveBeenCalledTimes(1);
 			expect(logger.error).toHaveBeenCalledWith(
 				{ requestId: "rid-1", event: "validation.provider_config_error", error: err },
@@ -267,9 +268,9 @@ describe("decideValidation", () => {
 			expect(logger.info).not.toHaveBeenCalled();
 		});
 
-		// #95 F43: a redirecting introspection endpoint is the deployment's
+		// A redirecting introspection endpoint is the deployment's
 		// configuration, not the caller's token and not an outage — reported
-		// like F7's refused client credentials.
+		// like the refused client credentials above.
 		it.each([301, 302, 303, 307, 308])(
 			"answers 502 Provider Configuration Error when the endpoint redirects (%d)",
 			async (status) => {
@@ -293,7 +294,7 @@ describe("decideValidation", () => {
 			},
 		);
 
-		// #134: a 401 about the caller's token is the caller's refusal, not the
+		// A 401 about the caller's token is the caller's refusal, not the
 		// proxy failing, so it is logged at info — the level the injection path
 		// gives `injection.session_unauthorized`. Only the proxy's own failures
 		// are errors.
@@ -334,8 +335,8 @@ describe("decideValidation", () => {
 			});
 		});
 
-		// A supplied introspector that marks nothing is read the way it always
-		// was: its 401 is about the token, and logged as the token's (#134).
+		// A supplied introspector that marks nothing: its 401 is about the token,
+		// and logged as the token's.
 		it("answers 401 Invalid Token when the provider answers an unmarked 401, logging it at info with the request id", async () => {
 			const { deps, introspect, logger } = makeDeps();
 			const err = new IntrospectHttpError(401, "introspect failed: 401");
@@ -355,8 +356,8 @@ describe("decideValidation", () => {
 			expect(logger.error).not.toHaveBeenCalled();
 		});
 
-		// #95 F42: what the provider did is a 502, as on the injection path;
-		// only what the proxy did not expect is a 500.
+		// What the provider did is a 502, as on the injection path; only what
+		// the proxy did not expect is a 500.
 		it.each([
 			{ failure: "the provider's 503", err: new IntrospectHttpError(503, "introspect returned 503") },
 			{ failure: "the provider's 429", err: new IntrospectHttpError(429, "introspect returned 429") },
@@ -403,9 +404,8 @@ describe("decideValidation", () => {
 	});
 });
 
-// #95 F48: the fake logger above records the Error object, so it could not see
-// that the real one wrote `"error":{…}` with no message, stack or cause. This
-// one reads the line the proxy actually emits.
+// The fake logger above records the Error object, so it cannot see what the
+// real one serialises. This one reads the line the proxy actually emits.
 describe("the failure line on the real logger", () => {
 	it("carries the error's message, status and cause", async () => {
 		const stream = new PassThrough();
@@ -424,7 +424,7 @@ describe("the failure line on the real logger", () => {
 
 		const entry = JSON.parse(lines.join("").trim());
 		expect(entry.msg).toBe("introspect failed");
-		// The one vocabulary both modes log in (#134): `requestId` and `event`,
+		// The one vocabulary both modes log in: `requestId` and `event`,
 		// never the header name.
 		expect(entry.requestId).toBe("rid-1");
 		expect(entry.event).toBe("validation.provider_error");
@@ -437,7 +437,7 @@ describe("the failure line on the real logger", () => {
 		});
 	});
 
-	// #134: the level says whose failure it was. The caller's token refused by
+	// The level says whose failure it was. The caller's token refused by
 	// the provider is info, as `injection.session_unauthorized` is; the
 	// provider refusing the proxy's own client is the deployment's, so error.
 	// Read off the emitted line, where pino's numeric level is what a query

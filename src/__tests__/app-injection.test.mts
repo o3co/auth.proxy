@@ -2,31 +2,30 @@
 // SPDX-License-Identifier: Apache-2.0
 
 /**
- * Injection mode as it runs (#144): `src/app.mts` in a child process,
- * configured by environment variables over the shipped conf, in front of a
- * recording upstream, calling the fake provider's token endpoint over the real
- * `fetch`. Nothing is mocked — not a router, a client, `fetch` or the schema.
+ * Injection mode as it runs: `src/app.mts` in a child process, configured by
+ * environment variables over the shipped conf, in front of a recording
+ * upstream, calling the fake provider's token endpoint over the real `fetch`.
+ * Nothing is mocked — not a router, a client, `fetch` or the schema.
  *
- * Each combination of the two options gets its own process: the session
- * grant alone, with `INJECTION_STRIP_INBOUND_AUTHORIZATION=true`, with
+ * Each combination of the two options gets its own process: the session grant
+ * alone, with `INJECTION_STRIP_INBOUND_AUTHORIZATION=true`, with
  * `INJECTION_EXCHANGE_ENABLED=true` and its credentials, and with both. Each
- * is sent the request shapes injection answers — no credential, a session
- * cookie, a cookie the provider refuses, a cookie that fails the grammar
- * check, a client's own `Authorization` beside or instead of the cookie, and
- * with the exchange an assertion — and each case asserts the answer (status,
- * body, no `WWW-Authenticate`, `Retry-After`), the `Authorization` the
- * upstream received (names as sent), the grant the provider received, and the
- * log events written for the request, with no credential in them.
+ * is sent the request shapes injection answers, and each case asserts the
+ * answer (status, body, no `WWW-Authenticate`, `Retry-After`), the
+ * `Authorization` the upstream received (names as sent), the grant the
+ * provider received, and the log events written for the request, with no
+ * credential in them.
  *
  * The expected statuses, `error` codes, headers and grants are the documented
- * contract, not the code's: the README's Injection mode, Inbound
- * Authorization headers, Cookie forwarding and External credential exchange
- * sections, the injection README's invariants 2, 3 and 9, and the v0.7.0
- * CHANGELOG. The events, their levels and their fields are the injection
- * README's Log events tables. Where the documentation names no wording, an
- * `error_description` is the one the client or the decision writes, which
- * their own tests pin; the tests assert it, and that is the one assertion here
- * the documentation does not back.
+ * contract, not the code's: the README's Injection mode, Inbound Authorization
+ * headers, Cookie forwarding and External credential exchange sections, and
+ * the injection README's invariants 1, 2, 3 and 9. Two things the READMEs do
+ * not state come from the CHANGELOG's 0.7.0 entry: `Authorization` reaches the
+ * upstream in canonical casing, and the `invalid_client` refusal's
+ * `error_description`. The events, their levels and their fields are the
+ * injection README's Log events tables. The one assertion the documentation
+ * does not back is an `error_description` where it names no wording: that is
+ * the one the client or the decision writes, which their own tests pin.
  */
 
 import { afterAll, afterEach, beforeAll, describe, expect, it, vi } from "vitest";
@@ -145,7 +144,7 @@ const line = (event: string, level: string, fields: Record<string, unknown> = {}
 const INCOMING = line("injection.incoming_request", "info", { msg: "incoming request" });
 /**
  * A provider failure line: injection logs the error as a string, not the
- * object validation logs (`src/README.md`, #134).
+ * object validation logs (`src/README.md`).
  */
 const failed = (event: string, level: string, fields: Record<string, unknown> = {}): Line =>
 	line(event, level, { error: expect.any(String), ...fields });
@@ -281,7 +280,7 @@ const SETUPS: { name: string; env: () => Record<string, string>; cases: Case[] }
 			sessionMinted("sess-s1-valid", "minted-s1-a"),
 			sessionOverridesOwn("sess-s1-override", "minted-s1-b"),
 			{
-				name: "logs an empty inbound Authorization that the minted token replaces as an override (#133)",
+				name: "logs an empty inbound Authorization that the minted token replaces as an override",
 				cookie: "sid=sess-s1-empty-auth",
 				authorization: "",
 				provider: { answer: issued("minted-s1-d"), grant: sessionGrant("sess-s1-empty-auth") },
@@ -314,7 +313,7 @@ const SETUPS: { name: string; env: () => Record<string, string>; cases: Case[] }
 				unlogged: ["sess-s1-revoked"],
 			},
 			{
-				name: "answers a 401 invalid_client 502 provider_config_error: the proxy's clientId, not the session (#95 F47)",
+				name: "answers a 401 invalid_client 502 provider_config_error: the proxy's clientId, not the session",
 				cookie: "sid=sess-s1-client",
 				provider: {
 					answer: json(401, { error: "invalid_client" }),
@@ -413,7 +412,7 @@ const SETUPS: { name: string; env: () => Record<string, string>; cases: Case[] }
 				unlogged: [CLIENT_OWN],
 			},
 			{
-				name: "strips an empty Authorization like any other (#95 F40)",
+				name: "strips an empty Authorization like any other",
 				authorization: "",
 				status: 200,
 				answer: "forwarded",
@@ -833,7 +832,7 @@ describe.each(SETUPS)("the app in injection mode, $name", (setup) => {
 		]);
 	});
 
-	it("wrote every line about a request with its requestId and an injection.* event (#134), nothing else, and no configured secret", async () => {
+	it("wrote every line about a request with its requestId and an injection.* event, nothing else, and no configured secret", async () => {
 		await proxy.linesFor("injection-every-line");
 		// Nothing outside the logger: no stdout line that is not NDJSON, and
 		// nothing on stderr but the harness's own listening line.

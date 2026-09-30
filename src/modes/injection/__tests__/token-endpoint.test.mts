@@ -2,9 +2,8 @@
 // SPDX-License-Identifier: Apache-2.0
 
 /**
- * The two things every token-endpoint call in this directory needs (#95 F19):
- * where the endpoint is, and how a body is read when it may not be JSON at
- * all. Both were exercised only through the clients until now.
+ * The two things every token-endpoint call in this directory needs: where the
+ * endpoint is, and how a body is read when it may not be JSON at all.
  */
 import { describe, expect, it } from "vitest";
 
@@ -57,12 +56,10 @@ describe("parseJsonBody", () => {
 		["an array of objects", '[{"error":"invalid_grant"}]'],
 		["an array of scalars", "[1,2,3]"],
 		["an empty array", "[]"],
-	])("answers null for %s, which the declared return type excludes (#95 F34)", async (_label, body) => {
-		// A JSON array is `typeof === "object"`, so it used to come back as it
-		// stood, typed as a Record the caller could read `.error` off. No
-		// provider sends one; what made it worth removing is that the type said
-		// it could not happen and the two callers disagreed about whether it
-		// could.
+	])("answers null for %s, which the declared return type excludes", async (_label, body) => {
+		// A JSON array is `typeof === "object"`, but the declared return type is
+		// a Record a caller reads `.error` off, which says an array cannot come
+		// back. No provider sends one; the answer must still match the type.
 		await expect(parseJsonBody(responseOf(body))).resolves.toBeNull();
 	});
 
@@ -70,8 +67,7 @@ describe("parseJsonBody", () => {
 		await expect(parseJsonBody(responseOf('{"error":"invalid_'))).resolves.toBeNull();
 	});
 
-	// The success path used to buffer whatever arrived, while the error path
-	// next door stopped at 16 KiB (#95 F35).
+	// The success path's read is bounded, like the error path's.
 	describe("the bound", () => {
 		// Padded to an exact byte count, so these land on the boundary itself
 		// rather than near it. ASCII throughout, so one character is one byte.
@@ -131,7 +127,7 @@ describe("parseJsonBody", () => {
 		// itself: a token response carrying a large id_token beside the access
 		// and refresh tokens has to fit, and an error body's allowance does not
 		// have to. Without this the constant could be moved to anything —
-		// including back to the error bound — with a green suite.
+		// including down to the error bound — with a green suite.
 		it("admits a token response with a 32 KiB id_token, which the error bound would refuse", async () => {
 			const idToken = `header.${"c".repeat(32 * 1024)}.signature`;
 			const body = JSON.stringify({
@@ -150,9 +146,9 @@ describe("parseJsonBody", () => {
 		});
 	});
 
-	// resp.text(), which this used before F35, decodes as UTF-8 and drops a
-	// leading BOM; Buffer.toString("utf8") keeps it and JSON.parse then refuses
-	// the body. A provider emitting one must keep working.
+	// A UTF-8 decode, as resp.text() does, drops a leading BOM;
+	// Buffer.toString("utf8") keeps it and JSON.parse then refuses the body. A
+	// provider emitting one must work.
 	it("reads a body behind a UTF-8 BOM, as a UTF-8 decode does", async () => {
 		await expect(parseJsonBody(responseOf('\uFEFF{"access_token":"tok"}'))).resolves.toEqual({
 			access_token: "tok",

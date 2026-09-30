@@ -37,29 +37,27 @@ export interface IntrospectionResult {
 }
 
 /**
- * Which credential the provider refused, on a 401 and nowhere else (#95 F7).
+ * Which credential the provider refused, on a 401 and nowhere else.
  *
- * RFC 7662 §2.3 requires the introspection request to be authenticated, so a
- * 401 answers whichever credential this module presented — and only this
- * module knows which that was. `token` means the inbound token was the
- * credential and the provider refused it, which is a statement about the
- * caller. `client` means the proxy authenticated as itself and was refused,
- * which is a statement about the deployment: the caller's token was never
- * examined.
+ * RFC 7662 §2.1 requires the introspection request to carry a credential, and
+ * §2.3 answers an invalid one with a 401. So a 401 answers whichever
+ * credential this module presented, and only this module knows which that
+ * was. `token` means the inbound token was the credential and the provider
+ * refused it, which is a statement about the caller. `client` means the proxy
+ * authenticated as itself and was refused, which is a statement about the
+ * deployment: the caller's token was never examined.
  */
 export type RefusedCredential = "client" | "token";
 
 /**
- * How much of a 200 introspection response is read before giving up on it
- * (#95 F39).
+ * How much of a 200 introspection response is read before giving up on it.
+ * It is a memory bound, not a validity check.
  *
  * The same allowance the injection path gives a token response
- * (`MAX_TOKEN_BODY_BYTES`, F35), for the same reason: an introspection
- * response is the answer itself, and a claim set can be generous. Nothing a
- * provider legitimately sends comes near it, so it is reached only by a body
- * that is not an introspection response at all. It is a memory bound, not a
- * validity check — until F39 this path buffered whatever arrived, once per
- * request in flight.
+ * (`MAX_TOKEN_BODY_BYTES`), for the same reason: an introspection response is
+ * the answer itself, and a claim set can be generous. Nothing a provider
+ * legitimately sends comes near it, so it is reached only by a body that is
+ * not an introspection response at all.
  */
 export const MAX_INTROSPECTION_BODY_BYTES = 64 * 1024;
 
@@ -89,9 +87,8 @@ export const buildAuthHeader = (credentials: ClientCredentials | null, token: st
 
 /**
  * The provider's introspection endpoint, as the one call this proxy makes to
- * it (#95 F5). Replaceable: the decision reaches it through
- * `Introspector`, and `createRouter` builds the bundled implementation or
- * takes another.
+ * it. Replaceable: the decision reaches it through `Introspector`, and
+ * `createRouter` builds the bundled implementation or takes another.
  *
  * @throws {IntrospectHttpError} the provider's status for a non-2xx — carrying
  * {@link RefusedCredential} on a 401, which says whether the provider refused
@@ -99,14 +96,14 @@ export const buildAuthHeader = (credentials: ClientCredentials | null, token: st
  * for a 200 whose body is not a JSON object, is over the
  * {@link MAX_INTROSPECTION_BODY_BYTES} bound, or is not a valid RFC 7662
  * response, and `502` for a call that never answered — a timeout or a
- * network error, kept as the `cause` (#95 F42). The same class carries one
- * more `502` raised outside this module: a malformed `exp` on an otherwise
- * valid response, which `createIntrospector` refuses once it has decided the
+ * network error, kept as the `cause`. The same class carries one more `502`
+ * raised outside this module: a malformed `exp` on an otherwise valid
+ * response, which `createIntrospector` refuses once it has decided the
  * response is one it would read at all.
  */
 export interface IntrospectionClient {
 	/**
-	 * No signal parameter, deliberately (#95 F10): the only cancellation is
+	 * No signal parameter, deliberately: the only cancellation is
 	 * `AbortSignal.timeout(timeoutMs)`, and a caller's disconnect must not
 	 * abort a call other waiters are coalesced onto.
 	 */
@@ -135,7 +132,7 @@ export const createIntrospectionClient = ({
 		async introspect(token, requestId) {
 			// Built before the call, so a failure building it — a `timeoutMs` that
 			// `AbortSignal.timeout` refuses, say — stays the proxy's own and is not
-			// reported as the provider's (#95 F42).
+			// reported as the provider's.
 			const init: RequestInit = {
 				method: "POST",
 				headers: {
@@ -145,14 +142,15 @@ export const createIntrospectionClient = ({
 				},
 				body: new URLSearchParams({ token }).toString(),
 				// The endpoint is configuration, and a followed redirect cannot be
-				// reported honestly (#95 F43, the counterpart of F8 on the token
-				// clients): a same-origin 307/308 re-sends this request's credential
-				// — the inbound token, or the proxy's Basic header — to a path
-				// nothing configured. Cross-origin, `fetch` drops the
-				// `Authorization` header, but a 307/308 still re-sends the body,
-				// which is `token=<the caller's token>`, and the provider's 401
-				// would read as the caller's token being bad. A 3xx comes back as
-				// the non-2xx it is, and the decision reports it.
+				// reported honestly, as on the token clients: a followed same-origin
+				// redirect re-sends this request's `Authorization` — the inbound
+				// token, or the proxy's Basic header — to a path nothing configured,
+				// and a 307/308 re-sends the body with it. Cross-origin, `fetch`
+				// drops the `Authorization` header, but a 307/308 still re-sends the
+				// body, which is `token=<the caller's token>`, and a 401 from there
+				// would read as the caller's token being bad (or, with
+				// `auth.validation.client` set, as the proxy's credentials refused).
+				// A 3xx comes back as the non-2xx it is, and the decision reports it.
 				redirect: "manual",
 				signal: AbortSignal.timeout(timeoutMs),
 			};
@@ -162,9 +160,8 @@ export const createIntrospectionClient = ({
 			} catch (err) {
 				// The provider did not answer: a timeout, a refused connection, a
 				// DNS failure. That is the provider failing, as its 5xx is, so it is
-				// reported in the same class and answered 502 (#95 F42) — until then
-				// it propagated raw and the decision answered 500, the status it
-				// keeps for what the proxy itself did not expect.
+				// reported in the same class and answered 502; the decision keeps
+				// 500 for what the proxy itself did not expect.
 				throw new IntrospectHttpError(
 					502,
 					`introspect call failed: ${err instanceof Error ? err.message : String(err)}`,
@@ -174,19 +171,19 @@ export const createIntrospectionClient = ({
 			}
 
 			if (!resp.ok) {
-				// Nothing reads an error body on this path (#95 F28).
+				// Nothing reads an error body on this path.
 				await discardBody(resp);
 				throw new IntrospectHttpError(
 					resp.status,
 					`introspect returned ${resp.status}`,
 					// Only a 401 answers a credential, and which one depends on
-					// what this request carried (#95 F7). Every other status is
+					// what this request carried. Every other status is
 					// about the request or the provider, not a credential.
 					resp.status === 401 ? (credentials !== null ? "client" : "token") : null,
 				);
 			}
 
-			// Read at most MAX_INTROSPECTION_BODY_BYTES of it (#95 F39). A body
+			// Read at most MAX_INTROSPECTION_BODY_BYTES of it. A body
 			// that is not a JSON object, or that does not stop, is the provider
 			// answering badly rather than an auth decision.
 			const parsed = await readBoundedJsonObject(resp, MAX_INTROSPECTION_BODY_BYTES);

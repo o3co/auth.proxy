@@ -16,19 +16,18 @@
 
 /**
  * The configuration schema: validates the parsed `application.conf` and
- * produces the `AppConfig` the code reads. It never reads the environment —
- * `${?NAME}` is substituted by the HOCON parse in `src/app.mts`, as a string,
- * which is why numbers are coerced and booleans and lists have their own
- * parsers below.
+ * produces the `AppConfig` the code reads. It never reads the environment:
+ * `${?NAME}` is substituted as a string by the HOCON parse in `src/app.mts`,
+ * so numbers are coerced and booleans and lists have their own parsers below.
  *
  * Defaults are declared twice, as a `.default()` here and as a literal in
- * `application.conf`, and the two must agree (#95 F23). Keys whose default
- * lives only in the conf (validated here, no `.default()`):
- * `auth.validation.introspect.url`, `auth.injection.providerOrigin`,
- * `auth.injection.sessionCookieName`, `upstream.baseURL`. Keys the conf sets to
- * a placeholder this schema refuses, so they are effectively required:
- * `auth.mode` (`null`; the union has no default), `auth.injection.clientId`
- * and `auth.injection.scope` (`""`; `.min(1)`).
+ * `application.conf`, and the two must agree. Keys whose default lives only in
+ * the conf (validated here, no `.default()`): `auth.validation.introspect.url`,
+ * `auth.injection.providerOrigin`, `auth.injection.sessionCookieName`,
+ * `upstream.baseURL`. Keys the conf sets to a placeholder this schema refuses,
+ * so they are effectively required: `auth.mode` (`null`; the union has no
+ * default), `auth.injection.clientId` and `auth.injection.scope` (`""`;
+ * `.min(1)`).
  *
  * `auth` is a discriminated union on `mode`: the other mode's section is not
  * validated, so the shipped conf passes in validation mode although
@@ -38,35 +37,28 @@
 import { z } from "zod";
 
 /**
- * RFC 6265 section 4.1.1 `cookie-name = token`, with RFC 9110 section 5.6.2
- *
- *   token = 1*tchar
- *   tchar = "!" / "#" / "$" / "%" / "&" / "'" / "*" / "+" / "-" / "." /
- *           "^" / "_" / "`" / "|" / "~" / DIGIT / ALPHA
- *
- * The configured name is interpolated verbatim into the outbound `Cookie` header
- * of the session grant call (session-grant-client.mts). A separator or
- * whitespace in it (`"sid "`, `"a=b"`) would malform that header, or smuggle a
- * second cookie-pair, on every request, so it is refused at boot (#75).
+ * An RFC 6265 section 4.1.1 `cookie-name`: an RFC 9110 section 5.6.2 `token`,
+ * one or more `tchar`. The name is interpolated verbatim into the outbound
+ * `Cookie` header of the session grant call (session-grant-client.mts); a
+ * separator or whitespace in it (`"sid "`, `"a=b"`) would malform that header,
+ * or smuggle a second cookie-pair, on every request, so it is refused at boot.
  */
 const COOKIE_NAME_RE = /^[!#$%&'*+.^_`|~0-9A-Za-z-]+$/;
 
 /**
  * The introspection endpoint the validation proxy POSTs every cache miss to:
- * an absolute http(s) URL with no userinfo (#140). The URL carries no
- * credential — the introspection client authenticates with
- * `auth.validation.client`, or presents the inbound token when that is unset.
+ * an absolute http(s) URL with no userinfo. The URL carries no credential: the
+ * introspection client authenticates with `auth.validation.client`, or
+ * presents the inbound token when that is unset.
  *
- * A URL with userinfo never introspected a token: `fetch` refuses to build a
- * request from one, on every call, and its refusal quotes the URL exactly as
- * configured — credential included, a space or an `@` in it unencoded — in the
- * line the validation path logs. A string that is not a URL failed every call
- * the same way. Both booted and served only what validation passes through
- * without introspecting — a request with no `Authorization`. A non-http(s)
- * scheme is refused as well, and one of them was worse than failing: `fetch`
- * answers a POST to a `data:` URL with the body it encodes, so
- * `data:application/json,{"active":true}` admitted every token. All of these
- * now stop the process at boot.
+ * Anything else stops the process at boot. `fetch` would refuse a URL with
+ * userinfo, or a string that is not a URL, on every call, and its error
+ * quotes the value as configured; the logger's URL redaction does not cover
+ * every raw form (a `/` in a password, or `https:/` with one slash), so the
+ * schema, not the logger, keeps the configured credential out of the log. A
+ * non-http(s) scheme is refused too: `fetch` answers a POST to a `data:` URL
+ * with the body it encodes, so `data:application/json,{"active":true}` would
+ * admit every token.
  *
  * A refine rather than `.url()`, so the message is this one and never quotes
  * the value it refused.
@@ -82,18 +74,13 @@ const isIntrospectionUrl = (value: string): boolean => {
 };
 
 /**
- * A boolean knob that has to survive the HOCON -> environment round trip.
- * `parseFile` substitutes an environment override as a *string*, so both the
- * literal `false` from application.conf and the string `"false"` from
- * `INJECTION_STRIP_INBOUND_AUTHORIZATION` reach the schema and both must mean
- * false.
+ * A boolean that survives the HOCON -> environment round trip: `parseFile`
+ * substitutes an environment override as a string, so both the literal
+ * `false` and the string `"false"` must mean false. Anything that is neither
+ * `true` nor `false` is a configuration error naming the key.
  *
- * `z.coerce.boolean()` is not usable for this: it is `Boolean(v)`, under which
- * the non-empty string `"false"` is `true`. The one way an operator would turn
- * a flag off from the environment would silently leave it on, which for a
- * traffic-altering switch is the worst possible failure mode. Anything that is
- * neither `true` nor `false` is a configuration error naming the key, in the
- * shape the other auth.injection validations use.
+ * Not `z.coerce.boolean()`: that is `Boolean(v)`, under which `"false"` is
+ * `true`, so turning a flag off from the environment would leave it on.
  */
 const strictBoolean = (key: string) =>
 	z
@@ -167,19 +154,17 @@ export type ExchangeConfig =
 	  };
 
 /**
- * The external credential exchange (#90): an inbound `Authorization: Bearer
- * <JWT>` is submitted to the provider's token endpoint as an RFC 7523
- * `jwt-bearer` assertion and the issued token replaces it.
+ * The external credential exchange (README, External credential exchange): an
+ * inbound `Authorization: Bearer <JWT>` is submitted to the provider's token
+ * endpoint as an RFC 7523 `jwt-bearer` assertion and the issued token
+ * replaces it.
  *
  * Disabled (the default) parses to `{ enabled: false }` and nothing else is
- * used, so injection mode behaves exactly as it does without the block. Enabled,
- * the proxy authenticates to the token endpoint with `client_secret_basic`: a
- * `client_id` alone is not client authentication, so both credentials are
- * required and a missing one fails at boot naming the key.
- *
- * `scope`, `audience` and `resource` are sent only when set. `allowedIssuers`
- * is an optional prefilter on the unverified `iss` — empty means off; trust in
- * an issuer is the provider's decision, never the proxy's.
+ * used. Enabled, the proxy authenticates to the token endpoint with
+ * `client_secret_basic`: a `client_id` alone is not client authentication, so
+ * both credentials are required and a missing one fails at boot naming the
+ * key. `allowedIssuers` is an optional prefilter on the unverified `iss`,
+ * empty meaning off; trust in an issuer is the provider's decision.
  *
  * Every field is parsed and validated before the transform, so an invalid
  * entry (in `allowedIssuers`, say) fails the configuration even when the
@@ -262,11 +247,11 @@ export const AppConfigSchema = z.object({
 								"auth.validation.client.clientId and auth.validation.client.clientSecret must both be set or both be unset",
 						},
 					),
-				// RFC 6750 §3's `realm`, for `WWW-Authenticate` (#95 F45). Unset, the
-				// challenges carry none. It is sent inside a quoted-string, so only
-				// printable ASCII that needs no escaping is accepted — no `"`, no
-				// `\`, no control character — and the header cannot be split by it.
-				// No surrounding space (an environment value is not trimmed), and at
+				// RFC 6750 §3's `realm`, for `WWW-Authenticate`. Unset, the challenges
+				// carry none. It is sent inside a quoted-string, so only printable
+				// ASCII that needs no escaping is accepted — no `"`, no `\`, no
+				// control character — and the header cannot be split by it. No
+				// surrounding space (an environment value is not trimmed), and at
 				// most 256 characters: it goes out on every challenge, and a front
 				// proxy's header buffer is finite.
 				realm: optionalString().refine(
@@ -324,15 +309,14 @@ export const AppConfigSchema = z.object({
 				 * proxy did NOT mint a token for (no session cookie, or a cookie
 				 * the grammar check refused). Without it those requests reach
 				 * upstream carrying whatever `Authorization` the client sent, so an
-				 * upstream service that reads "a Bearer header arrived from the
-				 * proxy" as "the proxy minted this" is bypassable by a client that
-				 * simply sends its own.
+				 * upstream that reads "a Bearer header arrived from the proxy" as
+				 * "the proxy minted this" is bypassable by a client that sends its
+				 * own.
 				 *
-				 * Default `false` — the pass-through behaviour every existing
-				 * deployment already runs on, including the ones that deliberately
-				 * let a service account present its own token through this proxy.
-				 * Turning it on is defence in depth, not a replacement for the
-				 * upstream verifying the token it was handed.
+				 * Default `false`: pass-through is what lets a service account
+				 * present its own token through this proxy. Turning it on is
+				 * defence in depth, not a replacement for the upstream verifying
+				 * the token it was handed.
 				 */
 				stripInboundAuthorization: strictBoolean(
 					"auth.injection.stripInboundAuthorization",

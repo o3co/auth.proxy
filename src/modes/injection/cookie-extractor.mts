@@ -15,67 +15,50 @@
  */
 
 /**
- * RFC 6265 section 4.1.1:
+ * `extractCookie`: the session cookie's value from a `Cookie` header, refused
+ * unless it is an RFC 6265 section 4.1.1 `cookie-value`:
  *
  *   cookie-value = *cookie-octet / ( DQUOTE *cookie-octet DQUOTE )
  *   cookie-octet = %x21 / %x23-2B / %x2D-3A / %x3C-5B / %x5D-7E
  *                  ; US-ASCII characters excluding CTLs, whitespace,
  *                  ; DQUOTE, comma, semicolon, and backslash
  *
- * Why the proxy enforces this itself (#23): the extracted value is interpolated
- * verbatim into the outbound `Cookie` header of the session grant call (see
- * session-grant-client.mts). A value carrying a delimiter (`;`, `,`, whitespace),
- * a CTL, or a non-ASCII byte could malform that header or smuggle a second
- * cookie-pair into the provider request, and the runtime does not catch it:
- * Node's `fetch` (undici) rejects only CR / LF / NUL and code points above 0xFF,
- * and `http.validateHeaderValue` rejects only CTLs and DEL. Everything else in
- * the excluded set passes straight through, so a non-conforming value is
- * refused here rather than forwarded.
+ * The value is interpolated verbatim into the outbound `Cookie` header of the
+ * session grant call (session-grant-client.mts), where a delimiter (`;`, `,`,
+ * whitespace), a CTL or a non-ASCII byte could malform the header or smuggle a
+ * second cookie-pair into the provider request. The runtime does not catch
+ * it: Node's `fetch` (undici) rejects only CR / LF / NUL and code points above
+ * 0xFF, and `http.validateHeaderValue` only CTLs and DEL.
  *
- * DQUOTE decision: the optional surrounding DQUOTE pair is accepted and the
- * quotes are preserved on the outbound header. RFC 6265 section 5.2 has user
- * agents store the cookie-value opaquely (the quotes are not stripped), so a
- * browser echoes back exactly the bytes the provider chose in `Set-Cookie`. The
- * proxy is a relay for the provider's own cookie; handing back the same bytes
- * and letting the provider's parser decide what the quotes mean is the faithful
- * choice, and it is still safe because the interior is restricted to
- * cookie-octet and cannot carry a delimiter. A lone or interior DQUOTE is
- * outside the grammar and rejected. An empty quoted value (`""`) is rejected
- * just like an empty bare value: there is no session identifier to exchange.
+ * A surrounding DQUOTE pair is accepted and forwarded with the quotes: RFC
+ * 6265 section 5.2 has user agents store the cookie-value opaquely, so the
+ * proxy hands back the bytes the provider set and lets the provider's parser
+ * decide what the quotes mean; the interior is still cookie-octet only. A lone
+ * or interior DQUOTE is refused, and so is an empty value, bare or quoted:
+ * there is no session identifier to exchange.
  *
- * Whitespace decision (#23 review): RFC 6265 section 4.2.1 is
+ * Whitespace: RFC 6265 section 4.2.1 allows only the SP after ";" (plus OWS at
+ * the ends of the header), so SP / HTAB touching a ";" or a header end is
+ * separator slack, trimmed from the pair and from the name (which is only
+ * compared, never forwarded). The value is taken verbatim after "=", so
+ * `sid= abc` is refused rather than normalised. Only SP / HTAB are slack (RFC
+ * 7230 OWS): `String.prototype.trim` would also strip a latin-1 NBSP and other
+ * Unicode whitespace, which must stay in the value and be refused as
+ * non-ASCII.
  *
- *   cookie-string = cookie-pair *( ";" SP cookie-pair )
+ * The result tells `absent` (no pair with the name: an anonymous request)
+ * from `rejected` (a pair the proxy will not forward: worth an operator's
+ * attention). `rejected` carries only a bounded reason, so it can be logged
+ * without the value bytes: `empty` (`` or `""`), `quoting` (a DQUOTE anywhere
+ * other than exactly one surrounding pair) or `grammar` (a character outside
+ * cookie-octet in the unwrapped value).
  *
- * so the only whitespace the grammar allows is the SP after ";" (plus OWS at the
- * ends of the header). Whitespace touching the ";" separator or the header ends
- * is therefore separator slack: the cookie-pair token is trimmed of OWS so that
- * `a=1;  sid=abc ; b=2` still yields `abc`, and the name is trimmed as well
- * because it is only compared, never forwarded. The value is taken verbatim
- * after "=": whitespace there touches no separator, so it is part of the value,
- * fails the cookie-octet check, and `sid= abc` is rejected instead of being
- * normalised into a valid outbound value. Only SP / HTAB count as slack (RFC 7230
- * OWS); String.prototype.trim would also strip a latin-1 NBSP and other Unicode
- * whitespace, which must stay in the value and be rejected as non-ASCII.
- *
- * Result shape (#73): the caller needs to tell a header that simply lacks the
- * cookie (`absent`, an expected anonymous request) from one that carries the
- * cookie in a form the proxy refuses to forward (`rejected`, worth an operator's
- * attention). The rejected variant carries only a bounded reason class so it can
- * be logged without ever leaking the value bytes:
- *
- *   - `empty`    the value is `` or `""` — nothing to exchange
- *   - `quoting`  a DQUOTE anywhere other than as exactly one surrounding pair
- *   - `grammar`  a character outside cookie-octet in the (unwrapped) value
- *
- * Same-name pairs (#74): a user agent may send the same name twice (RFC 6265
- * section 5.4 orders them by path length, then creation time), so a malformed
- * pair must not abort the scan. The first well-formed pair wins; a malformed
- * pair before it is skipped and reported through `found.skipped` (the reason
- * class of the first skipped pair) so the router can still log it. When every
- * same-name pair is malformed the result is `rejected` with the first pair's
- * reason. The pair-level OWS trimming and verbatim value semantics above are
- * applied to each pair unchanged.
+ * Same-name pairs: a user agent may send a name twice (RFC 6265 section 5.4
+ * orders them by path length, then creation time), so a malformed pair does
+ * not stop the scan. The first well-formed pair wins; the reason of the first
+ * malformed pair before it is reported as `found.skipped`, for the router to
+ * log. When every same-name pair is malformed the result is `rejected` with
+ * the first pair's reason.
  */
 const COOKIE_OCTETS_RE = /^[\x21\x23-\x2B\x2D-\x3A\x3C-\x5B\x5D-\x7E]*$/;
 

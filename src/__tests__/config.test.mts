@@ -61,7 +61,7 @@ describe("proxy config — validation mode", () => {
 		expect(config.auth.validation.client.clientSecret).toBeNull();
 	});
 
-	// #95 F45: the RFC 6750 realm, optional. It goes into a quoted-string in
+	// The RFC 6750 realm, optional. It goes into a quoted-string in
 	// `WWW-Authenticate`, so only what needs no escaping is accepted.
 	describe("auth.validation.realm", () => {
 		const realmOf = (env: Record<string, string>) => {
@@ -100,11 +100,10 @@ describe("proxy config — validation mode", () => {
 	});
 
 	// fetch refuses a URL that carries credentials, and fails to parse a URL
-	// that is not one, so a configuration of either kind never introspected a
-	// token; it failed every introspection, and the refusal quoted the URL as
-	// configured — credential included — into the log (#140). It fails at boot
-	// instead, as `providerOrigin` always has.
-	describe("auth.validation.introspect.url (#140)", () => {
+	// that is not one, so either would fail every introspection, and its error
+	// would quote the URL as configured, in a form the logger's redaction does
+	// not always clean. Both fail at boot, as a bad `providerOrigin` does.
+	describe("auth.validation.introspect.url", () => {
 		const urlOf = (url: string) => {
 			const config = validate(
 				parseFile(confPath, { env: { AUTH_MODE: "validation", INTROSPECT_URL: url } }),
@@ -274,8 +273,8 @@ describe("proxy config — injection mode", () => {
 	// RFC 6265 section 4.1.1 `cookie-name = token` (RFC 9110 token: 1*tchar). The
 	// configured name is interpolated verbatim into the outbound `Cookie` header
 	// of the session grant call, so a separator or whitespace in it would malform
-	// that header at every request; it must fail at boot instead (#75).
-	describe("sessionCookieName must be an RFC 6265 cookie-name (#75)", () => {
+	// that header at every request, so it fails at boot.
+	describe("sessionCookieName must be an RFC 6265 cookie-name", () => {
 		const injectionEnv = (sessionCookieName: string) => ({
 			AUTH_MODE: "injection",
 			INJECTION_CLIENT_ID: "my-spa",
@@ -344,7 +343,7 @@ describe("proxy config — injection mode", () => {
 			...extra,
 		});
 
-		it("defaults to false — today's forward-untouched behaviour", () => {
+		it("defaults to false", () => {
 			const raw = parseFile(confPath, { env: injectionEnv() });
 			const config = validate(raw, AppConfigSchema);
 
@@ -384,11 +383,12 @@ describe("proxy config — injection mode", () => {
 		});
 	});
 
-	// The external credential exchange (#90) is opt-in inside injection mode.
-	// Disabled, nothing about it is read; enabled, the proxy authenticates to
+	// The external credential exchange is opt-in inside injection mode.
+	// Disabled, it parses to `{ enabled: false }` and nothing else is used,
+	// though every field is still validated; enabled, the proxy authenticates to
 	// the token endpoint as a confidential client, so a client_id alone is a
 	// boot failure rather than an unauthenticated exchange.
-	describe("exchange (#90)", () => {
+	describe("exchange", () => {
 		const injectionEnv = (extra: Record<string, string> = {}) => ({
 			AUTH_MODE: "injection",
 			INJECTION_CLIENT_ID: "my-spa",

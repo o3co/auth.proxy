@@ -2,9 +2,9 @@
 // SPDX-License-Identifier: Apache-2.0
 
 /**
- * The entry point itself (#144): what `src/app.mts` does before and around
- * the mode router, in a child process configured by environment variables
- * over the shipped conf.
+ * The entry point itself: what `src/app.mts` does before and around the mode
+ * router, in a child process configured by environment variables over the
+ * shipped conf.
  *
  * - A configuration the documentation says is refused stops the process
  *   before it listens: non-zero exit, no `Server ready` line, the key named
@@ -76,14 +76,14 @@ describe("the entry point at boot", () => {
 			unprinted: [],
 		},
 		{
-			name: "refuses an INTROSPECT_URL with userinfo, naming the key and not quoting the value (#140)",
+			name: "refuses an INTROSPECT_URL with userinfo, naming the key and not quoting the value",
 			env: { ...VALIDATION, INTROSPECT_URL: "http://orders-proxy:pa55-w0rd@127.0.0.1:9/oauth/introspect" },
 			path: ["auth", "validation", "introspect", "url"],
 			names: ["auth.validation.introspect.url"],
 			unprinted: ["pa55-w0rd"],
 		},
 		{
-			name: "refuses a data: INTROSPECT_URL, which admitted every token in 0.6.0 (#140)",
+			name: "refuses a data: INTROSPECT_URL, naming the key",
 			env: { ...VALIDATION, INTROSPECT_URL: 'data:application/json,{"active":true}' },
 			path: ["auth", "validation", "introspect", "url"],
 			names: ["auth.validation.introspect.url"],

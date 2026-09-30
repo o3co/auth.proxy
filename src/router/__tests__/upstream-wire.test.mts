@@ -2,7 +2,7 @@
 // SPDX-License-Identifier: Apache-2.0
 
 /**
- * The upstream stage on the wire, through the real express-http-proxy (#132).
+ * The upstream stage on the wire, through the real express-http-proxy.
  *
  * `upstream.test.mts` pins the options the stage hands to the library; this
  * file pins what the reason for keeping the decorator rests on: the header
@@ -65,7 +65,7 @@ describe("createUpstreamProxy on the wire", () => {
 		expect(rawPairs(received[0], "x-request-id")).toEqual([["x-request-id", "rid-2c9e"]]);
 	});
 
-	it("sends an empty Authorization upstream once, in canonical casing, as the other paths treat it as present (#132, #133)", async () => {
+	it("sends an empty Authorization upstream once, in canonical casing, as the other paths treat it as present", async () => {
 		const res = await request(app).get("/resource").set("authorization", "");
 
 		expect(res.status).toBe(200);

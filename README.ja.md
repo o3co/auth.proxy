@@ -1,6 +1,6 @@
 # auth.proxy
 
-最終更新: 2026-09-24
+最終更新: 2026-09-30
 
 [![CI](https://github.com/o3co/auth.proxy/actions/workflows/ci.yml/badge.svg)](https://github.com/o3co/auth.proxy/actions/workflows/ci.yml)
 [![codecov](https://codecov.io/gh/o3co/auth.proxy/graph/badge.svg)](https://codecov.io/gh/o3co/auth.proxy)
@@ -98,7 +98,7 @@ JWT ローカル検証との比較:
 
 `https://api.example.com/orders` の前段に置いたプロキシが、その URI でもなく `allowedAudiences` にそれを登録してもいない `client_id` で認証している場合、RFC 8707 `resource` audience 付きで発行されたトークンにはすべて `401` を返す — resource indicator を使っている環境では、それは受け取る全リクエストを意味する。
 
-**プロバイダーの `401` が意味するもの。** RFC 7662 §2.3 ではイントロスペクション要求は認証されるので、プロバイダーの `401` は、その要求が載せていたクレデンシャルに対する答えである。クライアント資格情報が無い場合、そのクレデンシャルは受信トークン*そのもの*であり、`401` は呼び出し元についての答え — `401 Invalid Token` — になる。資格情報がある場合、クレデンシャルはプロキシ自身の Basic ヘッダーであり、`401` が拒否したのは*プロキシ*で、呼び出し元のトークンは検査すらされていない。これは `502 Provider Configuration Error` とし、呼び出し元の `validation.token_unauthorized`（info）ではなく `validation.provider_config_error`（`introspect refused the proxy's client credentials`）として error でログする。直すのはオペレーターだからである。インジェクション経路も同じ状況を `provider_config_error` 502 として報告する — 交換は当初から、セッショングラントは #95 F47 以降。したがって設定を誤ったデプロイは、クライアントやゲートウェイが `401` よりも積極的に再試行するステータスを返し、それが[プロバイダーのレート制限](#プロバイダーのレート制限)で述べるインスタンス単位のイントロスペクション予算を消費する。直すべきは資格情報であって、再試行ポリシーではない。
+**プロバイダーの `401` が意味するもの。** RFC 7662 §2.1 ではイントロスペクション要求は認証され、§2.3 は無効なクレデンシャルに `401` で答えるので、プロバイダーの `401` は、その要求が載せていたクレデンシャルに対する答えである。クライアント資格情報が無い場合、そのクレデンシャルは受信トークン*そのもの*であり、`401` は呼び出し元についての答え — `401 Invalid Token` — になる。資格情報がある場合、クレデンシャルはプロキシ自身の Basic ヘッダーであり、`401` が拒否したのは*プロキシ*で、呼び出し元のトークンは検査すらされていない。これは `502 Provider Configuration Error` とし、呼び出し元の `validation.token_unauthorized`（info）ではなく `validation.provider_config_error`（`introspect refused the proxy's client credentials`）として error でログする。直すのはオペレーターだからである。インジェクション経路も同じ状況を `provider_config_error` 502 として報告する — 交換は当初から、セッショングラントは #95 F47 以降。したがって設定を誤ったデプロイは、クライアントやゲートウェイが `401` よりも積極的に再試行するステータスを返し、それが[プロバイダーのレート制限](#プロバイダーのレート制限)で述べるインスタンス単位のイントロスペクション予算を消費する。直すべきは資格情報であって、再試行ポリシーではない。
 
 **クライアント認証なし（両方未設定）。** プロキシは受信トークン自体をイントロスペクションの資格情報として提示する。`buildAuthHeader` が `Authorization: Bearer <token>` を出し、ボディにも同じトークンを載せる（プロバイダーは両者の一致を要求する）。この経路では呼び出し元クライアントが特定されないため、**audience の固定は適用されず**、どの audience 向けのトークンでもトークン自体の妥当性だけで判定される。
 

@@ -46,20 +46,15 @@ type InjectionConfig = Extract<AppConfig["auth"], { mode: "injection" }>;
 
 /**
  * What the session grant asks the provider, as the key for the answer it gets
- * back (#95 F33).
- *
- * The cache and the flight table are supplied-able (#95 F4), so one instance
- * can serve two routers. The key was SHA-256 of the cookie value alone, which
- * made "this cookie's token" mean whatever the first router to ask had asked —
- * a different provider, client, scope or cookie name is a different question,
- * and the second router was served the first one's answer.
+ * back. The cache and the flight table may be supplied, so one instance can
+ * serve two routers, and a different provider, client, scope or cookie name
+ * is a different question about the same cookie value.
  *
  * Hashed as a JSON array rather than joined, so no field's text can shift into
  * its neighbour's, and the cookie value never leaves the digest. The cache
- * policy is not in it: `ttlSeconds` bounds how long an entry lives, not which
- * token comes back. Neither is the grant client, which cannot be hashed. Those
- * two are what a caller sharing one cache between routers must still match;
- * the rest is now the key's job.
+ * policy is not in it (`ttlSeconds` bounds how long an entry lives, not which
+ * token comes back), and neither is the grant client, which cannot be hashed:
+ * a caller sharing one cache between routers must match those two.
  *
  * The parameter is the client's own config minus `timeoutMs`, and the rest
  * element below is what makes that a guarantee rather than a convention: a
@@ -93,19 +88,19 @@ export const sessionCacheKey = (
 /**
  * What the session decision needs. `createRouter` builds every default and
  * accepts overrides for the cache, the flight table, the grant client and the
- * logger (#95 F4). The exchange's deps are not here: the decision only needs
+ * logger. The exchange's deps are not here: the decision only needs
  * to know whether the exchange is on, and hands off with `ExchangeArgs`.
  */
 export interface InjectionDeps {
 	cfg: InjectionConfig["injection"];
 	/**
 	 * Both keyed by {@link sessionCacheKey}, which carries the grant context —
-	 * provider, client, scope, cookie name — beside the cookie value (#95 F33).
-	 * An instance supplied through `createRouter({ deps })` may therefore be
-	 * shared between routers that differ in any of those. What is still not in
-	 * the key, and so still the caller's to match: the `grantClient`, which
-	 * cannot be hashed, and the cache policy, which decides how long an entry
-	 * lives rather than which token comes back.
+	 * provider, client, scope, cookie name — beside the cookie value, so an
+	 * instance supplied through `createRouter({ deps })` may be shared between
+	 * routers that differ in any of those. What is not in the key is the
+	 * caller's to match: the `grantClient`, which cannot be hashed, and the
+	 * cache policy, which decides how long an entry lives rather than which
+	 * token comes back.
 	 *
 	 * Sharing costs capacity: a cookie takes one entry per grant context
 	 * rather than one in total, all against the same `maxEntries`, so a cache
@@ -130,7 +125,7 @@ export interface InjectionInputs {
 /** Why a request goes upstream without the proxy having minted anything. */
 export type ForwardWithoutInjectionReason = "no_cookie" | "cookie_rejected";
 
-/** What `decideExchange` (F2) receives when the decision hands off to it. */
+/** What `decideExchange` receives when the decision hands off to it. */
 export interface ExchangeArgs {
 	requestId: string;
 	authorization: string;
@@ -161,21 +156,20 @@ export type InjectionOutcome =
 /**
  * What a forward without injection does to the inbound `Authorization`, as the
  * lines reporting it name it. Derived from {@link InjectionOutcome} rather
- * than spelled again, so renaming an outcome cannot leave a log field behind
- * (#95 F31).
+ * than spelled again, so renaming an outcome cannot leave a log field behind.
  */
 type ForwardAction = Extract<InjectionOutcome["kind"], "forward" | "forward_stripped">;
 
 /**
- * A session cookie pair the proxy refuses to forward (#23). Unlike the absent
- * case this deserves an operator's attention, so it is a distinct event at warn
- * (#73). Only the bounded reason class is logged, never the value bytes.
+ * A session cookie pair the proxy refuses to forward. Unlike the absent case
+ * this deserves an operator's attention, so it is a distinct event at warn.
+ * Only the bounded reason class is logged, never the value bytes.
  * `action` names what became of the request, in the outcome's own vocabulary:
  * `forward` — every same-name pair was refused and the request goes upstream
  * with whatever `Authorization` it arrived with, which is none unless the
  * client presented its own; `forward_stripped` — the same, with that header
  * removed because `stripInboundAuthorization` is on; `fallback` — a malformed
- * pair was skipped and a later well-formed same-name pair is used (#74), so
+ * pair was skipped and a later well-formed same-name pair is used, so
  * the request goes on to attempt the mint rather than forwarding here.
  */
 const logCookieRejected = (
@@ -205,23 +199,23 @@ interface SessionFailureLine {
 }
 
 /**
- * One discriminator for the whole failure branch (#95 F32): the code says what
- * went wrong, and it decides the body's `error`, the level and the event
- * together. `status` decides only the status, which is the client's to choose
- * — the bundled one remaps a 400 `invalid_grant` to 401 deliberately — and it
- * used to decide the level as well, so an error whose code and status were not
- * paired was reported as one thing and answered as another.
+ * One discriminator for the whole failure branch: the code says what went
+ * wrong, and it decides the body's `error`, the level and the event together.
+ * `status` decides only the status, which is the client's to choose (the
+ * bundled one remaps a 400 `invalid_grant` to 401 deliberately), so the log
+ * line and the body's `error` agree even when the code and status are not
+ * paired.
  *
  * `satisfies` on the literal is what keeps this exhaustive: a new
  * `SessionGrantErrorCode` fails the build here rather than falling into the
  * unknown case and being reported as a provider outage it is not.
  *
- * A `Map` rather than the object itself, because a supplied grant client (F4)
- * is not bound by the union at runtime and the key is whatever it throws: a
- * plain object answers `Object.prototype` members — `constructor`,
- * `toString`, `__proto__` — with an inherited value that is truthy, so the
- * fallback below would not fire and the line would be logged with `undefined`
- * fields, throwing inside the `catch` that exists to answer a refusal.
+ * A `Map` rather than the object itself, because a supplied grant client is
+ * not bound by the union at runtime and the key is whatever it throws: a plain
+ * object answers `Object.prototype` members — `constructor`, `toString`,
+ * `__proto__` — with an inherited value that is truthy, so the fallback below
+ * would not fire and the line would be logged with `undefined` fields,
+ * throwing inside the `catch` that exists to answer a refusal.
  */
 const SESSION_FAILURE_LINES = new Map<string, SessionFailureLine>(
 	Object.entries({
@@ -239,7 +233,7 @@ const UNKNOWN_SESSION_FAILURE: SessionFailureLine = {
 };
 
 /**
- * The session decision (#95 F1): the one place that reads the cookie, consults
+ * The session decision: the one place that reads the cookie, consults
  * the cache, the flight table and the grant client, and says what happens to
  * the request. It never sees Express; `router.mts` reads the headers and
  * applies the outcome.
@@ -254,10 +248,10 @@ export const decideInjection = async (
 	/**
 	 * With the exchange enabled, an inbound `Authorization` header — any
 	 * scheme, even empty — is never forwarded as received: it is exchanged
-	 * for a first-party token or the request is refused (#90). That also
-	 * leaves `stripInboundAuthorization` nothing to strip. A request without
-	 * the header takes the paths below exactly as it would with the exchange
-	 * disabled. The exchange itself is decided by `decideExchange` (F2); this only
+	 * for a first-party token or the request is refused. That also leaves
+	 * `stripInboundAuthorization` nothing to strip. A request without the
+	 * header takes the paths below exactly as it would with the exchange
+	 * disabled. The exchange itself is decided by `decideExchange`; this only
 	 * hands off.
 	 */
 	if (exchangeEnabled && authorization !== undefined) {
@@ -270,12 +264,11 @@ export const decideInjection = async (
 	/**
 	 * Whether a forward without injection takes the inbound `Authorization`
 	 * with it. One predicate, read by the outcome and by the lines that report
-	 * it, so the two cannot disagree — they did, and the line was written
-	 * first, so it said `forward` and the request was stripped (#95 F31).
+	 * it (which are written first), so the two cannot disagree.
 	 */
-	// Presence, not truthiness (#95 F40): an empty `Authorization:` is a
-	// header the client sent, and Express keeps it as "". The exchange
-	// hand-off above has always read it this way; the strip now agrees.
+	// Presence, not truthiness: an empty `Authorization:` is a header the
+	// client sent, and Express keeps it as "". The exchange hand-off above
+	// reads it the same way.
 	const willStripInbound = cfg.stripInboundAuthorization && authorization !== undefined;
 	const forwardAction: ForwardAction = willStripInbound ? "forward_stripped" : "forward";
 
@@ -285,11 +278,10 @@ export const decideInjection = async (
 	 * mint, so these are the only ones where a client's own header survives
 	 * to the upstream — the reason an upstream service must never read "a
 	 * Bearer header arrived from the proxy" as "the proxy minted this".
-	 * `stripInboundAuthorization` removes the ambiguity for deployments that
-	 * want it; it is opt-in because the pass-through is load-bearing for
-	 * topologies where a service account presents its own token through the
-	 * same proxy. The strip itself is applied on `req.headers` by the
-	 * middleware, before the upstream stage — see the comment there.
+	 * `stripInboundAuthorization` removes the ambiguity; it is opt-in because
+	 * the pass-through is load-bearing where a service account presents its
+	 * own token through the same proxy. The middleware applies the strip on
+	 * `req.headers`, before the upstream stage (see the comment there).
 	 */
 	const forwardWithoutInjection = (reason: ForwardWithoutInjectionReason): InjectionOutcome => {
 		if (willStripInbound) {
@@ -329,7 +321,7 @@ export const decideInjection = async (
 	const cached = tokenCache.get(cacheKey);
 
 	const inject = (token: string): InjectionOutcome => {
-		// Presence, as the hand-off and the strip read it (#95 F40, #133): an
+		// Presence, as the hand-off and the strip read it: an
 		// empty `Authorization:` overwritten here is an override too.
 		if (authorization !== undefined) {
 			logger.warn(

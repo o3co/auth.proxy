@@ -2,22 +2,26 @@
 // SPDX-License-Identifier: Apache-2.0
 
 /**
- * Validation mode as it runs (#144): `src/app.mts` in a child process,
- * configured by environment variables over the shipped conf, in front of a
- * recording upstream, asking the fake provider over the real `fetch`.
- * Nothing is mocked — not a router, a client, `fetch` or the schema.
+ * Validation mode as it runs: `src/app.mts` in a child process, configured by
+ * environment variables over the shipped conf, in front of a recording
+ * upstream, asking the fake provider over the real `fetch`. Nothing is mocked
+ * — not a router, a client, `fetch` or the schema.
  *
  * Each configuration the README distinguishes gets its own process: without
  * client credentials, with `CLIENT_ID` / `CLIENT_SECRET`, and with
- * `VALIDATION_REALM`. Each is sent the request shapes validation answers,
- * and each case asserts the answer (status, body, `WWW-Authenticate`), what
- * the upstream received (its `Authorization`, names as sent), what the
- * provider received (the endpoint, the credential, the form) and the log
- * events written for the request.
+ * `VALIDATION_REALM`. Each is sent the request shapes validation answers, and
+ * each case asserts the answer (status, body, `WWW-Authenticate`), what the
+ * upstream received (its `Authorization`, names as sent), what the provider
+ * received (the endpoint, the credential, the form) and the log events written
+ * for the request.
  *
  * The expected values are the documented contract, not the code's: the
- * README's challenge table and "What a provider 401 means", the validation
- * README's invariants 1 and 8, and the v0.7.0 CHANGELOG.
+ * README's Validation mode section (its challenge table, its Logging table and
+ * "What a provider 401 means") and the validation README's invariants 1 and 8.
+ * What the READMEs do not state comes from the CHANGELOG's 0.7.0 entry: the
+ * messages `introspect failed` and `introspect endpoint redirected`, the event
+ * `validation.incoming_request`, and `Authorization` reaching the upstream in
+ * canonical casing.
  */
 
 import { afterAll, afterEach, beforeAll, describe, expect, it, vi } from "vitest";
@@ -55,10 +59,12 @@ afterEach(() => {
 type Line = { event: string; level: string } & Record<string, unknown>;
 const INCOMING: Line = { event: "validation.incoming_request", level: "info", msg: "incoming request" };
 /**
- * A provider failure line: the event, the level and the message the README
- * and the v0.7.0 CHANGELOG name, and the error itself under `error`, through
- * the logger's allowlist — an object with the class and the message, never
- * the string injection logs (`src/README.md`, #95 F48).
+ * A provider failure line. The event and the level are the README's Logging
+ * table; the message is the README's for refused client credentials and the
+ * CHANGELOG's 0.7.0 entry for the others. The error itself is under `error`,
+ * through the logger's allowlist: an object with the message and the stack
+ * (`src/README.md`) and the class as `type` (the CHANGELOG's 0.7.0 entry),
+ * never the string injection logs.
  */
 const failure = (event: string, level: string, msg: string): Line => ({
 	event,
@@ -111,7 +117,7 @@ const SETUPS: Setup[] = [
 		introspectionCredential: () =>
 			`Basic ${Buffer.from("orders-proxy:s3%3Acr%20t%2B%2F%25").toString("base64")}`,
 		challenge: NO_REALM,
-		// The provider refused the proxy, not the caller (#95 F7).
+		// The provider refused the proxy, not the caller.
 		provider401: {
 			status: 502,
 			message: "Provider Configuration Error",
@@ -176,7 +182,7 @@ const casesFor = (setup: Setup): Case[] => [
 		lines: [INCOMING],
 	},
 	{
-		name: "forwards an empty Authorization unchanged, sent upstream as `Authorization` (#132)",
+		name: "forwards an empty Authorization unchanged, sent upstream as `Authorization`",
 		authorization: () => "",
 		status: 200,
 		answer: "forwarded",
@@ -193,7 +199,7 @@ const casesFor = (setup: Setup): Case[] => [
 		lines: [INCOMING],
 	},
 	{
-		name: "introspects the first word of `Bearer <token> extra` and forwards the header as received (F14)",
+		name: "introspects the first word of `Bearer <token> extra` and forwards the header as received",
 		authorization: (token) => `Bearer ${token} extra`,
 		introspection: json(200, { active: true }),
 		status: 200,
@@ -270,7 +276,7 @@ const casesFor = (setup: Setup): Case[] => [
 		lines: [INCOMING, failure("validation.provider_error", "error", "introspect failed")],
 	},
 	{
-		name: "does not follow a redirect from the introspection endpoint: 502 Provider Configuration Error, one provider request (#95 F43)",
+		name: "does not follow a redirect from the introspection endpoint: 502 Provider Configuration Error, one provider request",
 		authorization: (token) => `Bearer ${token}`,
 		introspection: redirect(307, "/oauth/introspect/"),
 		status: 502,
@@ -414,7 +420,7 @@ describe.each(SETUPS)("the app in validation mode, $name", (setup) => {
 		expect(await proxy.linesFor(String(requestId))).toMatchObject([INCOMING]);
 	});
 
-	it("wrote every line about a request with its requestId and a validation.* event (#134), nothing else, and no configured secret", async () => {
+	it("wrote every line about a request with its requestId and a validation.* event, nothing else, and no configured secret", async () => {
 		await proxy.linesFor("validation-every-line");
 		// Nothing outside the logger: no stdout line that is not NDJSON, and
 		// nothing on stderr but the harness's own listening line.

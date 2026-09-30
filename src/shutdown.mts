@@ -17,25 +17,10 @@ import type { Server } from "node:http";
 import type { Logger } from "./logger.mjs";
 
 /**
- * Graceful shutdown for the proxy.
- *
- * ## Why this is here rather than in a dependency
- *
- * It used to be `gracefulShutdown` from `@o3co/auth.utils@0.0.4`. For the
- * component sitting in front of every protected upstream, "does SIGTERM wait
+ * Graceful shutdown for the proxy. It lives here rather than in a dependency:
+ * for the component in front of every protected upstream, "does SIGTERM wait
  * for in-flight requests, and for how long?" has to be answerable from the
- * code an operator deploys — and reading those 22 lines answered it badly:
- * **there was no deadline**. `server.close()` waits indefinitely, so one stuck
- * request meant the process never exited on its own and the orchestrator's
- * SIGKILL took it down mid-flight, precisely under the load that produces a
- * stuck request. The cleanup-failure path also wrote to `console.error`, one
- * bare line in a service whose every other line is NDJSON, and every exit was
- * zero, so a truncated shutdown looked exactly like a clean one.
- *
- * `auth.provider` reached the same conclusion in its issue #290. This is the
- * same contract, stated for this proxy and pinned by its own tests.
- *
- * ## The guarantees, stated
+ * code an operator deploys. The guarantees, pinned by this repository's tests:
  *
  * 1. **SIGTERM and SIGINT** both start it; a second signal is ignored rather
  *    than starting a second cleanup over the first one's work.
@@ -43,7 +28,8 @@ import type { Logger } from "./logger.mjs";
  *    sockets are released (`closeIdleConnections`) — they hold the server open
  *    with no request behind them, so a quiet proxy would otherwise wait out
  *    the whole deadline for nothing.
- * 3. **In-flight requests get `drainTimeoutMs`** (default 10s) to finish.
+ * 3. **In-flight requests get `drainTimeoutMs`** (default 10s) to finish;
+ *    `server.close()` alone waits indefinitely on one stuck request.
  * 4. **Past the deadline, remaining connections are cut**
  *    (`closeAllConnections`) and the process exits **non-zero** — an
  *    orchestrator that only ever sees `0` cannot tell a clean drain from one
@@ -51,13 +37,13 @@ import type { Logger } from "./logger.mjs";
  * 5. **`cleanup` runs after draining, before exit**, logged through the app
  *    logger and reflected in the exit code. It is bounded by
  *    `cleanupTimeoutMs`, so a dispose that never settles cannot wedge the
- *    process the way an unbounded `await` did.
+ *    process.
  * 6. **A `close` that fails is not reported as a clean drain.**
  *
  * Size `drainTimeoutMs` **below** the orchestrator's own kill grace period
  * (Kubernetes `terminationGracePeriodSeconds`, compose `stop_grace_period`,
- * both 30s by default) — the point is to close on our terms before SIGKILL
- * arrives on someone else's.
+ * both 30s by default), so the proxy closes on its own terms before SIGKILL
+ * arrives.
  */
 export interface GracefulShutdownOptions {
 	readonly logger: Logger;

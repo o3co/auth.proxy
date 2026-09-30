@@ -2,46 +2,40 @@
 // SPDX-License-Identifier: Apache-2.0
 
 /**
- * The proxy as it runs, for the composition tests (#144): the entry point,
- * `src/app.mts`, in a child process — configured the way an operator
- * configures it, by environment variables over the shipped
- * `config/application.conf`, and observed the way an operator observes it,
- * by its HTTP answers and what it writes to stdout and stderr. Test-only:
- * nothing outside a test imports it.
+ * The proxy as it runs, for the composition tests: the entry point,
+ * `src/app.mts`, in a child process, configured the way an operator
+ * configures it (environment variables over the shipped
+ * `config/application.conf`) and observed the way an operator observes it (its
+ * HTTP answers, stdout and stderr). Test-only: nothing outside a test imports it.
  *
- * Nothing in the child is replaced. The HOCON parse, the schema, the mode
- * router, the provider clients and their `fetch`, the upstream stage and the
- * logger are the ones production runs; the child is started with
- * `node --import tsx`, which only compiles the TypeScript, and with
- * `child-preload.mts`, which reports the bound port and ties the child's
- * life to the parent's.
+ * Nothing in the child is replaced: `node --import tsx` only compiles the
+ * TypeScript, and `child-preload.mts` only reports the bound port and ties the
+ * child's life to the parent's. The child's environment is what the test
+ * passes, over `PATH`, `TMPDIR`, `NODE_ENV=production` (as the Dockerfile sets
+ * it) and the loopback listen address; nothing is inherited, so a `CLIENT_ID`
+ * in a developer's shell cannot change the configuration under test.
  *
- * The child's environment is what the test passes, over `PATH`, `TMPDIR`,
- * `NODE_ENV=production` (as the Dockerfile sets it) and the loopback listen
- * address — nothing inherited, so a `CLIENT_ID` in a developer's shell cannot
- * change the configuration under test.
- *
- * The child listens on `HTTP_PORT=0`, so the OS picks a port no one holds, and
- * it is ready once the preload has reported the port it bound — not once it
- * logs `Server ready`, which is an info line a `LOG_LEVEL` above info drops.
+ * The child listens on `HTTP_PORT=0` and is ready once the preload has
+ * reported the port it bound, not once it logs `Server ready`, an info line a
+ * `LOG_LEVEL` above info drops.
  *
  * No child outlives its test: a boot that is neither ready nor exited within
  * {@link BOOT_DEADLINE_MS} is killed and rejected with its stderr; a stop that
  * SIGTERM does not finish within {@link STOP_GRACE_MS} ends in SIGKILL; the
  * worker kills what is left when it exits; and a worker that is itself killed
  * leaves the child's IPC channel disconnected, which the preload answers by
- * killing the child. The suites that use this set their timeouts above the
- * deadline, so a boot fails on its deadline and not on vitest's timer.
+ * killing the child. The suites set {@link SUITE_TIMEOUT_MS} above the
+ * deadline and the grace together, so a hung boot fails on its own deadline,
+ * with its stderr, rather than on vitest's timer.
  *
  * The parent can read the answer to a request before the lines the child
- * logged about it, so a test waits for lines rather than racing them:
- * {@link ProxyProcess.linesFor} sends a barrier request and waits for the
- * barrier's own `incoming request` line. The child writes its lines in order,
- * so every line written before the barrier's has been read by then, and a line
- * still missing was never written. The barrier also has to reach the
- * upstream: a request refused earlier that the proxy wrongly forwarded as well
- * would reach it before the barrier, so a test that asserts "nothing reached
- * the upstream" after `linesFor` sees it.
+ * logged about it, so {@link ProxyProcess.linesFor} sends a barrier request
+ * and waits for the barrier's own `incoming request` line. The child writes
+ * its lines in order, so every line written before the barrier's has been read
+ * by then, and a line still missing was never written. The barrier also has to
+ * reach the upstream: a request sent before the barrier that the proxy
+ * wrongly forwarded reaches the upstream first, so a test that asserts nothing
+ * reached the upstream after `linesFor` sees it.
  */
 
 import { type ChildProcess, spawn } from "node:child_process";

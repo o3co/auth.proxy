@@ -34,29 +34,28 @@ export interface ValidationInputs {
 
 /**
  * What the decision asks of the provider: the introspection result for one
- * token, from the cache or the endpoint. `createRouter` binds the concrete
- * `introspect` with its URL, bounds and credential choice; a caller may supply
- * its own — and then owns what the bundled one guarantees and the decision
- * does not: the RFC 7662 section 2.2 check that `active` is a boolean (the decision
- * forwards only on `true`, so a non-boolean is a refusal, never a bypass), the
- * refusals for a `cnf`, a non-Bearer `token_type` and expiry during the call,
- * and its own timeout, since the decision has none. What `createRouter`
- * builds behind this seam is `createIntrospector` over an
- * `IntrospectionClient` and an `IntrospectionCache` (#95 F5).
+ * token, from the cache or the endpoint. `createRouter` binds
+ * `createIntrospector` over an `IntrospectionClient` and an
+ * `IntrospectionCache`, with its URL, bounds and credential choice. A caller
+ * may supply its own, and then owns what the bundled one guarantees and the
+ * decision does not: the RFC 7662 section 2.2 check that `active` is a boolean
+ * (the decision forwards only on `true`, so a non-boolean is a refusal, never
+ * a bypass), the refusals for a `cnf`, a non-Bearer `token_type` and expiry
+ * during the call, and its own timeout, since the decision has none.
  *
- * No signal parameter, deliberately (#95 F10): the only cancellation is the
- * timeout the implementation behind this seam imposes on itself, and a
- * caller's disconnect must not abort a call other waiters are coalesced onto.
+ * No signal parameter, deliberately: the only cancellation is the timeout the
+ * implementation behind this seam imposes on itself, and a caller's
+ * disconnect must not abort a call other waiters are coalesced onto.
  */
 export type Introspector = (token: string, requestId: string) => Promise<IntrospectionResult>;
 
-/** What the validation decision needs (#95 F3). */
+/** What the validation decision needs. */
 export interface ValidationDeps {
 	introspect: Introspector;
 	logger: Logger;
 }
 
-/** What the decision reads from configuration (#95 F45). */
+/** What the decision reads from configuration. */
 export interface ValidationPolicy {
 	/**
 	 * `auth.validation.realm`: the RFC 6750 §3 `realm` for every challenge, or
@@ -70,7 +69,7 @@ const NO_REALM: ValidationPolicy = { realm: null };
 
 /**
  * The `WWW-Authenticate` value for a refusal about the caller's credential,
- * or `null` when there is nothing to send (#95 F29, F45).
+ * or `null` when there is nothing to send.
  *
  * RFC 6750 §3 makes the header a MUST when a protected-resource request
  * carries no usable credentials or a token that does not enable access, and
@@ -82,8 +81,8 @@ const NO_REALM: ValidationPolicy = { realm: null };
  * `realm` alone, as in §3.1's own example, and without a configured realm
  * there is no auth-param left to send, so no header at all.
  *
- * No `error_description`: §3 makes it a MAY, the body already carries the
- * wording, and the same string in two places invites them to drift.
+ * No `error_description`: §3 makes it a MAY, and the body already carries the
+ * wording; the same string in two places would drift.
  */
 const challengeFor = (
 	{ realm }: ValidationPolicy,
@@ -127,38 +126,37 @@ const reject = (
 });
 
 /**
- * The validation decision (#95 F3): the one place that reads `Authorization`,
- * consults the introspector and says what happens to the request. It never
- * sees Express; `router.mts` reads the headers and applies the outcome.
+ * The validation decision: the one place that reads `Authorization`, consults
+ * the introspector and says what happens to the request. It never sees
+ * Express; `router.mts` reads the headers and applies the outcome.
  *
- *   - no Authorization                        forward, the provider not consulted
- *   - not `Bearer <token>`                    400 Invalid Token Type — with
- *                                             `error="invalid_request"` when it
- *                                             named Bearer, the realm alone when
- *                                             it used another method (#95 F45)
- *   - active: false                           401 Invalid Token
- *   - the provider answers 401                401 Invalid Token, unless it was
- *                                             the proxy's own client
- *                                             authentication that was refused:
- *                                             502 Provider Configuration Error
- *   - the endpoint redirects                  502 Provider Configuration Error
- *   - any other provider failure              502 Bad Gateway — a 5xx, a 429,
- *     (an IntrospectHttpError)                a 4xx that is not 401, a 200 that
- *                                             is not an introspection response,
- *                                             no answer at all (#95 F42)
- *   - anything else thrown                    500 Internal Server Error
- *   - active: true                            forward
+ *   - no Authorization: forward, the provider not consulted.
+ *   - not `Bearer <token>`: 400 Invalid Token Type — with
+ *     `error="invalid_request"` when it named Bearer, the realm alone when it
+ *     used another method.
+ *   - `active: false`: 401 Invalid Token.
+ *   - the provider answers 401: 401 Invalid Token, or 502 Provider
+ *     Configuration Error when it refused the proxy's own client
+ *     authentication.
+ *   - the endpoint redirects: 502 Provider Configuration Error.
+ *   - any other provider failure (an IntrospectHttpError): 502 Bad Gateway —
+ *     a 5xx, a 429, a 4xx that is not 401, a 200 that is not an introspection
+ *     response, no answer at all.
+ *   - anything else thrown: 500 Internal Server Error.
+ *   - `active: true`: forward.
  *
  * What is forwarded is decided by `req.headers`, which the middleware never
  * modifies on this path: the first SP-delimited word is introspected, the
- * inbound bytes go upstream (F14).
+ * inbound bytes go upstream.
  *
  * Every challenge carries `policy.realm` when one is configured.
  *
- * Every provider failure is logged once, with `requestId`, a `validation.*`
- * `event` and the thrown value under `error` — the vocabulary the injection
- * path logs in (#134). The provider's 401 about the caller's token is info;
- * everything that is the proxy's or the provider's own failure is error.
+ * Every provider failure is logged once per request it answers (waiters on a
+ * shared flight each log it), with `requestId`, a `validation.*` `event` and
+ * the thrown value itself under `error`. The keys are the injection path's;
+ * the `error` value is not — injection logs a string there (`src/README.md`).
+ * The provider's 401 about the caller's token is info; everything that is the
+ * proxy's or the provider's own failure is error.
  */
 export const decideValidation = async (
 	{ requestId, authorization }: ValidationInputs,
@@ -175,9 +173,9 @@ export const decideValidation = async (
 	// Truthiness rather than `=== null`, matching the `!authorization` check
 	// above it: the empty string is the only other falsy value a `string | null`
 	// can hold, it is not a credential, and refusing it here is the safe
-	// direction if the parser ever stops ruling it out (#95 F36).
+	// direction if the parser ever stops ruling it out.
 	if (!token) {
-		// One status, two challenges (#95 F45). A `Bearer` with no usable token
+		// One status, two challenges. A `Bearer` with no usable token
 		// after it is §3.1's "otherwise malformed" request: `invalid_request`.
 		// Another method — `Basic`, or a lowercase `bearer` this parser does not
 		// admit — "SHOULD NOT" carry an error code (§3.1's last paragraph), so it
@@ -202,10 +200,10 @@ export const decideValidation = async (
 		// 401 carries one, but nothing stops a supplied introspector constructing
 		// an out-of-contract error, and this branch answers a different status.
 		// A 401 that refused the proxy's own client authentication is not a
-		// statement about the caller's token — the provider never examined it
-		// (#95 F7). It is the deployment's own configuration, so it is reported
-		// as a provider-side failure and logged as the actionable thing it is,
-		// under the event the injection path gives it (#134).
+		// statement about the caller's token — the provider never examined it.
+		// It is the deployment's own configuration, so it is reported as a
+		// provider-side failure, under `validation.provider_config_error`, this
+		// mode's counterpart of injection's `provider_config_error` events.
 		if (
 			e instanceof IntrospectHttpError &&
 			e.status === 401 &&
@@ -218,9 +216,10 @@ export const decideValidation = async (
 			return reject(502, "Provider Configuration Error", null);
 		}
 		// A redirecting introspection endpoint is the same kind of thing: the
-		// deployment's configuration, reported as such (#95 F43), under the
-		// same event — the injection path files a redirect there too. The
-		// client asks fetch not to follow, so the 3xx arrives with its own status.
+		// deployment's configuration, under the same
+		// `validation.provider_config_error` event; the injection path also
+		// answers a redirect as `provider_config_error`. The client asks fetch not
+		// to follow, so the 3xx arrives with its own status.
 		if (e instanceof IntrospectHttpError && e.status >= 300 && e.status < 400) {
 			logger.error(
 				{ requestId, event: "validation.provider_config_error", error: e },
@@ -229,9 +228,9 @@ export const decideValidation = async (
 			return reject(502, "Provider Configuration Error", null);
 		}
 		// Every other 401 is about the token: the bundled client marks it, and a
-		// supplied introspector that marks nothing is read the way it always was.
-		// It is the caller's refusal, not the proxy failing, so it is logged at
-		// info — the level `injection.session_unauthorized` has (#134).
+		// 401 from a supplied introspector that marks nothing is read the same
+		// way. It is the caller's refusal, not the proxy failing, so it is logged
+		// at info, the level `injection.session_unauthorized` has.
 		if (e instanceof IntrospectHttpError && e.status === 401) {
 			logger.info(
 				{ requestId, event: "validation.token_unauthorized", error: e },
@@ -240,12 +239,11 @@ export const decideValidation = async (
 			return reject(401, "Invalid Token", invalidToken);
 		}
 		// The rest of IntrospectHttpError is the provider failing, and a gateway
-		// reports its upstream's failure as 502 (RFC 9110 §15.6.3) — the status
-		// the injection path gives every one of these already (#95 F42). One
-		// event for all of them: the class carries a status and no finer
-		// classification, so an outage and a 200 that is not an introspection
-		// response cannot be told apart here the way injection's
-		// `provider_unavailable` and `provider_invalid_response` are.
+		// reports its upstream's failure as 502 (RFC 9110 §15.6.3), as the
+		// injection path does. One event for all of them: the class carries a
+		// status and no finer classification, so an outage and a 200 that is not
+		// an introspection response cannot be told apart here the way
+		// injection's `provider_unavailable` and `provider_invalid_response` are.
 		if (e instanceof IntrospectHttpError) {
 			logger.error(
 				{ requestId, event: "validation.provider_error", error: e },

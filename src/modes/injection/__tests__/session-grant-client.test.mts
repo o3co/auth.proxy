@@ -40,11 +40,11 @@ const getFetchCallHeaders = (
 ): Record<string, string> =>
 	getFetchCallInit(fetchMock, index).headers as Record<string, string>;
 
-// Most fixtures below pass `sessionCookieValue: "c"`, which since #95 F30 is
-// a credential that matches every string. They assert code, status or a body
-// with no error_description, so nothing depends on a provider's text being
-// relayed — but adding an error_description to one of them gets the proxy's
-// generic wording, not the provider's.
+// Most fixtures below pass `sessionCookieValue: "c"`, a one-character
+// credential, so any provider text with a `c` in it echoes it. They assert
+// code, status or a body with no error_description, so nothing depends on a
+// provider's text being relayed — but an error_description with a `c` in it,
+// added to one of them, gets the proxy's generic wording, not the provider's.
 describe("createSessionGrantClient.exchange", () => {
 	let fetchMock: ReturnType<typeof vi.fn>;
 	const client = () => createSessionGrantClient(baseCfg);
@@ -189,7 +189,7 @@ describe("createSessionGrantClient.exchange", () => {
 
 	// The array case reaches the same refusal as any other body that is not an
 	// object, rather than falling through to the access_token check with a
-	// message about a missing claim (#95 F34).
+	// message about a missing claim.
 	it("throws provider_invalid_response on 200 with a JSON array body", async () => {
 		fetchMock.mockResolvedValueOnce(jsonResponse(200, [{ access_token: "tok" }]));
 		const client = createSessionGrantClient(baseCfg);
@@ -204,7 +204,7 @@ describe("createSessionGrantClient.exchange", () => {
 	});
 
 	// The bound is the point: a provider streaming an endless 200 must not be
-	// able to make the proxy buffer it (#95 F35).
+	// able to make the proxy buffer it.
 	it("throws provider_invalid_response on a 200 body over the bound", async () => {
 		fetchMock.mockResolvedValueOnce(
 			new Response(`{"access_token":"${"a".repeat(MAX_TOKEN_BODY_BYTES)}"}`, {
@@ -239,9 +239,10 @@ describe("createSessionGrantClient.exchange", () => {
 		});
 	});
 
-	// The jwt-bearer client has always refused a redirecting token endpoint
-	// rather than following it; this one let fetch follow by default, which
-	// sends the session cookie wherever the Location points (#95 F8).
+	// A redirecting token endpoint is refused, not followed, as the jwt-bearer
+	// client refuses one: `fetch` follows by default, which re-sends the
+	// session cookie to a path nothing configured on the same origin, and drops
+	// it cross-origin, so the provider's 401 reads as an expired session.
 	it("asks fetch not to follow a redirect", async () => {
 		fetchMock.mockResolvedValueOnce(
 			jsonResponse(200, { access_token: "tok", token_type: "Bearer" }),
@@ -257,8 +258,8 @@ describe("createSessionGrantClient.exchange", () => {
 
 	// 300 is in the list because the range is `>= 300`, not because `fetch`
 	// would follow one: it does not, any more than it follows a 304, 305 or
-	// 306. They are refused as a redirect anyway, which is the bound the
-	// jwt-bearer client has always used and this one now copies.
+	// 306. They are refused as a redirect anyway, the same bound the
+	// jwt-bearer client uses.
 	it.each([300, 301, 302, 303, 307, 308])(
 		"refuses a 3xx rather than following it (%d)",
 		async (status) => {
@@ -277,10 +278,9 @@ describe("createSessionGrantClient.exchange", () => {
 		},
 	);
 
-	// #95 F37, the injection half of F28. These branches answer from the
-	// status alone and never read the body — and an unread body larger than
-	// undici's read-ahead holds its socket out of the pool until the response
-	// is collected. (The 401 reads its body since F47; the 2xx joined in F38.)
+	// These branches answer from the status alone and never read the body —
+	// and an unread body larger than undici's read-ahead holds its socket out
+	// of the pool until the response is collected.
 	const trackedBody = (status: number, onCancel: () => void = () => {}) => {
 		let cancelled = false;
 		const resp = new Response(
@@ -298,7 +298,7 @@ describe("createSessionGrantClient.exchange", () => {
 		return { resp, wasCancelled: () => cancelled };
 	};
 
-	// The 401 is not in this list since #95 F47: it reads its body, bounded,
+	// The 401 is not in this list: it reads its body, bounded,
 	// to tell an expired session from the proxy's own client being refused.
 	it.each([
 		[302, "provider_config_error"],
@@ -350,11 +350,10 @@ describe("createSessionGrantClient.exchange", () => {
 		).rejects.toMatchObject({ code: "provider_unavailable", status: 502 });
 	});
 
-	// #95 F47. RFC 6749 section 5.2 lets the token endpoint answer 401
-	// invalid_client when the client fails authentication. For this public
-	// client that means the proxy's own clientId is wrong or unregistered —
-	// and reporting it as session_unauthorized told every browser to sign in
-	// again, forever, over something signing in cannot fix.
+	// RFC 6749 section 5.2 lets the token endpoint answer 401 invalid_client
+	// when the client fails authentication. For this public client that means
+	// the proxy's own clientId is wrong or unregistered, which signing in again
+	// cannot fix, so it is not reported as session_unauthorized.
 	describe("a 401 that refused the proxy's client", () => {
 		const exchange401 = (body: unknown) => {
 			fetchMock.mockResolvedValueOnce(jsonResponse(401, body));
@@ -505,10 +504,10 @@ describe("createSessionGrantClient.exchange", () => {
 		});
 	});
 
-	// The cost of #95 F30, at the level where it is paid: the description is
-	// relayed to the client, so a cookie value the proxy did not choose is
-	// matched anywhere in it and at any length. A one-character value is in
-	// almost any sentence, and the proxy's own wording takes its place.
+	// Where the cost of substring matching is paid: the description is relayed
+	// to the client, so a cookie value the proxy did not choose is matched
+	// anywhere in it and at any length. A one-character value is in almost any
+	// sentence, and the proxy's own wording takes its place.
 	it("drops a provider error_description that contains the session cookie value, however short", async () => {
 		fetchMock.mockResolvedValueOnce(
 			jsonResponse(400, { error: "invalid_scope", error_description: "unknown scope" }),
@@ -604,7 +603,7 @@ describe("createSessionGrantClient.exchange", () => {
 		});
 	});
 
-	it("throws provider_unavailable on timeout (AbortError)", async () => {
+	it("throws provider_unavailable when fetch rejects with an AbortError", async () => {
 		const abortErr = new DOMException("The operation was aborted", "AbortError");
 		fetchMock.mockRejectedValueOnce(abortErr);
 		const client = createSessionGrantClient(baseCfg);
@@ -618,11 +617,11 @@ describe("createSessionGrantClient.exchange", () => {
 		});
 	});
 
-	// #95 F38: RFC 6749 §5.1's success is a 200. Any other 2xx — even one
-	// carrying a well-formed token — is an unexpected status, with the code,
-	// status and message the jwt-bearer client gives it, and never reported as
-	// a 200. Every 2xx that may carry a body here, and the two that may not
-	// below, so no single status can slip back.
+	// RFC 6749 §5.1's success is a 200. Any other 2xx — even one carrying a
+	// well-formed token — is an unexpected status, with the code, status and
+	// message the jwt-bearer client gives it, and never reported as a 200.
+	// Every 2xx that may carry a body here, and the two that may not below, so
+	// no single status can slip through.
 	it.each([201, 202, 203, 206, 207, 208, 226, 299])("refuses a %d carrying a token as an unexpected status", async (status) => {
 		fetchMock.mockResolvedValueOnce(
 			jsonResponse(status, { access_token: "tok-123", token_type: "Bearer", expires_in: 120 }),

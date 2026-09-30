@@ -36,33 +36,23 @@ const JWT_SHAPE_RE = /[A-Za-z0-9_-]+\.[A-Za-z0-9_-]+\.[A-Za-z0-9_-]*/;
 
 /**
  * Whether a provider's text carries one of the credentials this request sent,
- * anywhere inside it and at any length (#95 F30).
+ * anywhere inside it and at any length.
  *
- * There used to be a length below which only an exact echo counted, on the
- * reasoning that a substring test on a one- or two-character value refuses
- * ordinary text for no gain. It is not for no gain: one of these credentials
- * is the caller's session cookie value, whose length the proxy does not
- * choose and cannot bound, and with the threshold a cookie value of `abc` sat
- * inside `bad abc` in a log line and in the `error_description` relayed to the
- * client.
+ * There is no length below which only an exact echo counts: one of these
+ * credentials is the caller's session cookie value, whose length the proxy
+ * does not choose and cannot bound, and a cookie value of `abc` would
+ * otherwise pass inside `bad abc` into a log line and the `error_description`
+ * relayed to the client. The function does not know which string is which,
+ * so the rule is the same for the assertion and the client secret.
  *
- * Only one of the three credentials can realistically be short. An assertion
- * is at least nine characters by the time `JWS_COMPACT_RE` and the two
- * base64url JSON segments have admitted it, so this is a no-op there; a client
- * secret is the operator's own configuration; the cookie value is the
- * caller's, and nothing bounds it. The rule is uniform anyway because this
- * function is deliberately anonymous — it does not know which string is
- * which, and buying diagnostics back for a three-character client secret is
- * not worth breaking that.
- *
- * The cost is real and bounded: a very short credential refuses almost any
- * text. What that loses is the provider's diagnostic — every caller classifies
- * the raw value before sanitising, and substitutes its own wording for a
- * refusal, so the status, the code and the logged event are unaffected and
- * only the relayed or logged text changes. A lost diagnostic is cheaper than a
- * credential in a log. The two costs differ in reach: a short cookie degrades
- * that caller's requests, a short secret degrades every exchange refusal until
- * it is rotated — which is a loud nudge to rotate it.
+ * The cost: a very short credential refuses almost any text. Only the
+ * provider's diagnostic is lost — every caller classifies the raw value before
+ * sanitising and substitutes its own wording for a refusal, so the status, the
+ * code and the logged event are unaffected and only the relayed or logged text
+ * changes. A short cookie degrades that caller's requests; a short client
+ * secret degrades every exchange refusal until it is rotated. Exempting a
+ * short client secret would buy back diagnostics at the price of a credential
+ * in a log; a lost diagnostic is the cheaper failure.
  *
  * An empty credential is skipped: `value.includes("")` is true of every
  * string, so one would otherwise refuse everything.
@@ -73,17 +63,17 @@ const echoesCredential = (value: string, credentials: readonly string[]): boolea
 /**
  * The provider's `error` value, reduced to something safe to log.
  *
- * The value is provider-controlled. A malformed or compromised provider that
+ * The value is provider-controlled: a malformed or compromised provider that
  * echoed the submitted assertion or the proxy's client secret back as `error`
- * would otherwise put a credential into the proxy's logs. Only a value that is
- * shaped like an OAuth error code survives: the RFC 6749 charset without
- * whitespace, at most 64 characters, nothing shaped like a JWT, and none of
- * `credentials` inside it, at any length (#95 F30). Anything else is recorded as
+ * would otherwise put a credential into the proxy's logs. Only a value shaped
+ * like an OAuth error code survives: the RFC 6749 charset without whitespace,
+ * at most 64 characters, nothing shaped like a JWT, and none of `credentials`
+ * inside it, at any length. Anything else is recorded as
  * {@link INVALID_ERROR_CODE}; an absent `error` is `null`.
  *
- * Classifying a response still compares the raw value against known codes —
- * a match is by definition one of those constants — so validation only
- * decides what is recorded, never how a response is answered.
+ * Classifying a response compares the raw value against known codes — a match
+ * is by definition one of those constants — so validation only decides what is
+ * recorded, never how a response is answered.
  */
 export const sanitizeErrorCode = (
 	value: unknown,

@@ -29,12 +29,12 @@ export interface ClientCredentials {
  * authentication at the provider.
  *
  * RFC 6749 section 2.3.1 has both halves `application/x-www-form-urlencoded`
- * encoded BEFORE they are joined with ":" and base64'd. Without that a ":"
- * inside either half re-splits the credential in the wrong place and the
- * provider reads a different pair than the one configured. The provider decodes
- * with the matching form-urlencoded decoder, so every byte round-trips;
- * `encodeURIComponent` writes a space as `%20`, which that decoder reads back as
- * a space just as it would `+`.
+ * encoded BEFORE they are joined with ":" and base64'd; otherwise a ":" inside
+ * either half re-splits the credential and the provider reads a different
+ * pair than the one configured. The provider decodes with the matching
+ * form-urlencoded decoder, so every byte round-trips; `encodeURIComponent`
+ * writes a space as `%20`, which that decoder reads back as a space just as it
+ * would `+`.
  */
 export const clientSecretBasic = ({ clientId, clientSecret }: ClientCredentials): string =>
 	`Basic ${Buffer.from(`${encodeURIComponent(clientId)}:${encodeURIComponent(clientSecret)}`).toString("base64")}`;

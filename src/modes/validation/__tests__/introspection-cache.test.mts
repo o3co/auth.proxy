@@ -2,9 +2,9 @@
 // SPDX-License-Identifier: Apache-2.0
 
 /**
- * The introspection cache's own contract (#95 F5): what it serves, when it
- * stops, and how it stays bounded. Which responses are put in it, and with
- * what expiry, is `introspect.test.mts`.
+ * The introspection cache's own contract: what it serves, when it stops, and
+ * how it stays bounded. Which responses are put in it, and with what expiry,
+ * is `introspect.test.mts`.
  */
 import { describe, expect, it, vi } from "vitest";
 
@@ -59,8 +59,8 @@ describe("createIntrospectionCache", () => {
 
 	it("below the bound, a re-set keeps its position: eviction is by insertion, not by use", () => {
 		// The injection path's `TokenCache` re-inserts on every `set`; this one
-		// does not, which is the behaviour it replaced. Refreshing `a` while
-		// there is room does not save it from being the first one dropped.
+		// does not. Refreshing `a` while there is room does not save it from
+		// being the first one dropped.
 		const cache = createIntrospectionCache({ maxEntries: 3 });
 		const live = Date.now() + 60_000;
 		cache.set("a", { active: true }, live);
@@ -88,11 +88,10 @@ describe("createIntrospectionCache", () => {
 	});
 
 	it("evicts nothing when the write is a key it already holds, even at the bound", () => {
-		// Reachable on the proxy's path as well as by a direct caller: with no
-		// single-flight, two requests for one token both miss and both write, and
-		// the second write is this case — see the composition-level test in
-		// `introspect.test.mts`. The fused function this replaced evicted an
-		// unrelated live entry here.
+		// Reachable by a direct caller only: the introspector writes only after
+		// a miss, once per flight (the concurrent-requests test in
+		// `introspect.test.mts`), and `set` sweeps the stale entry a miss leaves
+		// before it checks. The property is the cache's own.
 		const cache = createIntrospectionCache({ maxEntries: 2 });
 		const live = Date.now() + 60_000;
 		cache.set("a", { active: true, sub: "a" }, live);

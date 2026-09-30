@@ -3,10 +3,10 @@
 
 /**
  * What `createRouter` builds for the validation path when no `deps.introspect`
- * is supplied (#95 F3, F5): the provider's endpoint behind an
- * `IntrospectionClient`, a cache this router owns, and the TTL between them.
- * The two factories are mocked so each configured value is observed where it
- * is passed, with distinct numbers so a swapped one shows.
+ * is supplied: the provider's endpoint behind an `IntrospectionClient`, a
+ * cache this router owns, and the TTL between them. The two factories are
+ * mocked so each configured value is observed where it is passed, with
+ * distinct numbers so a swapped one shows.
  */
 import express from "express";
 import request from "supertest";
@@ -87,7 +87,7 @@ describe("the router's own introspector", () => {
 
 	// The flight table is the router's too, for the same reason and with the
 	// same key: two routers must not coalesce each other's requests, and a
-	// caller supplying deps.introspect gets neither (#95 F6).
+	// caller supplying deps.introspect gets neither.
 	it("gives each router its own flight table, and neither when the introspector is supplied", () => {
 		createRouter({ config: makeConfig({ clientId: null, clientSecret: null }) });
 		createRouter({ config: makeConfig({ clientId: null, clientSecret: null }) });

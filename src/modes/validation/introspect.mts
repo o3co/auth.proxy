@@ -42,9 +42,9 @@ export interface IntrospectorConfig {
 	client: IntrospectionClient;
 	cache: IntrospectionCache;
 	/**
-	 * Concurrent misses on one token share one provider call (#95 F6). Keyed
-	 * by the same digest as the cache, so the flight and the entry it becomes
-	 * are the same thing under two names.
+	 * Concurrent misses on one token share one provider call. Keyed by the
+	 * same digest as the cache, so the flight and the entry it becomes are the
+	 * same thing under two names.
 	 *
 	 * Time is the table's only bound: a slot lives as long as its provider
 	 * call, which the bundled client aborts at `timeoutMs` and a disconnect
@@ -59,7 +59,7 @@ export interface IntrospectorConfig {
 
 /**
  * What this proxy accepts as a live token, on top of what RFC 7662 makes the
- * provider say (#95 F5) — and what may be cached.
+ * provider say — and what may be cached.
  *
  * The client answers what the provider said, validated as a response. This is
  * the reading of it: a response carrying possession evidence this path cannot
@@ -70,9 +70,9 @@ export interface IntrospectorConfig {
  * one, but "we refused to read this response" is not.
  *
  * `cacheTtlSec` is the one knob for the cache: at `0` or less nothing is read
- * from it and nothing is written to it. It does not reach the flight — with
- * caching off, concurrent requests for one token still share a single provider
- * call, which is what F6 is for and not something the TTL turns off.
+ * from it and nothing is written to it. It does not reach the flight: with
+ * caching off, concurrent requests for one token still share a single
+ * provider call.
  */
 export const createIntrospector = ({
 	client,
@@ -96,7 +96,7 @@ export const createIntrospector = ({
 			}
 		}
 
-		// One flight per token (#95 F6). A waiter is answered by the leader's
+		// One flight per token. A waiter is answered by the leader's
 		// response, including the bound the leader anchored, and does not write:
 		// two requests asking the same question at the same time get one answer
 		// rather than one each. The leader's rejection is every waiter's, and

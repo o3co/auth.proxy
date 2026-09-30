@@ -2,17 +2,17 @@
 // SPDX-License-Identifier: Apache-2.0
 
 /**
- * The upstream proxy stage is assembly shared by both modes (#95 F18). It is
- * pinned by the options it hands to express-http-proxy, not by a round trip:
- * each mode's router test already drives a real upstream, and what this module
+ * The upstream proxy stage is assembly shared by both modes. It is pinned by
+ * the options it hands to express-http-proxy, not by a round trip: each
+ * mode's router test already drives a real upstream, and what this module
  * owns is exactly which option is set from which config field.
  *
  * The decorator is modelled against the input it really gets. By the time it
  * runs, express-http-proxy has already copied every inbound header except
  * `connection` and `host` onto the outbound request (lowercase names, as Node
  * parses them) and set `connection: close` (`reqHeaders` in
- * `lib/requestOptions.js`). What these tests pin is the delta the decorator
- * makes on top of that — a casing-only no-op on the wire.
+ * `lib/requestOptions.js`). These tests pin the delta the decorator makes on
+ * top of that — a casing-only no-op on the wire.
  */
 import type { IncomingHttpHeaders } from "node:http";
 import proxy from "express-http-proxy";

@@ -22,14 +22,12 @@
  *
  * cached only when that is after `now`.
  *
- * The relative lifetimes are anchored at `requestedAt`, the instant captured
- * immediately BEFORE the token request was sent — never at the response.
- * `expires_in` counts from issuance, and issuance cannot precede the request,
- * so the request is the latest instant the token's real expiry can be measured
- * from without overshooting it. Anchoring at the response would let a slow
- * provider push the entry past the token's expiry by the whole response time,
- * and the proxy would go on injecting an expired token. `notAfter` is already
- * absolute (an assertion's `exp`) and stays where it is.
+ * The relative lifetimes are anchored at `requestedAt`, captured immediately
+ * BEFORE the token request was sent, never at the response: `expires_in`
+ * counts from issuance, which cannot precede the request. Anchoring at the
+ * response would let a slow provider push the entry past the token's expiry
+ * by the whole response time, and the proxy would go on injecting an expired
+ * token. `notAfter` is already absolute (an assertion's `exp`).
  */
 export const computeCacheExpiresAt = ({
 	requestedAt,

@@ -2,7 +2,7 @@
 // SPDX-License-Identifier: Apache-2.0
 
 /**
- * The exchange decision on its own (#95 F2): `decideExchange` takes the
+ * The exchange decision on its own: `decideExchange` takes the
  * hand-off arguments the session decision produced and the injectable deps,
  * and returns `inject` or `respond` for the middleware to apply. Nothing here
  * touches Express; the wire shape of each outcome, the request the real
@@ -364,16 +364,15 @@ describe("decideExchange", () => {
 						error: `message for ${code}`,
 					}),
 				);
-				// The line's message too, now that it is data in a table (#95 F41).
+				// The line's message too, which the table holds beside the event.
 				expect(logger[level]).toHaveBeenCalledWith(expect.objectContaining({ event }), message);
 			},
 		);
 
-		// #95 F41. The exchange client is injectable (F2), and a supplied one is
-		// not bound by JwtBearerErrorCode at runtime. logFailure was a switch
-		// with no default returning void, so an undeclared code fell out of it
-		// and the refusal was answered with no log line at all. The prototype
-		// keys are here for the reason #109 found them on the session path.
+		// A supplied exchange client is not bound by JwtBearerErrorCode at
+		// runtime, and a refusal with an undeclared code must still be logged.
+		// The prototype keys are here because a plain-object lookup would answer
+		// them with an inherited value.
 		it.each(["provider_exploded", "constructor", "toString", "__proto__"])(
 			"logs a refusal whose code the union does not declare (%j), rather than nothing",
 			async (code) => {

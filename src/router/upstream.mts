@@ -30,16 +30,15 @@ export interface UpstreamStageConfig {
 }
 
 /**
- * The upstream proxy stage — the last middleware of either mode's router.
+ * The upstream proxy stage — the last middleware of either mode's router. It
+ * is assembly (built from `upstream.baseURL` and `http.bodyLimitSize`), not a
+ * mode's decision, so both routers mount this one function.
  *
- * It is assembly (built from `upstream.baseURL` and `http.bodyLimitSize`), not
- * a mode's decision, so both routers mount this one function instead of each
- * carrying its own copy (#95 F18).
- *
- * What the decorator does. When an `Authorization` header arrived — empty
- * included, as the injection paths read presence (#95 F40, #133) — it sets
- * `Authorization`, in canonical casing, to the inbound value, and it re-sets
- * `x-request-id` to the value it already has.
+ * What the decorator does. When `req.headers.authorization` is present as this
+ * stage runs — empty included, as the injection paths read presence — it sets
+ * `Authorization`, in canonical casing, to that value: the minted token after
+ * an `inject`, the inbound header otherwise. It also re-sets `x-request-id` to
+ * the value it already has.
  *
  * What it does not do: choose what is forwarded. What reaches upstream is
  * decided before this stage, on `req.headers`. express-http-proxy copies every
@@ -50,21 +49,21 @@ export interface UpstreamStageConfig {
  * Node's `setHeader` dedups header names case-insensitively and the last
  * write wins, so the decorator's `Authorization` replaces the name, not the
  * value: `Authorization` is sent once, and the `x-request-id` write changes
- * nothing on the wire. That is why `stripInboundAuthorization` deletes the
- * header from `req.headers` in `src/modes/injection/decision.mts` (see the
- * comment above `forwardWithoutInjection`) rather than acting here.
+ * nothing on the wire. That is why `stripInboundAuthorization` takes effect
+ * by deleting the header from `req.headers`, in the `forward_stripped` case of
+ * `injectionMiddleware` (`src/modes/injection/router.mts`), rather than here.
  *
- * Why it is kept (#132): for header-name casing compatibility. HTTP header
- * names are case-insensitive (RFC 9110 §5.1), so a conforming upstream sees no
- * difference; without the decorator an upstream would receive `authorization`
- * in lower case, and one that matches the name case-sensitively would miss it.
- * The casing on the wire is pinned by `__tests__/upstream-wire.test.mts`.
+ * Why it is kept: header-name casing. HTTP header names are case-insensitive
+ * (RFC 9110 §5.1), so a conforming upstream sees no difference; without the
+ * decorator an upstream would receive `authorization` in lower case, and one
+ * that matches the name case-sensitively would miss it. The casing on the
+ * wire is pinned by `__tests__/upstream-wire.test.mts`.
  */
 export const createUpstreamProxy = (config: UpstreamStageConfig): RequestHandler =>
 	proxy(config.upstream.baseURL, {
 		limit: config.http.bodyLimitSize,
 		proxyReqOptDecorator: async (proxyReqOpts, srcReq) => {
-			// Presence, as the injection paths read it (#95 F40, #133): an empty
+			// Presence, as the injection paths read it: an empty
 			// `Authorization:` is re-set in canonical casing too.
 			if (srcReq?.headers?.authorization !== undefined) {
 				proxyReqOpts.headers.Authorization = srcReq.headers.authorization;
