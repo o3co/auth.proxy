@@ -85,6 +85,21 @@ describe("the router's own introspector", () => {
 		expect(clientFactory).toHaveBeenCalledWith(expect.objectContaining({ credentials: null }));
 	});
 
+	// The schema admits only these shapes; a hand-built configuration that
+	// bypasses it is refused when the router is built, not sent unauthenticated.
+	it("refuses a client id with neither a secret nor a key", () => {
+		expect(() => createRouter({ config: makeConfig({ clientId: "proxy" }) })).toThrow(
+			/auth\.validation\.client/,
+		);
+	});
+
+	it("refuses a client key without the provider's issuer", () => {
+		const clientKey = parseClientKey(generateKeyPairSync("ed25519").privateKey.export({ format: "jwk" }));
+		expect(() => createRouter({ config: makeConfig({ clientId: "proxy", clientKey }) })).toThrow(
+			/providerIssuer/,
+		);
+	});
+
 	it("resolves a client key with the provider's issuer as the assertion's audience", () => {
 		const clientKey = parseClientKey(generateKeyPairSync("ed25519").privateKey.export({ format: "jwk" }));
 		createRouter({

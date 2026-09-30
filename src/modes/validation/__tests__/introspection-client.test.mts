@@ -39,51 +39,14 @@ const clientFor = (overrides: Partial<Parameters<typeof createIntrospectionClien
 	});
 
 describe("buildAuthHeader", () => {
-	it("returns Basic auth when client credentials are provided", () => {
-		const header = buildAuthHeader(
-			{ clientId: "my-proxy", clientSecret: "s3cret" },
-			"some-token",
-		);
-		expect(header).toBe(`Basic ${Buffer.from("my-proxy:s3cret").toString("base64")}`);
-	});
-
-	it("returns Bearer with the request token when no client credentials", () => {
-		const header = buildAuthHeader(null, "my-bearer-token");
-		expect(header).toBe("Bearer my-bearer-token");
-	});
-
-	// RFC 6749 section 2.3.1: both halves are form-urlencoded BEFORE they are
-	// joined with ":" and base64'd. Without that, a ":" in the client_id
-	// re-splits the credential at the wrong place and the provider reads a
-	// different client.
-	it("percent-encodes a ':' in either half so the credential cannot re-split", () => {
-		const header = buildAuthHeader(
-			{ clientId: "https://api.example.com/orders", clientSecret: "a:b" },
-			"unused",
-		);
-		const decoded = Buffer.from(header.slice("Basic ".length), "base64").toString("utf8");
-
-		expect(decoded).toBe("https%3A%2F%2Fapi.example.com%2Forders:a%3Ab");
-		// Exactly one ":" survives — the userid/password separator itself.
-		expect(decoded.split(":")).toHaveLength(2);
-	});
-
-	// The provider decodes with `decodeURIComponent(s.replace(/\+/g, " "))`, the
-	// matching form-urlencoded decoder, so every encoded byte round-trips. A
-	// space becomes %20 rather than "+" (encodeURIComponent), which that decoder
-	// reads back as a space just the same.
-	it("round-trips reserved characters through the provider's form-urlencoded decoder", () => {
-		const clientId = "cl ient+id%20&x=1";
-		const clientSecret = "s3:cret/with?reserved#chars";
-		const header = buildAuthHeader({ clientId, clientSecret }, "unused");
-		const decoded = Buffer.from(header.slice("Basic ".length), "base64").toString("utf8");
-		const [encodedId, encodedSecret] = decoded.split(":");
-		const formUrlDecode = (v: string): string => decodeURIComponent(v.replace(/\+/g, " "));
-
-		expect(formUrlDecode(encodedId)).toBe(clientId);
-		expect(formUrlDecode(encodedSecret)).toBe(clientSecret);
+	// The header an introspection request carries without client credentials:
+	// the inbound token is the credential. A secret's Basic header comes from
+	// authenticateClient (src/oauth), and a key sends no header.
+	it("returns Bearer with the request token", () => {
+		expect(buildAuthHeader("my-bearer-token")).toBe("Bearer my-bearer-token");
 	});
 });
+
 
 describe("createIntrospectionClient", () => {
 	let fetchMock: ReturnType<typeof vi.fn>;

@@ -9,9 +9,11 @@
  * `exchange-router.test.mts`; the exchange decision is `exchange-decision.test.mts`
  * and is only handed off to from here.
  */
+import { generateKeyPairSync } from "node:crypto";
 import { describe, expect, it, vi } from "vitest";
 import type { AppConfig } from "../../../../config/application.schema.mjs";
 import type { Logger } from "../../../logger.mjs";
+import { parseClientKey } from "../../../oauth/private-key-jwt.mjs";
 import { createSingleFlight } from "../../../single-flight.mjs";
 import {
 	decideInjection,
@@ -93,6 +95,24 @@ const keyFor = (cookieValue: string, cfgOverrides: Partial<InjectionCfg> = {}): 
 // different question about the same cookie value, and must not be served
 // another router's answer.
 describe("sessionCacheKey", () => {
+	// How the client authenticates is keyed too, by what names it without
+	// revealing it: the method, the issuer and the key's thumbprint. A router
+	// sharing the cache with one configured differently is not served tokens
+	// it could not obtain itself.
+	it("differs by how the session grant's client authenticates", () => {
+		const keyA = parseClientKey(generateKeyPairSync("ed25519").privateKey.export({ format: "jwk" }));
+		const keyB = parseClientKey(generateKeyPairSync("ed25519").privateKey.export({ format: "jwk" }));
+		const issuer = "https://auth.example.test";
+		const publicClient = keyFor("s1");
+		const keyed = keyFor("s1", { clientKey: keyA, providerIssuer: issuer });
+
+		expect(keyed).not.toBe(publicClient);
+		expect(keyFor("s1", { clientKey: keyA, providerIssuer: "https://other.example.test" })).not.toBe(keyed);
+		expect(keyFor("s1", { clientKey: keyB, providerIssuer: issuer })).not.toBe(keyed);
+		expect(keyFor("s1", { clientKey: keyA, providerIssuer: issuer })).toBe(keyed);
+		expect(keyed).not.toContain(keyA.thumbprint);
+	});
+
 	it("never contains the cookie value", () => {
 		expect(keyFor("s3cret-session")).not.toContain("s3cret-session");
 		expect(keyFor("s3cret-session")).toMatch(/^[0-9a-f]{64}$/);

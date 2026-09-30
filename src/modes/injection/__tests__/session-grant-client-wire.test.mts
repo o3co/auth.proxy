@@ -282,6 +282,10 @@ describe("createSessionGrantClient on the wire", () => {
 			});
 		});
 
+		it("refuses to be built with a client key and no providerIssuer, the assertion's audience", () => {
+			expect(() => client({ clientKey: WITH_KEY.clientKey, providerIssuer: null })).toThrow(/providerIssuer/);
+		});
+
 		it("invalid_client with a client key names the proxy's client authentication", async () => {
 			fake.respond(PATH, json(401, { error: "invalid_client" }));
 

@@ -601,6 +601,12 @@ describe("proxy config — client keys", () => {
 			expect(config.auth.validation.providerIssuer).toBe(ISSUER);
 		});
 
+		it("refuses a provider issuer that no key uses, naming it", () => {
+			expect(refusal(env({ CLIENT_SECRET: "s3cret", VALIDATION_PROVIDER_ISSUER: ISSUER }))).toMatch(
+				/auth\.validation\.providerIssuer/,
+			);
+		});
+
 		it("defaults to no key and no issuer", () => {
 			const config = load({ AUTH_MODE: "validation" });
 			if (config.auth.mode !== "validation") throw new Error("narrow");
@@ -653,10 +659,31 @@ auth.validation.client.clientKey = ${JSON.stringify(privateJwk())}
 		});
 
 		it.each([
+			["with a path", "https://auth.example.test/tenant-a"],
+			["http on localhost", "http://localhost:3000"],
+			["http on 127.0.0.1", "http://127.0.0.1:3000"],
+			["http on [::1]", "http://[::1]:3000"],
+		])("accepts a provider issuer %s", (_label, issuer) => {
+			const config = load(env({ CLIENT_KEY: KEY, VALIDATION_PROVIDER_ISSUER: issuer }));
+			if (config.auth.mode !== "validation") throw new Error("narrow");
+			expect(config.auth.validation.providerIssuer).toBe(issuer);
+		});
+
+		// What the provider refuses as its own issuer (auth.provider's
+		// checkCanonicalIssuer), and anything the URL parser would rewrite: the
+		// value is sent as written, so a form the parser cleans up would never
+		// equal the provider's.
+		it.each([
 			["not a URL", "auth.example.test"],
 			["not http(s)", "urn:issuer:auth"],
 			["carrying a query", "https://auth.example.test/?x=1"],
 			["carrying a fragment", "https://auth.example.test/#x"],
+			["http on a host that is not loopback", "http://auth.internal:3000"],
+			["with userinfo", "https://user:pw@auth.example.test"],
+			["with a leading space", " https://auth.example.test"],
+			["with a tab in the host", "https://auth\t.example.test"],
+			["with backslashes", "https:\\\\auth.example.test"],
+			["with a fullwidth host", "https://ａuth.example.test"],
 		])("refuses a provider issuer %s", (_label, issuer) => {
 			expect(refusal(env({ CLIENT_KEY: KEY, VALIDATION_PROVIDER_ISSUER: issuer }))).toMatch(
 				/auth\.validation\.providerIssuer/,
@@ -670,6 +697,17 @@ auth.validation.client.clientKey = ${JSON.stringify(privateJwk())}
 			INJECTION_CLIENT_ID: "bff",
 			INJECTION_SCOPE: "api",
 			...extra,
+		});
+
+		// An issuer no key uses is a key that did not arrive: the session grant
+		// would stay a public client without a word.
+		it("refuses a provider issuer that no key uses, naming it", () => {
+			expect(refusal(env({ INJECTION_PROVIDER_ISSUER: ISSUER }))).toMatch(
+				/auth\.injection\.providerIssuer/,
+			);
+			expect(refusal(env({ INJECTION_PROVIDER_ISSUER: ISSUER, INJECTION_CLIENT_KEY: "" }))).toMatch(
+				/auth\.injection\.providerIssuer/,
+			);
 		});
 
 		it("defaults to a public session-grant client: no key, no issuer", () => {
