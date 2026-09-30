@@ -710,6 +710,18 @@ auth.validation.client.clientKey = ${JSON.stringify(privateJwk())}
 			);
 		});
 
+		it("says an exchange key counts only with the exchange enabled", () => {
+			expect(
+				refusal(
+					env({
+						INJECTION_PROVIDER_ISSUER: ISSUER,
+						INJECTION_EXCHANGE_ENABLED: "false",
+						INJECTION_EXCHANGE_CLIENT_KEY: KEY,
+					}),
+				),
+			).toMatch(/enable the exchange/);
+		});
+
 		it("defaults to a public session-grant client: no key, no issuer", () => {
 			const config = load(env());
 			if (config.auth.mode !== "injection") throw new Error("narrow");
