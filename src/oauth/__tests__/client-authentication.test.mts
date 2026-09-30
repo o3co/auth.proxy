@@ -42,6 +42,15 @@ describe("authenticateClient", () => {
 		).resolves.toBeDefined();
 	});
 
+	it("authenticates with the secret when a secret-credentials object also carries clientKey: null", async () => {
+		const secret = { clientId: "proxy", clientSecret: "s3cret", clientKey: null };
+
+		const call = await authenticateClient(secret as unknown as Parameters<typeof authenticateClient>[0]);
+
+		expect(call.authorization).toBe(clientSecretBasic({ clientId: "proxy", clientSecret: "s3cret" }));
+		expect(call.params).toEqual({});
+	});
+
 	it("signs a new assertion for every call", async () => {
 		const clientKey = parseClientKey(
 			generateKeyPairSync("ed25519").privateKey.export({ format: "jwk" }),

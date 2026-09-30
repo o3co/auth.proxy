@@ -1,5 +1,5 @@
 import { createPublicKey, generateKeyPairSync, type KeyObject } from "node:crypto";
-import { decodeProtectedHeader, jwtVerify } from "jose";
+import { calculateJwkThumbprint, decodeProtectedHeader, jwtVerify } from "jose";
 import { describe, expect, it } from "vitest";
 import {
 	CLIENT_ASSERTION_LIFETIME_SECONDS,
@@ -50,6 +50,21 @@ describe("parseClientKey", () => {
 		expect(parseClientKey({ ...rsa().jwk, alg: "PS256" }).alg).toBe("PS256");
 	});
 
+	it("reads RFC 9864's fully specified Ed25519 as EdDSA, the name the provider verifies", () => {
+		expect(parseClientKey({ ...ed25519().jwk, alg: "Ed25519" }).alg).toBe("EdDSA");
+	});
+
+	it("accepts a key marked for signing", () => {
+		expect(parseClientKey({ ...ed25519().jwk, use: "sig", key_ops: ["sign"] }).alg).toBe("EdDSA");
+	});
+
+	it("carries the RFC 7638 thumbprint of the public key", async () => {
+		const { jwk, publicKey } = ed25519();
+		expect(parseClientKey(jwk).thumbprint).toBe(
+			await calculateJwkThumbprint(publicKey.export({ format: "jwk" }) as Record<string, string>),
+		);
+	});
+
 	it("carries the JWK's kid, and null when it has none", () => {
 		expect(parseClientKey({ ...ed25519().jwk, kid: "proxy-2026-09" }).kid).toBe("proxy-2026-09");
 		expect(parseClientKey(ed25519().jwk).kid).toBeNull();
@@ -77,6 +92,8 @@ describe("parseClientKey", () => {
 		["an algorithm that does not fit the key", () => ({ ...ec("P-256").jwk, alg: "EdDSA" })],
 		["a symmetric algorithm", () => ({ ...rsa().jwk, alg: "HS256" })],
 		["an empty kid", () => ({ ...ed25519().jwk, kid: "" })],
+		["a key marked for encryption", () => ({ ...rsa().jwk, use: "enc" })],
+		["a key whose key_ops do not include sign", () => ({ ...ec("P-256").jwk, key_ops: ["verify"] })],
 		["key material that does not form a key", () => ({ ...ed25519().jwk, x: "AAAA" })],
 		["an RSA key shorter than 2048 bits", () =>
 			generateKeyPairSync("rsa", { modulusLength: 1024 }).privateKey.export({ format: "jwk" })],
@@ -114,7 +131,11 @@ describe("signClientAssertion", () => {
 			audience: ISSUER,
 			algorithms: ["EdDSA"],
 		});
-		expect(protectedHeader).toMatchObject({ alg: "EdDSA", kid: "proxy-2026-09" });
+		expect(protectedHeader).toEqual({
+			alg: "EdDSA",
+			kid: "proxy-2026-09",
+			typ: "client-authentication+jwt",
+		});
 		expect(payload.aud).toBe(ISSUER);
 		expect(typeof payload.jti).toBe("string");
 		expect((payload.jti as string).length).toBeGreaterThan(0);
@@ -159,8 +180,15 @@ describe("signClientAssertion", () => {
 
 	it.each([
 		["RSA with RS256", () => rsa(), undefined, "RS256"],
+		["RSA with RS384", () => rsa(), "RS384", "RS384"],
+		["RSA with RS512", () => rsa(), "RS512", "RS512"],
 		["RSA with PS256", () => rsa(), "PS256", "PS256"],
+		["RSA with PS384", () => rsa(), "PS384", "PS384"],
+		["RSA with PS512", () => rsa(), "PS512", "PS512"],
+		["EC P-256", () => ec("P-256"), undefined, "ES256"],
+		["EC P-384", () => ec("P-384"), undefined, "ES384"],
 		["EC P-521", () => ec("P-521"), undefined, "ES512"],
+		["Ed25519", () => ed25519(), undefined, "EdDSA"],
 	])("signs with %s so the public key verifies it", async (_label, make, alg, expected) => {
 		const { jwk, publicKey } = make();
 		const assertion = await signClientAssertion({
