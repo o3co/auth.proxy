@@ -94,8 +94,8 @@ export const buildAuthHeader = (token: string): string => `Bearer ${token}`;
  * it. Replaceable: the decision reaches it through `Introspector`, and
  * `createRouter` builds the bundled implementation or takes another.
  *
- * @throws {IntrospectHttpError} the provider's status for anything but the
- * `200` an answer is (RFC 7662 §2.2), another `2xx` included — carrying
+ * @throws {IntrospectHttpError} the provider's status for anything but a
+ * `200`, the only status read as an answer, another `2xx` included — carrying
  * {@link RefusedCredential} on a 401, which says whether the provider refused
  * the inbound token or the proxy's own client authentication — and `502`
  * for a 200 whose body is not a JSON object, is over the
@@ -176,9 +176,10 @@ export const createIntrospectionClient = ({
 				);
 			}
 
-			// RFC 7662 §2.2 answers with a 200, and nothing else is read as an
-			// answer: another 2xx, even one carrying a live token, is refused with
-			// its own status, as the injection token clients refuse it.
+			// Only a 200 is read as an answer. RFC 7662 §2.2 names no status, but
+			// its examples answer 200, and the injection token clients read only
+			// RFC 6749 §5.1's 200 the same way. Another 2xx, even one carrying a
+			// live token, is refused, and the error carries its own status.
 			if (resp.status !== 200) {
 				// Nothing reads the body of a status that is not an answer.
 				await discardBody(resp);

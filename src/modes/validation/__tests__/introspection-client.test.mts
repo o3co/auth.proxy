@@ -286,9 +286,8 @@ describe("createIntrospectionClient", () => {
 		await expect(p).rejects.toMatchObject({ status: 503 });
 	});
 
-	// RFC 7662 §2.2 answers with a 200, and only a 200 is read. Any other 2xx
-	// — even one carrying a live token — is refused with its own status, as
-	// the injection token clients refuse it. Every 2xx that may carry a body
+	// Only a 200 is read as an answer. Any other 2xx — even one carrying a
+	// live token — is refused, and the error carries its own status. Every 2xx that may carry a body
 	// here, and the two that may not below, so no single status can slip
 	// through.
 	it.each([201, 202, 203, 206, 207, 208, 226, 299])(
@@ -320,14 +319,16 @@ describe("createIntrospectionClient", () => {
 	// defensive. The non-200 path is the only one that throws before the body
 	// is dealt with: every other refusal runs after readBoundedJsonObject has
 	// read it to the end or cancelled it at the bound.
-	it.each([401, 503])(
+	it.each([201, 401, 503])(
 		"cancels the body of a %d response instead of leaving it unread",
 		async (status) => {
 			let cancelled = false;
 			const resp = new Response(
 				new ReadableStream<Uint8Array>({
 					start(controller) {
-						controller.enqueue(new TextEncoder().encode('{"error":"x"}'));
+						controller.enqueue(
+							new TextEncoder().encode(status === 201 ? '{"active":true}' : '{"error":"x"}'),
+						);
 					},
 					cancel() {
 						cancelled = true;

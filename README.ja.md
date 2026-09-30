@@ -52,7 +52,7 @@
 1. `Authorization: Bearer <token>` ヘッダーを検出（`Authorization` ヘッダーが無い、または空の場合はそのまま通過。それ以外の `Authorization` は `400`）。
 2. トークンの SHA-256 ハッシュをキーにインメモリキャッシュを確認。
 3. キャッシュミス時、プロバイダーの `POST /oauth/introspect` を呼び出す。そこからのリダイレクトは追従しない — エンドポイントは設定値である — ので、`502 Provider Configuration Error` を返す。同一トークンの並行ミスは、インジェクションモードと同じく 1 回のプロバイダー呼び出しに集約する（single-flight）。
-4. `active: false` なら `401` を返し、`active: true` ならリクエストを転送する。
+4. `active: false` なら `401` を返し、`active: true` ならリクエストを転送する。応答として読むのは `200` だけで、それ以外のステータス — `200` 以外の `2xx` も、`active: true` を含んでいても — はプロバイダーの失敗になる（下のログの表を参照）。
 
 `VALIDATION_REALM` を設定しない場合と設定した場合（ここでは `api`）のチャレンジ:
 

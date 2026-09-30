@@ -52,7 +52,7 @@ Flow:
 1. Detects `Authorization: Bearer <token>` header (passes through if there is no `Authorization` header, or an empty one; any other `Authorization` is `400`).
 2. Checks in-memory cache keyed by SHA-256 of the token.
 3. On cache miss, calls provider's `POST /oauth/introspect`. A redirect from it is not followed — the endpoint is configuration — and is answered `502 Provider Configuration Error`. Concurrent misses on the same token coalesce into a single provider call (single-flight), as they do in injection mode.
-4. Returns `401` if `active: false`; forwards the request if `active: true`.
+4. Returns `401` if `active: false`; forwards the request if `active: true`. Only a `200` is read as an answer: any other status — another `2xx` included, even one carrying `active: true` — is a provider failure (see the logging table below).
 
 Challenges, without and with `VALIDATION_REALM` (here `api`):
 
