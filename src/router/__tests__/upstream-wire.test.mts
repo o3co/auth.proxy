@@ -173,4 +173,22 @@ describe("createUpstreamProxy on the wire", () => {
 			front.close();
 		}
 	});
+
+	// The fields for the connection to this proxy stay on it; the credential
+	// for this hop is not handed to the next one.
+	it("sends none of the hop-by-hop fields or Proxy-Authorization upstream", async () => {
+		const res = await request(app)
+			.get("/resource")
+			.set("Connection", "close, X-Hop")
+			.set("X-Hop", "1")
+			.set("TE", "trailers")
+			.set("Proxy-Authorization", "Basic cHJveHk6cHc=")
+			.set("authorization", "Bearer inbound-7f3a");
+
+		expect(res.status).toBe(200);
+		for (const name of ["x-hop", "te", "proxy-authorization"]) {
+			expect(rawPairs(received[0], name)).toEqual([]);
+		}
+		expect(rawPairs(received[0], "authorization")).toEqual([["Authorization", "Bearer inbound-7f3a"]]);
+	});
 });

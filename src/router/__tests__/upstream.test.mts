@@ -175,6 +175,31 @@ describe("createUpstreamProxy", () => {
 			expect(result.headers).toEqual({ ...rest, Authorization: "Bearer inbound-7f3a" });
 		});
 
+		// RFC 9110 §7.6.1: the fields the inbound Connection names, and the
+		// hop-by-hop fields, were for the connection to this proxy. So was
+		// Proxy-Authorization, a credential for this hop the proxy does not use.
+		it("drops the fields the inbound Connection names and the hop-by-hop fields, and changes nothing else", async () => {
+			const hopByHop = {
+				connection: "close, X-Hop",
+				"x-hop": "1",
+				"keep-alive": "timeout=5",
+				te: "trailers",
+				upgrade: "h2c",
+				"proxy-connection": "keep-alive",
+				"proxy-authorization": "Basic cHJveHk6cHc=",
+			};
+			const result = await decorate({ ...inbound, ...hopByHop });
+			expect(result.headers).toEqual({ ...libraryHeaders(inbound), Authorization: "Bearer inbound-7f3a" });
+		});
+
+		// The fields the proxy decides are not the caller's to remove by naming
+		// them in Connection: what reaches the upstream as Authorization and
+		// x-request-id stays the proxy's choice.
+		it("keeps Authorization and x-request-id though the inbound Connection names them", async () => {
+			const result = await decorate({ ...inbound, connection: "Authorization, X-Request-Id" });
+			expect(result.headers).toEqual({ ...libraryHeaders(inbound), Authorization: "Bearer inbound-7f3a" });
+		});
+
 		it.each([["CHUNKED"], [" chunked "]])("reads %j as chunked", async (coding) => {
 			const result = await decorate({ ...inbound, "transfer-encoding": coding });
 			expect(result.headers).not.toHaveProperty("transfer-encoding");
