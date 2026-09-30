@@ -16,10 +16,12 @@
 
 /**
  * The token-endpoint client for the session grant: one
- * `POST {providerOrigin}/oauth/token` per call with `grant_type=session`, as a
- * public client — `client_id` in the body, the session cookie as the only
- * cookie, no `Authorization`. No retry, no redirect followed, and only a `200`
- * is success (RFC 6749 section 5.1).
+ * `POST {providerOrigin}/oauth/token` per call with `grant_type=session`,
+ * `client_id` in the body, the session cookie as the only cookie, and no
+ * `Authorization`. Without a client key the proxy is a public client; with
+ * one it is a confidential client, and a new `private_key_jwt` client
+ * assertion goes in the body with the `client_id`. No retry, no redirect
+ * followed, and only a `200` is success (RFC 6749 section 5.1).
  *
  * How each answer maps to a {@link SessionGrantErrorCode}:
  *
@@ -27,7 +29,8 @@
  *     expired or unknown session. A 401 body past `MAX_ERROR_BODY_BYTES` is
  *     abandoned and read as this.
  *   - `provider_config_error` (502): a 401 `invalid_client` (the proxy's own
- *     `clientId`), any other 400, or a redirect.
+ *     client refused: its `clientId`, or its client assertion), any other
+ *     400, or a redirect.
  *   - `provider_unavailable` (502): 5xx, network error, a timeout before the
  *     response headers arrive, an unexpected 4xx or a 2xx other than 200.
  *   - `provider_invalid_response` (502): a 200 that is not a JSON object, is
@@ -42,6 +45,8 @@
  * every other is read bounded.
  */
 
+import { authenticateClient } from "../../oauth/client-authentication.mjs";
+import type { ClientKey } from "../../oauth/private-key-jwt.mjs";
 import { discardBody, readBoundedJsonObject } from "../../response-body.mjs";
 import { MAX_ERROR_BODY_BYTES, sanitizeErrorDescription } from "./provider-error.mjs";
 import { buildTokenUrl, parseJsonBody } from "./token-endpoint.mjs";
@@ -78,6 +83,10 @@ export interface SessionGrantClientConfig {
 	scope: string;
 	sessionCookieName: string;
 	timeoutMs: number;
+	/** `auth.injection.clientKey`: when set, the proxy authenticates as a confidential client. */
+	clientKey?: ClientKey | null;
+	/** `auth.injection.providerIssuer`: the client assertion's audience. Required with a key. */
+	providerIssuer?: string | null;
 }
 
 export interface SessionGrantClient {
@@ -96,14 +105,31 @@ export const createSessionGrantClient = (
 	cfg: SessionGrantClientConfig,
 ): SessionGrantClient => {
 	const url = buildTokenUrl(cfg.providerOrigin);
+	const clientKey = cfg.clientKey ?? null;
+	const providerIssuer = cfg.providerIssuer ?? null;
+	if (clientKey !== null && providerIssuer === null) {
+		throw new Error("session grant client: a client key needs providerIssuer, the assertion's audience");
+	}
+	const refusedClient =
+		clientKey !== null
+			? "provider rejected the proxy's client authentication"
+			: "provider rejected the proxy's client (client_id)";
 
 	return {
 		async exchange({ sessionCookieValue, requestId }) {
+			// A new assertion per call: the provider accepts each `jti` once.
+			const client =
+				clientKey !== null && providerIssuer !== null
+					? await authenticateClient({ clientId: cfg.clientId, clientKey, audience: providerIssuer })
+					: null;
 			const body = new URLSearchParams({
 				grant_type: SESSION_GRANT_TYPE,
 				client_id: cfg.clientId,
 				scope: cfg.scope,
+				...client?.params,
 			}).toString();
+			// What the provider must not get relayed back through its error text.
+			const sent = client !== null ? [sessionCookieValue, client.credential] : [sessionCookieValue];
 
 			let resp: Response;
 			try {
@@ -191,14 +217,12 @@ export const createSessionGrantClient = (
 				if (data?.error === "invalid_client") {
 					// The description is relayed to the client, as on the 400
 					// branch: only a validated one, so a provider echoing the
-					// session cookie cannot put it there.
-					const provided = sanitizeErrorDescription(data.error_description, [
-						sessionCookieValue,
-					]);
+					// session cookie or the client assertion cannot put it there.
+					const provided = sanitizeErrorDescription(data.error_description, sent);
 					throw new SessionGrantError(
 						"provider_config_error",
 						502,
-						provided ?? "provider rejected the proxy's client (client_id)",
+						provided ?? refusedClient,
 						retryAfter,
 					);
 				}
@@ -222,9 +246,7 @@ export const createSessionGrantClient = (
 				// The description becomes the error message, which the router logs
 				// and returns to the client: only a validated one is relayed, so a
 				// provider echoing the session cookie cannot put it in either.
-				const provided = sanitizeErrorDescription(data?.error_description, [
-					sessionCookieValue,
-				]);
+				const provided = sanitizeErrorDescription(data?.error_description, sent);
 				throw new SessionGrantError(
 					"provider_config_error",
 					502,

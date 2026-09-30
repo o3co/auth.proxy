@@ -53,8 +53,10 @@ type InjectionConfig = Extract<AppConfig["auth"], { mode: "injection" }>;
  * Hashed as a JSON array rather than joined, so no field's text can shift into
  * its neighbour's, and the cookie value never leaves the digest. The cache
  * policy is not in it (`ttlSeconds` bounds how long an entry lives, not which
- * token comes back), and neither is the grant client, which cannot be hashed:
- * a caller sharing one cache between routers must match those two.
+ * token comes back), nor how the client authenticates (`clientKey` and
+ * `providerIssuer`: the same client gets the same token whichever way it
+ * proves itself), and neither is the grant client, which cannot be hashed: a
+ * caller sharing one cache between routers must match those.
  *
  * The parameter is the client's own config minus `timeoutMs`, and the rest
  * element below is what makes that a guarantee rather than a convention: a
@@ -65,7 +67,15 @@ export const sessionCacheKey = (
 	cfg: Omit<SessionGrantClientConfig, "timeoutMs">,
 	sessionCookieValue: string,
 ): string => {
-	const { providerOrigin, clientId, scope, sessionCookieName, ..._unkeyed } = cfg;
+	const {
+		providerOrigin,
+		clientId,
+		scope,
+		sessionCookieName,
+		clientKey: _clientKey,
+		providerIssuer: _providerIssuer,
+		..._unkeyed
+	} = cfg;
 	// Empty by construction today; a new field makes it non-empty and this
 	// assignment stops compiling.
 	const _everythingIsKeyed: Record<string, never> = _unkeyed;
