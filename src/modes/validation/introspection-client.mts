@@ -21,10 +21,15 @@
  * requires.
  */
 
+import {
+	authenticateClient,
+	type ClientAuthentication,
+	type ClientKeyCredentials,
+} from "../../oauth/client-authentication.mjs";
 import { type ClientCredentials, clientSecretBasic } from "../../oauth/client-secret-basic.mjs";
 import { discardBody, readBoundedJsonObject } from "../../response-body.mjs";
 
-export type { ClientCredentials };
+export type { ClientAuthentication, ClientCredentials, ClientKeyCredentials };
 
 /**
  * An RFC 7662 introspection response, validated only as far as the RFC
@@ -76,11 +81,12 @@ export class IntrospectHttpError extends Error {
 }
 
 /**
- * Which credential the introspection request itself carries. With client
- * credentials configured the proxy authenticates as itself
- * (`client_secret_basic`); without them the inbound token is both the subject
+ * The `Authorization` header an introspection request carries when the
+ * credential is a header: the proxy's Basic header with a client secret
+ * configured, and the inbound token otherwise, which is then both the subject
  * of the call and the credential for it — see "Introspection client identity"
- * in the root README for what that costs.
+ * in the root README for what that costs. With a client key the credential is
+ * a client assertion in the body, and no header is sent.
  */
 export const buildAuthHeader = (credentials: ClientCredentials | null, token: string): string =>
 	credentials !== null ? clientSecretBasic(credentials) : `Bearer ${token}`;
@@ -115,8 +121,8 @@ export interface IntrospectionClientConfig {
 	url: string;
 	/** `auth.validation.introspect.timeoutMs`, as `AbortSignal.timeout`. */
 	timeoutMs: number;
-	/** `auth.validation.client`, resolved: both halves set, or none. */
-	credentials: ClientCredentials | null;
+	/** `auth.validation.client`, resolved: a secret, a key, or none. */
+	credentials: ClientAuthentication | null;
 }
 
 export const createIntrospectionClient = ({
@@ -124,33 +130,34 @@ export const createIntrospectionClient = ({
 	timeoutMs,
 	credentials,
 }: IntrospectionClientConfig): IntrospectionClient => {
-	// The Basic header depends on configuration alone, so it is built once;
-	// the Bearer form is the request's own token and is built per call.
-	const configuredHeader = credentials !== null ? buildAuthHeader(credentials, "") : null;
-
 	return {
 		async introspect(token, requestId) {
 			// Built before the call, so a failure building it — a `timeoutMs` that
-			// `AbortSignal.timeout` refuses, say — stays the proxy's own and is not
-			// reported as the provider's.
+			// `AbortSignal.timeout` refuses, or a key that cannot sign — stays the
+			// proxy's own and is not reported as the provider's. A client key signs
+			// a new assertion here, per call: the provider accepts each once.
+			const client = credentials !== null ? await authenticateClient(credentials) : null;
+			const headers: Record<string, string> = {
+				"Content-Type": "application/x-www-form-urlencoded",
+				"x-request-id": requestId,
+			};
+			const authorization = client !== null ? client.authorization : buildAuthHeader(null, token);
+			if (authorization !== null) headers.Authorization = authorization;
 			const init: RequestInit = {
 				method: "POST",
-				headers: {
-					"Content-Type": "application/x-www-form-urlencoded",
-					Authorization: configuredHeader ?? buildAuthHeader(null, token),
-					"x-request-id": requestId,
-				},
-				body: new URLSearchParams({ token }).toString(),
+				headers,
+				body: new URLSearchParams({ token, ...client?.params }).toString(),
 				// The endpoint is configuration, and a followed redirect cannot be
 				// reported honestly, as on the token clients: a followed same-origin
 				// redirect re-sends this request's `Authorization` — the inbound
 				// token, or the proxy's Basic header — to a path nothing configured,
 				// and a 307/308 re-sends the body with it. Cross-origin, `fetch`
 				// drops the `Authorization` header, but a 307/308 still re-sends the
-				// body, which is `token=<the caller's token>`, and a 401 from there
-				// would read as the caller's token being bad (or, with
-				// `auth.validation.client` set, as the proxy's credentials refused).
-				// A 3xx comes back as the non-2xx it is, and the decision reports it.
+				// body, which carries `token=<the caller's token>` and any client
+				// assertion, and a 401 from there would read as the caller's token
+				// being bad (or, with `auth.validation.client` set, as the proxy's
+				// credentials refused). A 3xx comes back as the non-2xx it is, and
+				// the decision reports it.
 				redirect: "manual",
 				signal: AbortSignal.timeout(timeoutMs),
 			};
