@@ -24,7 +24,7 @@
  *
  * The `404` is answered at once, without reading the body: express's own
  * waits for the body to end first, and an oversized upload that expected
- * 100-continue outside the prefix was never told to send one.
+ * 100-continue outside the prefix is not told to send one.
  */
 
 import { parseFile } from "@o3co/ts.hocon";

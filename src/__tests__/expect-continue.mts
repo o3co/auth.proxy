@@ -18,10 +18,15 @@ export interface ContinueExchange {
 	bodySent: boolean;
 }
 
+/** How long an exchange may take before it is reported as never answered. */
+const ANSWER_DEADLINE_MS = 5_000;
+
 /**
  * Sends `head` (the request line and headers, `Expect: 100-continue` among
  * them) and writes `body` only once `100 Continue` arrives. Resolves once the
- * final answer is complete or the connection closes.
+ * final answer is complete or the connection closes; rejects when neither
+ * happens within {@link ANSWER_DEADLINE_MS}, so a server that waits for a
+ * body it never invited fails the test with that, not with a test timeout.
  */
 export const expectContinue = (origin: string, head: string, body: Buffer): Promise<ContinueExchange> =>
 	new Promise((resolve, reject) => {
@@ -44,12 +49,16 @@ export const expectContinue = (origin: string, head: string, body: Buffer): Prom
 			const heads = received.match(/HTTP\/1\.1 (\d{3})[^\r]*\r\n/g) ?? [];
 			const finalHead = heads.find((line) => !line.startsWith("HTTP/1.1 100"));
 			const lengthMatch = /\r\ncontent-length: (\d+)\r\n/i.exec(received.slice(received.lastIndexOf(finalHead ?? "\u0000")));
-			if (finalHead && lengthMatch) {
-				const bodyStart = received.indexOf("\r\n\r\n", received.lastIndexOf(finalHead)) + 4;
-				if (Buffer.byteLength(received.slice(bodyStart), "latin1") >= Number(lengthMatch[1])) settle();
+			const headEnd = finalHead === undefined ? -1 : received.indexOf("\r\n\r\n", received.lastIndexOf(finalHead));
+			if (lengthMatch && headEnd !== -1) {
+				if (Buffer.byteLength(received.slice(headEnd + 4), "latin1") >= Number(lengthMatch[1])) settle();
 			}
 		});
 		socket.on("close", settle);
 		socket.on("error", reject);
+		socket.setTimeout(ANSWER_DEADLINE_MS, () => {
+			socket.destroy();
+			reject(new Error(`no complete answer within ${ANSWER_DEADLINE_MS} ms; received: ${JSON.stringify(received)}`));
+		});
 		socket.write(head);
 	});
