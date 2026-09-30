@@ -116,7 +116,7 @@ const okToken = (accessToken: string, expiresIn: number | null = 300): Response 
 		...(expiresIn === null ? {} : { expires_in: expiresIn }),
 	});
 
-describe("injection router — external credential exchange (#90)", () => {
+describe("injection router — external credential exchange", () => {
 	let upstream: Awaited<ReturnType<typeof startUpstream>>;
 	let fetchMock: ReturnType<typeof vi.fn>;
 
@@ -787,7 +787,7 @@ describe("injection router — external credential exchange (#90)", () => {
 		});
 	});
 
-	describe("injected deps (#95 F2)", () => {
+	describe("injected deps", () => {
 		const eventsOf = (spy: ReturnType<typeof vi.fn>): unknown[] =>
 			spy.mock.calls
 				.map(([first]) => first)
@@ -830,7 +830,7 @@ describe("injection router — external credential exchange (#90)", () => {
 			expect(fetchMock).not.toHaveBeenCalled();
 		});
 
-		it("accepts an injected exchange single flight: the supplied run is what coalesces the submission", async () => {
+		it("accepts an injected exchange single flight: the submission goes through the supplied run, keyed by the exchange cache key", async () => {
 			const assertion = makeAssertion();
 			const real = createSingleFlight<string>();
 			const singleFlight: SingleFlight<string> = { run: vi.fn(real.run), _sizeForTesting: real._sizeForTesting };

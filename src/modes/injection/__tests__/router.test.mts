@@ -388,7 +388,7 @@ describe("injection router", () => {
 
 	// On the wire: with the exchange disabled, an empty Authorization reaches
 	// `inject`, and overwriting it is logged like any other value.
-	it("overrides an empty inbound Authorization with the injected Bearer and logs injection.authorization_override (#133)", async () => {
+	it("overrides an empty inbound Authorization with the injected Bearer and logs injection.authorization_override", async () => {
 		const warnSpy = vi.spyOn(logger, "warn");
 		fetchMock.mockResolvedValueOnce(okGrantResponse("tok-injected"));
 		const app = mountApp(makeConfig(upstream.baseURL));
@@ -414,7 +414,7 @@ describe("injection router", () => {
 		expect(headers.Cookie).toBe("sid=s1");
 	});
 
-	it("logs injection.no_cookie at debug when the session cookie is absent (#73)", async () => {
+	it("logs injection.no_cookie at debug when the session cookie is absent", async () => {
 		const debugSpy = vi.spyOn(logger, "debug");
 		const warnSpy = vi.spyOn(logger, "warn");
 		const app = mountApp(makeConfig(upstream.baseURL));
@@ -431,7 +431,7 @@ describe("injection router", () => {
 		expect(eventsOf(warnSpy)).not.toContain("injection.cookie_rejected");
 	});
 
-	it("forwards an empty session cookie value anonymously and logs injection.cookie_rejected with reason empty (#73)", async () => {
+	it("forwards an empty session cookie value anonymously and logs injection.cookie_rejected with reason empty", async () => {
 		const warnSpy = vi.spyOn(logger, "warn");
 		const app = mountApp(makeConfig(upstream.baseURL));
 
@@ -445,7 +445,7 @@ describe("injection router", () => {
 		);
 	});
 
-	it("forwards a grammar-rejected session cookie anonymously and logs injection.cookie_rejected at warn (#23, #73)", async () => {
+	it("forwards a grammar-rejected session cookie anonymously and logs injection.cookie_rejected at warn", async () => {
 		const debugSpy = vi.spyOn(logger, "debug");
 		const warnSpy = vi.spyOn(logger, "warn");
 		const app = mountApp(makeConfig(upstream.baseURL));
@@ -469,7 +469,7 @@ describe("injection router", () => {
 		expect(eventsOf(debugSpy)).not.toContain("injection.no_cookie");
 	});
 
-	it("uses the first well-formed same-name pair and logs the skipped malformed one (#74)", async () => {
+	it("uses the first well-formed same-name pair and logs the skipped malformed one", async () => {
 		const warnSpy = vi.spyOn(logger, "warn");
 		fetchMock.mockResolvedValueOnce(okGrantResponse("tok-good"));
 		const app = mountApp(makeConfig(upstream.baseURL));
@@ -719,7 +719,7 @@ describe("injection router", () => {
 		});
 	});
 
-	it("accepts injected deps: a supplied grant client and logger replace fetch and the singleton (#95 F4)", async () => {
+	it("accepts injected deps: a supplied grant client and logger replace fetch and the singleton", async () => {
 		const grantClient = {
 			exchange: vi.fn(async () => ({ accessToken: "tok-injected-dep", expiresIn: 120 })),
 		};
@@ -756,7 +756,7 @@ describe("injection router", () => {
 		expect(singletonWarn).not.toHaveBeenCalled();
 	});
 
-	it("accepts an injected tokenCache: a pre-seeded entry is a hit with no grant client call (#95 F4)", async () => {
+	it("accepts an injected tokenCache: a pre-seeded entry is a hit with no grant client call", async () => {
 		const tokenCache = createTokenCache({ maxEntries: 10 });
 		const config = makeConfig(upstream.baseURL);
 		// Seeded under the router's own grant context, which the key carries:
@@ -774,7 +774,7 @@ describe("injection router", () => {
 		expect(fetchMock).not.toHaveBeenCalled();
 	});
 
-	it("accepts an injected single flight: the supplied run is what coalesces the grant call (#95 F4)", async () => {
+	it("accepts an injected single flight: the grant call goes through the supplied run, keyed by the session cache key", async () => {
 		const real = createSingleFlight<string>();
 		const singleFlight: SingleFlight<string> = {
 			run: vi.fn(real.run),

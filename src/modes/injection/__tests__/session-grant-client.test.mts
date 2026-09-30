@@ -602,7 +602,7 @@ describe("createSessionGrantClient.exchange", () => {
 		});
 	});
 
-	it("throws provider_unavailable on timeout (AbortError)", async () => {
+	it("throws provider_unavailable when fetch rejects with an AbortError", async () => {
 		const abortErr = new DOMException("The operation was aborted", "AbortError");
 		fetchMock.mockRejectedValueOnce(abortErr);
 		const client = createSessionGrantClient(baseCfg);

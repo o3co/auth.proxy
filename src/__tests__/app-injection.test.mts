@@ -280,7 +280,7 @@ const SETUPS: { name: string; env: () => Record<string, string>; cases: Case[] }
 			sessionMinted("sess-s1-valid", "minted-s1-a"),
 			sessionOverridesOwn("sess-s1-override", "minted-s1-b"),
 			{
-				name: "logs an empty inbound Authorization that the minted token replaces as an override (#133)",
+				name: "logs an empty inbound Authorization that the minted token replaces as an override",
 				cookie: "sid=sess-s1-empty-auth",
 				authorization: "",
 				provider: { answer: issued("minted-s1-d"), grant: sessionGrant("sess-s1-empty-auth") },
@@ -313,7 +313,7 @@ const SETUPS: { name: string; env: () => Record<string, string>; cases: Case[] }
 				unlogged: ["sess-s1-revoked"],
 			},
 			{
-				name: "answers a 401 invalid_client 502 provider_config_error: the proxy's clientId, not the session (#95 F47)",
+				name: "answers a 401 invalid_client 502 provider_config_error: the proxy's clientId, not the session",
 				cookie: "sid=sess-s1-client",
 				provider: {
 					answer: json(401, { error: "invalid_client" }),
@@ -412,7 +412,7 @@ const SETUPS: { name: string; env: () => Record<string, string>; cases: Case[] }
 				unlogged: [CLIENT_OWN],
 			},
 			{
-				name: "strips an empty Authorization like any other (#95 F40)",
+				name: "strips an empty Authorization like any other",
 				authorization: "",
 				status: 200,
 				answer: "forwarded",
@@ -832,7 +832,7 @@ describe.each(SETUPS)("the app in injection mode, $name", (setup) => {
 		]);
 	});
 
-	it("wrote every line about a request with its requestId and an injection.* event (#134), nothing else, and no configured secret", async () => {
+	it("wrote every line about a request with its requestId and an injection.* event, nothing else, and no configured secret", async () => {
 		await proxy.linesFor("injection-every-line");
 		// Nothing outside the logger: no stdout line that is not NDJSON, and
 		// nothing on stderr but the harness's own listening line.

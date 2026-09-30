@@ -182,7 +182,7 @@ const casesFor = (setup: Setup): Case[] => [
 		lines: [INCOMING],
 	},
 	{
-		name: "forwards an empty Authorization unchanged, sent upstream as `Authorization` (#132)",
+		name: "forwards an empty Authorization unchanged, sent upstream as `Authorization`",
 		authorization: () => "",
 		status: 200,
 		answer: "forwarded",
@@ -199,7 +199,7 @@ const casesFor = (setup: Setup): Case[] => [
 		lines: [INCOMING],
 	},
 	{
-		name: "introspects the first word of `Bearer <token> extra` and forwards the header as received (F14)",
+		name: "introspects the first word of `Bearer <token> extra` and forwards the header as received",
 		authorization: (token) => `Bearer ${token} extra`,
 		introspection: json(200, { active: true }),
 		status: 200,
@@ -276,7 +276,7 @@ const casesFor = (setup: Setup): Case[] => [
 		lines: [INCOMING, failure("validation.provider_error", "error", "introspect failed")],
 	},
 	{
-		name: "does not follow a redirect from the introspection endpoint: 502 Provider Configuration Error, one provider request (#95 F43)",
+		name: "does not follow a redirect from the introspection endpoint: 502 Provider Configuration Error, one provider request",
 		authorization: (token) => `Bearer ${token}`,
 		introspection: redirect(307, "/oauth/introspect/"),
 		status: 502,
@@ -420,7 +420,7 @@ describe.each(SETUPS)("the app in validation mode, $name", (setup) => {
 		expect(await proxy.linesFor(String(requestId))).toMatchObject([INCOMING]);
 	});
 
-	it("wrote every line about a request with its requestId and a validation.* event (#134), nothing else, and no configured secret", async () => {
+	it("wrote every line about a request with its requestId and a validation.* event, nothing else, and no configured secret", async () => {
 		await proxy.linesFor("validation-every-line");
 		// Nothing outside the logger: no stdout line that is not NDJSON, and
 		// nothing on stderr but the harness's own listening line.

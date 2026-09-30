@@ -98,7 +98,7 @@ describe("the RFC 6750 challenge", () => {
 		},
 	);
 
-	describe("with auth.validation.realm configured (#95 F45)", () => {
+	describe("with auth.validation.realm configured", () => {
 		it.each(["Basic dXNlcjpwYXNz", "bearer t"])(
 			"answers %j with the realm alone, as §3.1's own example does",
 			async (authorization) => {

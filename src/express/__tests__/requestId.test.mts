@@ -63,7 +63,7 @@ describe("createRequestIdMiddleware", () => {
 		expect(req.headers["x-request-id"]).toMatch(/^\d{14}_[0-9a-f]{32}$/);
 	});
 
-	it("takes the first value when the header arrives duplicated (#81 review)", () => {
+	it("takes the first value when the header arrives duplicated", () => {
 		// Node types this `string | string[]`, and an upstream that sets the
 		// header twice produces the array. Casting it to `string` let an array
 		// reach `res.setHeader` and every log field built from it.

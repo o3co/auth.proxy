@@ -191,7 +191,7 @@ describe("installGracefulShutdown", () => {
 		expect(cleanup).toHaveBeenCalledOnce();
 	});
 
-	it("bounds cleanup so a hanging dispose cannot wedge the process (#81 review)", async () => {
+	it("bounds cleanup so a hanging dispose cannot wedge the process", async () => {
 		// The drain deadline is cleared once draining finishes, so a dispose that
 		// never settles reaches `exit` only through the cleanup budget
 		// (`cleanupTimeoutMs`, by default `drainTimeoutMs`).
@@ -230,7 +230,7 @@ describe("installGracefulShutdown", () => {
 		}
 	});
 
-	it("defers the real exit a turn so a buffered log destination can flush (#81 review)", async () => {
+	it("defers the real exit a turn so a buffered log destination can flush", async () => {
 		// pino's default destination is not synchronous, so calling
 		// `process.exit` in the same tick can drop the very lines that say why
 		// the shutdown failed.

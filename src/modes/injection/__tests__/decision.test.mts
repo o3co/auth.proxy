@@ -405,7 +405,7 @@ describe("decideInjection", () => {
 		// Presence, not truthiness, as the exchange hand-off and the strip read
 		// it. An empty `Authorization:` is a header the client sent, and
 		// replacing it is an override like any other.
-		it("logs injection.authorization_override when an empty inbound Authorization is about to be replaced (#133)", async () => {
+		it("logs injection.authorization_override when an empty inbound Authorization is about to be replaced", async () => {
 			const { deps, logger, grantClient } = makeDeps();
 			grantClient.exchange.mockResolvedValueOnce(grant("tok-1"));
 			const outcome = await decideInjection(
@@ -633,7 +633,7 @@ describe("decideInjection", () => {
 		});
 	});
 
-	describe("exchange: the hand-off to decideExchange (F2), not decided here", () => {
+	describe("exchange: the hand-off to decideExchange, not decided here", () => {
 		it.each([
 			{ cookieHeader: undefined, sessionCookie: "absent" as const },
 			{ cookieHeader: "sid=s1", sessionCookie: "found" as const },
@@ -652,7 +652,7 @@ describe("decideInjection", () => {
 			expect([logger.debug, logger.info, logger.warn, logger.error].flatMap(eventsOf)).toEqual([]);
 		});
 
-		it("hands off an empty Authorization too — any scheme, even empty (#90)", async () => {
+		it("hands off an empty Authorization too", async () => {
 			const { deps } = makeDeps({}, { exchangeEnabled: true });
 			expect(await decideInjection(inputs({ authorization: "" }), deps)).toEqual({
 				kind: "exchange",

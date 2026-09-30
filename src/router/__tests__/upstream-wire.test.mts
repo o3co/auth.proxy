@@ -65,7 +65,7 @@ describe("createUpstreamProxy on the wire", () => {
 		expect(rawPairs(received[0], "x-request-id")).toEqual([["x-request-id", "rid-2c9e"]]);
 	});
 
-	it("sends an empty Authorization upstream once, in canonical casing, as the other paths treat it as present (#132, #133)", async () => {
+	it("sends an empty Authorization upstream once, in canonical casing, as the other paths treat it as present", async () => {
 		const res = await request(app).get("/resource").set("authorization", "");
 
 		expect(res.status).toBe(200);

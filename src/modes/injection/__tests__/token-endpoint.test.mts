@@ -56,7 +56,7 @@ describe("parseJsonBody", () => {
 		["an array of objects", '[{"error":"invalid_grant"}]'],
 		["an array of scalars", "[1,2,3]"],
 		["an empty array", "[]"],
-	])("answers null for %s, which the declared return type excludes (#95 F34)", async (_label, body) => {
+	])("answers null for %s, which the declared return type excludes", async (_label, body) => {
 		// A JSON array is `typeof === "object"`, but the declared return type is
 		// a Record a caller reads `.error` off, which says an array cannot come
 		// back. No provider sends one; the answer must still match the type.

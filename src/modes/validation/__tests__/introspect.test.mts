@@ -231,7 +231,7 @@ describe("createIntrospector", () => {
 			expect(introspect).toHaveBeenCalledTimes(4);
 		});
 
-		it("evicts once for a token two concurrent requests ask about (#95 F5, F6)", async () => {
+		it("evicts once for a token two concurrent requests ask about", async () => {
 			// One flight, so one write: no second write for a key the cache
 			// already holds. `set` is idempotent for a held key either way, which
 			// `introspection-cache.test.mts` owns.

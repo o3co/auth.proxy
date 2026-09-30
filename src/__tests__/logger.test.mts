@@ -139,7 +139,7 @@ describe("createProxyLogger", () => {
 	// normalised, so the redaction cannot rely on the WHATWG spelling — where a
 	// space is `%20`, an interior `@` is `%40`, and `?` and `#` never appear in
 	// userinfo at all.
-	describe("URL credentials, quoted as they were given (#140)", () => {
+	describe("URL credentials, quoted as they were given", () => {
 		const messageOf = (text: string) =>
 			(serializeLoggedError(new TypeError(text)) as { message: string }).message;
 

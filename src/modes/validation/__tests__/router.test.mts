@@ -291,7 +291,7 @@ describe("validation router", () => {
 			{ failure: "the provider answers 200 with a non-JSON body (IntrospectHttpError 502 raised by introspect itself)", fetchImpl: async () => new Response("<html>", { status: 200 }) },
 			{ failure: "fetch rejects", fetchImpl: async () => { throw new TypeError("fetch failed"); } },
 			{ failure: "the call times out", fetchImpl: async () => { throw new DOMException("The operation was aborted due to timeout", "TimeoutError"); } },
-		])("answers 502 Bad Gateway when $failure (#95 F42)", async ({ fetchImpl }) => {
+		])("answers 502 Bad Gateway when $failure", async ({ fetchImpl }) => {
 			const fetchMock = vi.fn(fetchImpl);
 			vi.stubGlobal("fetch", fetchMock);
 			const res = await request(app).get("/protected").set("Authorization", "Bearer t");
@@ -304,7 +304,7 @@ describe("validation router", () => {
 		});
 	});
 
-	describe("injected deps (#95 F3)", () => {
+	describe("injected deps", () => {
 		const fakeLogger = () => ({
 			debug: vi.fn<Logger["debug"]>(),
 			info: vi.fn<Logger["info"]>(),

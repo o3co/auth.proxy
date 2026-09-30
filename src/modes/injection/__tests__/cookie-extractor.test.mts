@@ -10,7 +10,7 @@ const found = (value: string, skipped: CookieRejectReason | null = null) => ({
 const rejected = (reason: CookieRejectReason) => ({ kind: "rejected", reason });
 
 describe("extractCookie", () => {
-	describe("absent — no pair with the requested name (#73)", () => {
+	describe("absent — no pair with the requested name", () => {
 		it("reports absent when the header is undefined", () => {
 			expect(extractCookie(undefined, "sid")).toEqual(absent);
 		});
@@ -62,7 +62,7 @@ describe("extractCookie", () => {
 	// two same-name pairs (RFC 6265 section 5.4 orders them by path length and
 	// creation time), and a stale or broken duplicate should not blind the proxy
 	// to the well-formed one.
-	describe("same-name pairs — the first well-formed pair wins (#74)", () => {
+	describe("same-name pairs — the first well-formed pair wins", () => {
 		it("skips a malformed first pair and uses the next well-formed one, reporting the skip", () => {
 			expect(extractCookie("sid=bad,val; sid=good", "sid")).toEqual(found("good", "grammar"));
 		});
@@ -94,7 +94,7 @@ describe("extractCookie", () => {
 			);
 		});
 
-		it("keeps the OWS-only trimming and verbatim value semantics while scanning (#23)", () => {
+		it("reads each value verbatim while scanning, trimming only the slack around separators", () => {
 			expect(extractCookie("sid= bad;  sid=good ; b=2", "sid")).toEqual(found("good", "grammar"));
 			expect(extractCookie("sid=bad,val; sid= good", "sid")).toEqual(rejected("grammar"));
 			expect(extractCookie("sid=bad,val; sid=good\u00a0", "sid")).toEqual(rejected("grammar"));
@@ -104,7 +104,7 @@ describe("extractCookie", () => {
 	// A pair with the requested name exists but cannot be forwarded. The result
 	// carries only a bounded reason class — never the value bytes — so the router
 	// can log it without leaking the cookie.
-	describe("rejected — a same-name pair that cannot be forwarded (#73)", () => {
+	describe("rejected — a same-name pair that cannot be forwarded", () => {
 		it("reports reason 'empty' for an empty bare value", () => {
 			expect(extractCookie("sid=; other=foo", "sid")).toEqual(rejected("empty"));
 		});
@@ -137,7 +137,7 @@ describe("extractCookie", () => {
 	// RFC 6265 section 4.1.1 cookie-octet grammar. The extracted value is
 	// interpolated verbatim into the outbound `Cookie` header of the session
 	// grant call, so anything outside the grammar must not be forwarded.
-	describe("cookie-octet grammar (#23)", () => {
+	describe("cookie-octet grammar", () => {
 		describe("rejects values outside the grammar", () => {
 			it("never lets ';' into the value — it is the cookie-pair delimiter", () => {
 				const result = extractCookie("sid=abc;def", "sid");
