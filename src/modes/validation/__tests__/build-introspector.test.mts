@@ -8,10 +8,12 @@
  * mocked so each configured value is observed where it is passed, with
  * distinct numbers so a swapped one shows.
  */
+import { generateKeyPairSync } from "node:crypto";
 import express from "express";
 import request from "supertest";
 import { afterEach, describe, expect, it, vi } from "vitest";
 import type { AppConfig } from "../../../../config/application.schema.mjs";
+import { parseClientKey } from "../../../oauth/private-key-jwt.mjs";
 import { createIntrospector } from "../introspect.mjs";
 import { createIntrospectionCache } from "../introspection-cache.mjs";
 import { createIntrospectionClient } from "../introspection-client.mjs";
@@ -34,13 +36,19 @@ const clientFactory = vi.mocked(createIntrospectionClient);
 const cacheFactory = vi.mocked(createIntrospectionCache);
 const introspectorFactory = vi.mocked(createIntrospector);
 
-const makeConfig = (client: { clientId: string | null; clientSecret: string | null }): AppConfig => ({
+type ValidationClient = Extract<AppConfig["auth"], { mode: "validation" }>["validation"]["client"];
+
+const makeConfig = (
+	client: Partial<ValidationClient>,
+	providerIssuer: string | null = null,
+): AppConfig => ({
 	http: {
 		hostname: "127.0.0.1", port: 0, pathPrefix: "/",
 		bodyLimitSize: "10mb", cors: { origin: { pattern: null } },
 	},
 	auth: { mode: "validation", validation: {
-		client,
+		client: { clientId: null, clientSecret: null, clientKey: null, ...client },
+		providerIssuer,
 		realm: null,
 		introspect: { url: "http://provider.test/introspect-bound", cacheTtlSec: 31, cacheMaxEntries: 77, timeoutMs: 4321 },
 	} },
@@ -71,10 +79,23 @@ describe("the router's own introspector", () => {
 		);
 	});
 
-	it("resolves no credentials unless both halves are configured", () => {
-		createRouter({ config: makeConfig({ clientId: "proxy", clientSecret: null }) });
+	it("resolves no credentials without a client id: the inbound token is the credential", () => {
+		createRouter({ config: makeConfig({}) });
 
 		expect(clientFactory).toHaveBeenCalledWith(expect.objectContaining({ credentials: null }));
+	});
+
+	it("resolves a client key with the provider's issuer as the assertion's audience", () => {
+		const clientKey = parseClientKey(generateKeyPairSync("ed25519").privateKey.export({ format: "jwk" }));
+		createRouter({
+			config: makeConfig({ clientId: "proxy", clientKey }, "https://auth.example.test"),
+		});
+
+		expect(clientFactory).toHaveBeenCalledWith(
+			expect.objectContaining({
+				credentials: { clientId: "proxy", clientKey, audience: "https://auth.example.test" },
+			}),
+		);
 	});
 
 	it("gives each router its own cache, so one router's entries are not another's", () => {

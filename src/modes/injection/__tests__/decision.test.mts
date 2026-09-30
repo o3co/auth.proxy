@@ -34,6 +34,8 @@ type InjectionCfg = Extract<AppConfig["auth"], { mode: "injection" }>["injection
 const baseCfg: InjectionCfg = {
 	providerOrigin: "http://provider.example",
 	clientId: "my-spa",
+	clientKey: null,
+	providerIssuer: null,
 	scope: "api",
 	sessionCookieName: "sid",
 	stripInboundAuthorization: false,

@@ -75,6 +75,8 @@ const makeConfig = (
 		injection: {
 			providerOrigin: "http://provider.example",
 			clientId: "my-spa",
+			clientKey: null,
+			providerIssuer: null,
 			scope: "api",
 			sessionCookieName: "sid",
 			stripInboundAuthorization: false,

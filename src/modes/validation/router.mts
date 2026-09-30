@@ -38,7 +38,7 @@ import {
 import { createIntrospector } from "./introspect.mjs";
 import { createIntrospectionCache } from "./introspection-cache.mjs";
 import {
-	type ClientCredentials,
+	type ClientAuthentication,
 	createIntrospectionClient,
 	type IntrospectionResult,
 } from "./introspection-client.mjs";
@@ -87,15 +87,32 @@ const validationMiddleware =
 	};
 
 /**
+ * How the proxy authenticates to introspection: its secret, its key with the
+ * provider's issuer as the assertion's audience, or nothing, when the inbound
+ * token is the credential. The schema admits exactly these shapes.
+ */
+const introspectionCredentials = (
+	validation: ValidationConfig["validation"],
+): ClientAuthentication | null => {
+	const { clientId, clientSecret, clientKey } = validation.client;
+	if (clientId === null) return null;
+	if (clientSecret !== null) return { clientId, clientSecret };
+	if (clientKey !== null && validation.providerIssuer !== null) {
+		return { clientId, clientKey, audience: validation.providerIssuer };
+	}
+	throw new Error(
+		"auth.validation.client needs clientSecret, or clientKey with auth.validation.providerIssuer",
+	);
+};
+
+/**
  * The bundled introspector for this router: the provider's endpoint behind
  * `IntrospectionClient`, a cache this router owns, and the reading of the
  * response between them. Each router builds its own, so routers in one
  * process share no cache.
  */
 const buildIntrospector = (validation: ValidationConfig["validation"]): Introspector => {
-	const { clientId, clientSecret } = validation.client;
-	const credentials: ClientCredentials | null =
-		clientId !== null && clientSecret !== null ? { clientId, clientSecret } : null;
+	const credentials = introspectionCredentials(validation);
 
 	return createIntrospector({
 		client: createIntrospectionClient({

@@ -30,6 +30,7 @@ import type { AppConfig } from "../../../config/application.schema.mjs";
 import { createRequestIdMiddleware } from "../../express/requestId.mjs";
 import type { Logger } from "../../logger.mjs";
 import defaultLogger from "../../logger.mjs";
+import type { ClientAuthentication } from "../../oauth/client-authentication.mjs";
 import { createUpstreamProxy } from "../../router/upstream.mjs";
 import { createSingleFlight } from "../../single-flight.mjs";
 import { decideInjection, type InjectionDeps } from "./decision.mjs";
@@ -129,6 +130,26 @@ const injectionMiddleware =
 		}
 	};
 
+/**
+ * How the proxy authenticates as the exchange's client: its secret, or its key
+ * with the provider's issuer as the assertion's audience. The schema admits
+ * exactly one of the two, and a key only with an issuer.
+ */
+const exchangeCredentials = (
+	cfg: InjectionConfig["injection"],
+	exchange: ExchangeSettings,
+): ClientAuthentication => {
+	if (exchange.clientSecret !== null) {
+		return { clientId: exchange.clientId, clientSecret: exchange.clientSecret };
+	}
+	if (exchange.clientKey !== null && cfg.providerIssuer !== null) {
+		return { clientId: exchange.clientId, clientKey: exchange.clientKey, audience: cfg.providerIssuer };
+	}
+	throw new Error(
+		"auth.injection.exchange needs clientSecret, or clientKey with auth.injection.providerIssuer",
+	);
+};
+
 /** The exchange path's deps: what `createRouter` builds, or what the caller supplied. */
 const buildExchangeDeps = (
 	cfg: InjectionConfig["injection"],
@@ -145,7 +166,7 @@ const buildExchangeDeps = (
 		createJwtBearerClient({
 			providerOrigin: cfg.providerOrigin,
 			timeoutMs: cfg.timeoutMs,
-			credentials: { clientId: exchange.clientId, clientSecret: exchange.clientSecret },
+			credentials: exchangeCredentials(cfg, exchange),
 			scope: exchange.scope,
 			audience: exchange.audience,
 			resource: exchange.resource,

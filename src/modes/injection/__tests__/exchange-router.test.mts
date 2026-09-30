@@ -42,6 +42,7 @@ const ENABLED: Extract<ExchangeConfig, { enabled: true }> = {
 	enabled: true,
 	clientId: "proxy-exchange",
 	clientSecret: "s3cret",
+	clientKey: null,
 	scope: null,
 	audience: null,
 	resource: null,
@@ -65,6 +66,8 @@ const makeConfig = (
 		injection: {
 			providerOrigin: "http://provider.example",
 			clientId: "my-spa",
+			clientKey: null,
+			providerIssuer: null,
 			scope: "api",
 			sessionCookieName: "sid",
 			stripInboundAuthorization: false,

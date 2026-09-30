@@ -35,6 +35,7 @@
  */
 
 import { z } from "zod";
+import { type ClientKey, ClientKeyError, parseClientKey } from "../src/oauth/private-key-jwt.mjs";
 
 /**
  * An RFC 6265 section 4.1.1 `cookie-name`: an RFC 9110 section 5.6.2 `token`,
@@ -139,6 +140,55 @@ const whitespaceSeparatedList = (key: string) =>
 			return value;
 		});
 
+/**
+ * A client key for `private_key_jwt`: unset (`null`, or the environment's
+ * empty value), or a private JWK — JSON text, the form an environment variable
+ * carries, or a HOCON object — read by `parseClientKey`. A key the proxy
+ * cannot sign with stops the process at boot naming the key; the message
+ * never quotes it.
+ */
+const clientKey = (key: string) =>
+	z
+		.union([z.string(), z.record(z.string(), z.unknown())])
+		.nullable()
+		.default(null)
+		.transform((value, ctx): ClientKey | null => {
+			if (value === null || value === "") return null;
+			try {
+				return parseClientKey(value);
+			} catch (err) {
+				ctx.addIssue({
+					code: "custom",
+					message: `${key}: ${err instanceof ClientKeyError ? err.message : "the client key cannot be read"}`,
+				});
+				return z.NEVER;
+			}
+		});
+
+/**
+ * The provider's issuer identifier, the only audience of a client assertion
+ * (RFC 7523 section 3). RFC 8414 section 2 makes it an https URL with no query
+ * or fragment; http is accepted too, for a provider on a development host. It
+ * is used exactly as written, since the provider compares it as a string, and
+ * it may differ from the URL the proxy reaches the provider at.
+ */
+const providerIssuer = (key: string) =>
+	optionalString().refine(
+		(value) => {
+			if (value === null) return true;
+			if (!URL.canParse(value)) return false;
+			const parsed = new URL(value);
+			return (
+				(parsed.protocol === "https:" || parsed.protocol === "http:") &&
+				parsed.search === "" &&
+				parsed.hash === "" &&
+				!value.includes("?") &&
+				!value.includes("#")
+			);
+		},
+		{ message: `${key} must be the provider's issuer identifier: an http(s) URL with no query or fragment` },
+	);
+
 const EXCHANGE_KEY = "auth.injection.exchange";
 
 export type ExchangeConfig =
@@ -146,7 +196,9 @@ export type ExchangeConfig =
 	| {
 			enabled: true;
 			clientId: string;
-			clientSecret: string;
+			/** Exactly one of `clientSecret` and `clientKey` is set. */
+			clientSecret: string | null;
+			clientKey: ClientKey | null;
 			scope: string | null;
 			audience: string | null;
 			resource: string | null;
@@ -160,11 +212,14 @@ export type ExchangeConfig =
  * replaces it.
  *
  * Disabled (the default) parses to `{ enabled: false }` and nothing else is
- * used. Enabled, the proxy authenticates to the token endpoint with
- * `client_secret_basic`: a `client_id` alone is not client authentication, so
- * both credentials are required and a missing one fails at boot naming the
- * key. `allowedIssuers` is an optional prefilter on the unverified `iss`,
- * empty meaning off; trust in an issuer is the provider's decision.
+ * used. Enabled, the proxy authenticates to the token endpoint as a
+ * confidential client, with `client_secret_basic` or `private_key_jwt`: a
+ * `client_id` alone is not client authentication, so the id and exactly one
+ * of `clientSecret` and `clientKey` are required, and anything else fails at
+ * boot naming the keys. A key also needs `auth.injection.providerIssuer`,
+ * checked where both are in view. `allowedIssuers` is an optional prefilter
+ * on the unverified `iss`, empty meaning off; trust in an issuer is the
+ * provider's decision.
  *
  * Every field is parsed and validated before the transform, so an invalid
  * entry (in `allowedIssuers`, say) fails the configuration even when the
@@ -175,6 +230,7 @@ const exchangeSchema = z
 		enabled: strictBoolean(`${EXCHANGE_KEY}.enabled`),
 		clientId: optionalString(),
 		clientSecret: optionalString(),
+		clientKey: clientKey(`${EXCHANGE_KEY}.clientKey`),
 		scope: optionalString(),
 		audience: optionalString(),
 		resource: optionalString(),
@@ -184,25 +240,31 @@ const exchangeSchema = z
 		if (!exchange.enabled) {
 			return { enabled: false as const };
 		}
-		const { clientId, clientSecret } = exchange;
-		if (clientId === null || clientSecret === null) {
-			for (const [name, value] of [
-				["clientId", clientId],
-				["clientSecret", clientSecret],
-			] as const) {
-				if (value === null) {
-					ctx.addIssue({
-						code: "custom",
-						message: `${EXCHANGE_KEY}.${name} is required when ${EXCHANGE_KEY}.enabled is true (the proxy authenticates to the token endpoint with client_secret_basic)`,
-					});
-				}
-			}
+		const { clientId, clientSecret, clientKey } = exchange;
+		const enabledNote = `when ${EXCHANGE_KEY}.enabled is true (the proxy authenticates to the token endpoint as a confidential client)`;
+		if (clientId === null) {
+			ctx.addIssue({ code: "custom", message: `${EXCHANGE_KEY}.clientId is required ${enabledNote}` });
+		}
+		if (clientSecret === null && clientKey === null) {
+			ctx.addIssue({
+				code: "custom",
+				message: `${EXCHANGE_KEY}.clientSecret or ${EXCHANGE_KEY}.clientKey is required ${enabledNote}`,
+			});
+		}
+		if (clientSecret !== null && clientKey !== null) {
+			ctx.addIssue({
+				code: "custom",
+				message: `${EXCHANGE_KEY}.clientSecret and ${EXCHANGE_KEY}.clientKey are alternatives; set one`,
+			});
+		}
+		if (clientId === null || (clientSecret === null) === (clientKey === null)) {
 			return z.NEVER;
 		}
 		return {
 			enabled: true as const,
 			clientId,
 			clientSecret,
+			clientKey,
 			scope: exchange.scope,
 			audience: exchange.audience,
 			resource: exchange.resource,
@@ -227,6 +289,9 @@ export const AppConfigSchema = z.object({
 		z.object({
 			mode: z.literal("validation"),
 			validation: z.object({
+				// How the proxy authenticates to introspection: not at all (all
+				// unset, and the inbound token is the credential), or as a client
+				// with exactly one of a secret and a key.
 				client: z
 					.object({
 						clientId: z
@@ -239,14 +304,28 @@ export const AppConfigSchema = z.object({
 							.nullable()
 							.default(null)
 							.transform((v) => (v === "" ? null : v)),
+						clientKey: clientKey("auth.validation.client.clientKey"),
 					})
-					.refine(
-						(c) => (c.clientId === null) === (c.clientSecret === null),
-						{
-							message:
-								"auth.validation.client.clientId and auth.validation.client.clientSecret must both be set or both be unset",
-						},
-					),
+					.superRefine((c, ctx) => {
+						const k = "auth.validation.client";
+						if (c.clientSecret !== null && c.clientKey !== null) {
+							ctx.addIssue({
+								code: "custom",
+								message: `${k}.clientSecret and ${k}.clientKey are alternatives; set one`,
+							});
+						} else if (c.clientId === null && (c.clientSecret !== null || c.clientKey !== null)) {
+							ctx.addIssue({
+								code: "custom",
+								message: `${k}.clientId is required with ${k}.clientSecret or ${k}.clientKey`,
+							});
+						} else if (c.clientId !== null && c.clientSecret === null && c.clientKey === null) {
+							ctx.addIssue({
+								code: "custom",
+								message: `${k}.clientId needs ${k}.clientSecret or ${k}.clientKey (client_secret_basic or private_key_jwt); unset all three to introspect with the inbound token`,
+							});
+						}
+					}),
+				providerIssuer: providerIssuer("auth.validation.providerIssuer"),
 				// RFC 6750 §3's `realm`, for `WWW-Authenticate`. Unset, the challenges
 				// carry none. It is sent inside a quoted-string, so only printable
 				// ASCII that needs no escaping is accepted — no `"`, no `\`, no
@@ -273,6 +352,15 @@ export const AppConfigSchema = z.object({
 					cacheMaxEntries: z.coerce.number().int().positive().default(10000),
 					timeoutMs: z.coerce.number().int().positive().default(5000),
 				}),
+			}).superRefine((validation, ctx) => {
+				if (validation.client.clientKey !== null && validation.providerIssuer === null) {
+					ctx.addIssue({
+						code: "custom",
+						path: ["providerIssuer"],
+						message:
+							"auth.validation.providerIssuer is required with auth.validation.client.clientKey: it is the client assertion's audience",
+					});
+				}
 			}),
 		}),
 		z.object({
@@ -299,6 +387,14 @@ export const AppConfigSchema = z.object({
 						},
 					),
 				clientId: z.string().min(1),
+				/**
+				 * Unset, the proxy is a public client for the session grant, sending
+				 * its `client_id` alone. Set, it is a confidential client that
+				 * authenticates with `private_key_jwt`.
+				 */
+				clientKey: clientKey("auth.injection.clientKey"),
+				/** The client assertion's audience, for this key and the exchange's. */
+				providerIssuer: providerIssuer("auth.injection.providerIssuer"),
 				scope: z.string().min(1),
 				sessionCookieName: z.string().regex(COOKIE_NAME_RE, {
 					message:
@@ -336,6 +432,18 @@ export const AppConfigSchema = z.object({
 					),
 				timeoutMs: z.coerce.number().int().positive().default(5000),
 				exchange: exchangeSchema,
+			}).superRefine((injection, ctx) => {
+				const keyed =
+					injection.clientKey !== null ||
+					(injection.exchange.enabled && injection.exchange.clientKey !== null);
+				if (keyed && injection.providerIssuer === null) {
+					ctx.addIssue({
+						code: "custom",
+						path: ["providerIssuer"],
+						message:
+							"auth.injection.providerIssuer is required with auth.injection.clientKey or auth.injection.exchange.clientKey: it is the client assertion's audience",
+					});
+				}
 			}),
 		}),
 	]),
