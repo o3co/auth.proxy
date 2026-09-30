@@ -24,6 +24,8 @@
  * canonical casing.
  */
 
+import { generateKeyPairSync } from "node:crypto";
+import { jwtVerify } from "jose";
 import { afterAll, afterEach, beforeAll, describe, expect, it, vi } from "vitest";
 
 import { type ProxyProcess, SUITE_TIMEOUT_MS, send, startProxy } from "./app-process.mjs";
@@ -40,6 +42,10 @@ import {
 vi.setConfig({ hookTimeout: SUITE_TIMEOUT_MS, testTimeout: SUITE_TIMEOUT_MS });
 
 const INTROSPECT_PATH = "/oauth/introspect";
+const ISSUER = "https://auth.example.test";
+const KEY_PAIR = generateKeyPairSync("ed25519");
+const PRIVATE_JWK = { ...KEY_PAIR.privateKey.export({ format: "jwk" }), kid: "orders-proxy-1" };
+const CLIENT_KEY = JSON.stringify(PRIVATE_JWK);
 const RESOURCE = "/resource?q=1";
 
 let fake: FakeProvider;
@@ -77,8 +83,10 @@ const failure = (event: string, level: string, msg: string): Line => ({
 interface Setup {
 	name: string;
 	env: Record<string, string>;
-	/** The `Authorization` the introspection request carries for `token`. */
-	introspectionCredential: (token: string) => string;
+	/** The `Authorization` the introspection request carries for `token`, if any. */
+	introspectionCredential: (token: string) => string | undefined;
+	/** The form fields besides `token` that authenticate the client, if any. */
+	clientForm?: Record<string, unknown>;
 	/** This configuration's column of the README's challenge table. */
 	challenge: { invalidToken: string; invalidRequest: string; otherMethod: string | null };
 	/** "What a provider 401 means" for this configuration. */
@@ -134,6 +142,31 @@ const SETUPS: Setup[] = [
 			"s3%3Acr%20t%2B%2F%25",
 			Buffer.from("orders-proxy:s3%3Acr%20t%2B%2F%25").toString("base64"),
 		],
+	},
+	{
+		name: "with CLIENT_ID / CLIENT_KEY",
+		env: { CLIENT_ID: "orders-proxy", CLIENT_KEY, VALIDATION_PROVIDER_ISSUER: ISSUER },
+		// private_key_jwt: the assertion is in the body, and nothing in the header.
+		introspectionCredential: () => undefined,
+		clientForm: {
+			client_id: "orders-proxy",
+			client_assertion_type: "urn:ietf:params:oauth:client-assertion-type:jwt-bearer",
+			client_assertion: expect.any(String),
+		},
+		challenge: NO_REALM,
+		// The provider refused the proxy, not the caller.
+		provider401: {
+			status: 502,
+			message: "Provider Configuration Error",
+			challenge: null,
+			line: failure(
+				"validation.provider_config_error",
+				"error",
+				"introspect refused the proxy's client credentials",
+			),
+		},
+		// The private key, as configured and as its secret member.
+		secrets: [CLIENT_KEY, PRIVATE_JWK.d as string],
 	},
 	{
 		name: "with VALIDATION_REALM",
@@ -372,9 +405,10 @@ describe.each(SETUPS)("the app in validation mode, $name", (setup) => {
 								path: INTROSPECT_PATH,
 								authorization: setup.introspectionCredential(token),
 								cookie: undefined,
-								// The token in the body, as the README says; the rest of
-								// the form is the client's, pinned by its wire test.
-								form: expect.objectContaining({ token }),
+								// The token in the body, as the README says, and the
+								// client's own fields when it authenticates in the body;
+								// the rest of the form is pinned by the client's wire test.
+								form: expect.objectContaining({ token, ...setup.clientForm }),
 							},
 						],
 			);
@@ -419,6 +453,34 @@ describe.each(SETUPS)("the app in validation mode, $name", (setup) => {
 		expect(providerRequestsFor(String(requestId))).toHaveLength(1);
 		expect(await proxy.linesFor(String(requestId))).toMatchObject([INCOMING]);
 	});
+
+	it.runIf(setup.clientForm !== undefined)(
+		"signs a client assertion the provider verifies with the registered public key, and logs none",
+		async () => {
+			const requestId = "validation-client-assertion";
+			fake.respond(INTROSPECT_PATH, json(200, { active: true }));
+
+			const res = await send(proxy.origin, {
+				path: RESOURCE,
+				headers: { "x-request-id": requestId, authorization: "Bearer tok-assertion" },
+			});
+
+			expect(res.status).toBe(200);
+			const [request] = providerRequestsFor(requestId);
+			const assertion = String(request.form.client_assertion);
+			const { payload, protectedHeader } = await jwtVerify(assertion, KEY_PAIR.publicKey, {
+				issuer: "orders-proxy",
+				subject: "orders-proxy",
+				audience: ISSUER,
+				algorithms: ["EdDSA"],
+			});
+			expect(protectedHeader.kid).toBe("orders-proxy-1");
+			expect((payload.exp ?? 0) - (payload.iat ?? 0)).toBe(60);
+			for (const line of await proxy.linesFor(requestId)) {
+				expect(line.raw).not.toContain(assertion);
+			}
+		},
+	);
 
 	it("wrote every line about a request with its requestId and a validation.* event, nothing else, and no configured secret", async () => {
 		await proxy.linesFor("validation-every-line");
