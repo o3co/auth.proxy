@@ -26,10 +26,10 @@
     "@types/node": "26.6.x",
     "@types/supertest": "^7.2.1",
     "debug": "4.4.3",
-    "supertest": "^7.2.2",
+    "supertest": "^7.3.0",
     "tsx": "^4.23.15",
     "typescript": "5.9.x",
-    "vitest": "^5.0.1"
+    "vitest": "^5.0.2"
   },
   "scripts": {
     "build": "tsc --build",
