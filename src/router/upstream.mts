@@ -99,19 +99,23 @@ const toUpstreamFailure = (err: unknown): unknown => {
 };
 
 /**
- * Fields for the connection to this proxy, never sent on (RFC 9110 §7.6.1):
- * the hop-by-hop fields, and `Proxy-Authorization`, a credential for this hop
- * the proxy does not use. `Connection` itself the library already leaves out,
- * and `Transfer-Encoding`, `Trailer` and `Expect` go with the body's framing.
+ * Fields for the connection to this proxy, never sent on: the hop-by-hop
+ * fields (RFC 9110 §7.6.1), and `Proxy-Authorization` (§11.7.2), a
+ * credential for this hop the proxy does not use. The inbound `Connection`
+ * the library already leaves out, and `Transfer-Encoding`, `Trailer` and
+ * `Expect` go with the body's framing.
  */
-const HOP_BY_HOP = ["keep-alive", "proxy-connection", "te", "upgrade", "proxy-authorization"];
+const THIS_HOP_ONLY = ["keep-alive", "proxy-connection", "te", "upgrade", "proxy-authorization"];
 
 /**
  * Fields the proxy decides what the upstream receives for. A caller naming
  * one in `Connection` does not remove it: that would let the caller take away
- * the token the proxy injected, or the request id it correlates by.
+ * the token the proxy forwards or injected, the request id it correlates by,
+ * or the library's `connection: close`, which keeps one upstream connection
+ * per request. `Content-Length` and `Host` need no entry: the library and
+ * Node set them again after the decorator.
  */
-const PROXY_DECIDED = new Set(["authorization", "x-request-id"]);
+const PROXY_DECIDED = new Set(["authorization", "x-request-id", "connection"]);
 
 /** The field names the inbound `Connection` lists, lower-cased. */
 const connectionOptions = (connection: string | undefined): string[] =>
@@ -179,18 +183,19 @@ const upstreamLimit = (bytes: number): number | string => (bytes === 0 ? "0" : b
  * library sets that `Content-Length`, which then fails.
  *
  * It also keeps the connection's own fields on this hop: the fields the
- * inbound `Connection` names and the hop-by-hop fields (`HOP_BY_HOP`) are not
- * sent on, nor is `Proxy-Authorization`. A caller naming `Authorization` or
- * `x-request-id` in `Connection` does not remove them (`PROXY_DECIDED`).
+ * inbound `Connection` names and the hop-by-hop fields are not sent on, nor
+ * is `Proxy-Authorization` (`THIS_HOP_ONLY`). A caller naming
+ * `Authorization`, `x-request-id` or `Connection` in `Connection` does not
+ * remove them (`PROXY_DECIDED`).
  *
  * What it does not do: choose which fields are forwarded, beyond the body's
  * framing, the expectation and the connection's own fields. Every other
  * choice is made before this stage, on `req.headers`. express-http-proxy
  * copies every inbound header except `connection` and `host` onto the
  * outbound request and sets `connection: close` before any decorator runs
- * (`reqHeaders` in
- * `express-http-proxy/lib/requestOptions.js`). Node lower-cases every inbound
- * header name in `req.headers`, so that copy already carries `authorization`.
+ * (`reqHeaders` in `express-http-proxy/lib/requestOptions.js`). Node
+ * lower-cases every inbound header name in `req.headers`, so that copy
+ * already carries `authorization`.
  * Node's `setHeader` dedups header names case-insensitively and the last
  * write wins, so the decorator's `Authorization` replaces the name, not the
  * value: `Authorization` is sent once, and the `x-request-id` write changes
@@ -198,10 +203,10 @@ const upstreamLimit = (bytes: number): number | string => (bytes === 0 ? "0" : b
  * by deleting the header from `req.headers`, in the `forward_stripped` case of
  * `injectionMiddleware` (`src/modes/injection/router.mts`), rather than here.
  *
- * Why it is kept: the framing above, and header-name casing. HTTP header
- * names are case-insensitive (RFC 9110 §5.1), so a conforming upstream sees
- * no difference; without the
- * decorator an upstream would receive `authorization` in lower case, and one
+ * Why it is kept: the framing above, the connection's own fields, and
+ * header-name casing. HTTP header names are case-insensitive (RFC 9110 §5.1),
+ * so a conforming upstream sees no difference; without the decorator an
+ * upstream would receive `authorization` in lower case, and one
  * that matches the name case-sensitively would miss it. The casing on the
  * wire is pinned by `__tests__/upstream-wire.test.mts`.
  */
@@ -234,7 +239,7 @@ export const createUpstreamProxy = (config: UpstreamStageConfig): RequestHandler
 			for (const name of connectionOptions(srcReq?.headers?.connection)) {
 				if (!PROXY_DECIDED.has(name)) delete proxyReqOpts.headers[name];
 			}
-			for (const name of HOP_BY_HOP) delete proxyReqOpts.headers[name];
+			for (const name of THIS_HOP_ONLY) delete proxyReqOpts.headers[name];
 			return proxyReqOpts;
 		},
 	});

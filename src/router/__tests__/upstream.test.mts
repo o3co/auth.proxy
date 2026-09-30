@@ -12,8 +12,8 @@
  * `connection` and `host` onto the outbound request (lowercase names, as Node
  * parses them) and set `connection: close` (`reqHeaders` in
  * `lib/requestOptions.js`). These tests pin the delta the decorator makes on
- * top of that: the body's inbound framing dropped, and otherwise a
- * casing-only no-op on the wire.
+ * top of that: the body's inbound framing and the connection's own fields
+ * dropped, and otherwise a casing-only no-op on the wire.
  */
 import type { IncomingHttpHeaders } from "node:http";
 import proxy from "express-http-proxy";

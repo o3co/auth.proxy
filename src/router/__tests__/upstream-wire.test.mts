@@ -6,8 +6,8 @@
  *
  * `upstream.test.mts` pins the options the stage hands to the library; this
  * file pins what the reasons for keeping the decorator rest on: how the body
- * is framed on the way to a real upstream, and the header name bytes it
- * receives. Node lower-cases every inbound name in
+ * is framed on the way to a real upstream, which fields reach it, and the
+ * header name bytes it receives. Node lower-cases every inbound name in
  * `req.headers`, and the library copies `req.headers` onto the outbound
  * request, so without the decorator an upstream would read `authorization`.
  * The names are read from `rawHeaders`, because `req.headers` lower-cases them

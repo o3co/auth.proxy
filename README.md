@@ -322,7 +322,7 @@ Whatever else reaches the end of a mode's router unanswered is refused in the sa
 
 ### Fields that stay on the hop to the proxy
 
-The fields that belong to the caller's connection to the proxy are not sent upstream (RFC 9110 §7.6.1): those the inbound `Connection` names, `Keep-Alive`, `TE`, `Upgrade` and `Proxy-Connection`. Neither is `Proxy-Authorization`, a credential for this hop the proxy does not use. Naming `Authorization` or `x-request-id` in `Connection` does not remove them: what the upstream receives for those is the proxy's to decide — the inbound token in validation mode, the minted one in injection mode.
+The fields that belong to the caller's connection to the proxy are not sent upstream (RFC 9110 §7.6.1): those the inbound `Connection` names, `Keep-Alive`, `TE`, `Upgrade` and `Proxy-Connection`. Nor is `Proxy-Authorization`, a credential for this hop the proxy does not use (§11.7.2). Naming `Authorization`, `x-request-id` or `Connection` itself in `Connection` does not remove them: what the upstream receives for those is the proxy's to decide — the inbound token in validation mode; in injection mode the minted one, or whatever the mode left in place (see [Inbound Authorization headers](#inbound-authorization-headers)); and a connection closed after the one request.
 
 ### Client authentication with a private key (`private_key_jwt`)
 
