@@ -35,6 +35,7 @@
  */
 
 import { z } from "zod";
+import { parseByteSize } from "../src/byte-size.mjs";
 import { type ClientKey, ClientKeyError, parseClientKey } from "../src/oauth/private-key-jwt.mjs";
 
 /**
@@ -293,7 +294,15 @@ export const AppConfigSchema = z.object({
 		hostname: z.string().default("0.0.0.0"),
 		port: z.coerce.number().default(80),
 		pathPrefix: z.string().default("/"),
-		bodyLimitSize: z.string().default("10mb"),
+		// Read once more by the router, which enforces it; a value the body
+		// reader would misread is refused here rather than at the first request.
+		bodyLimitSize: z
+			.string()
+			.refine((value) => parseByteSize(value) !== null, {
+				message:
+					"http.bodyLimitSize must be a byte size: a number, optionally followed by b, kb, mb, gb, tb or pb (1kb = 1024 bytes)",
+			})
+			.default("10mb"),
 		cors: z.object({
 			origin: z.object({
 				pattern: z.string().nullable().default(null),

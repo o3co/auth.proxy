@@ -22,6 +22,7 @@
 
 import type { RequestHandler } from "express";
 import proxy from "express-http-proxy";
+import { bodyLimitBytes } from "./body-limit.mjs";
 
 /** The two config fields the stage reads. `AppConfig` satisfies it structurally. */
 export interface UpstreamStageConfig {
@@ -30,9 +31,20 @@ export interface UpstreamStageConfig {
 }
 
 /**
- * The upstream proxy stage — the last middleware of either mode's router. It
- * is assembly (built from `upstream.baseURL` and `http.bodyLimitSize`), not a
- * mode's decision, so both routers mount this one function.
+ * The byte count in the form the library keeps. It resolves `limit || "1mb"`,
+ * so zero goes as `"0"`, which its body reader reads as 0; every other count
+ * goes as the number, since a large one's string is exponent notation, which
+ * the reader would read as 1.
+ */
+const upstreamLimit = (bytes: number): number | string => (bytes === 0 ? "0" : bytes);
+
+/**
+ * The upstream proxy stage — the last stage of either mode's router before
+ * its error handler. It is assembly (built from `upstream.baseURL` and
+ * `http.bodyLimitSize`, in bytes), not a mode's decision, so both routers
+ * mount this one function. It reads the request body against that limit; a
+ * body over it that declared no length is refused here, as an error the
+ * router's error handler answers.
  *
  * What the decorator does. When `req.headers.authorization` is present as this
  * stage runs — empty included, as the injection paths read presence — it sets
@@ -59,9 +71,10 @@ export interface UpstreamStageConfig {
  * that matches the name case-sensitively would miss it. The casing on the
  * wire is pinned by `__tests__/upstream-wire.test.mts`.
  */
+
 export const createUpstreamProxy = (config: UpstreamStageConfig): RequestHandler =>
 	proxy(config.upstream.baseURL, {
-		limit: config.http.bodyLimitSize,
+		limit: upstreamLimit(bodyLimitBytes(config)),
 		proxyReqOptDecorator: async (proxyReqOpts, srcReq) => {
 			// Presence, as the injection paths read it: an empty
 			// `Authorization:` is re-set in canonical casing too.

@@ -975,3 +975,66 @@ describe("the app in injection mode, with client keys", () => {
 		}
 	});
 });
+
+// `HTTP_BODY_LIMIT_SIZE` as the README's Request body limit section states it: a
+// request that declares a body over the limit is refused before a token is
+// minted; one that does not declare its length is refused when the body is
+// read, after the token. Both answers are the refusal shape, logged.
+describe("the app in injection mode, with HTTP_BODY_LIMIT_SIZE=1kb", () => {
+	let proxy: ProxyProcess;
+	const TOO_LARGE = { error: "body_too_large", error_description: "request body over the limit" };
+	const OVER_LIMIT = line("injection.body_too_large", "info", { msg: "request body over the limit" });
+
+	beforeAll(async () => {
+		proxy = await startProxy({ ...sessionEnv(), HTTP_BODY_LIMIT_SIZE: "1kb" }, upstream);
+	});
+	afterAll(async () => {
+		await proxy?.stop();
+	});
+
+	it("refuses a declared body over the limit 413 before minting a token, logged injection.body_too_large", async () => {
+		const requestId = "injection-body-declared";
+		fake.respond(TOKEN_PATH, json(500, { error: "must_not_be_asked" }));
+
+		const res = await send(proxy.origin, {
+			method: "POST",
+			path: "/orders",
+			headers: { "x-request-id": requestId, cookie: "sid=sess-body-declared", "content-type": "text/plain" },
+			body: "x".repeat(4096),
+		});
+
+		expect(res.status).toBe(413);
+		expect(res.json()).toEqual(TOO_LARGE);
+		expect(await proxy.linesFor(requestId)).toMatchObject([
+			INCOMING,
+			{ ...OVER_LIMIT, contentLength: 4096, limitBytes: 1024 },
+		]);
+		expect(grantsFor(requestId)).toEqual([]);
+		expect(upstream.receivedFor(requestId)).toEqual([]);
+	});
+
+	it("refuses a chunked body over the limit 413 once the token is minted, logged injection.body_too_large", async () => {
+		const requestId = "injection-body-chunked";
+		fake.respond(TOKEN_PATH, issued("minted-chunked"));
+
+		const res = await send(proxy.origin, {
+			method: "POST",
+			path: "/orders",
+			headers: {
+				"x-request-id": requestId,
+				cookie: "sid=sess-body-chunked",
+				"content-type": "text/plain",
+				"transfer-encoding": "chunked",
+			},
+			body: "x".repeat(4096),
+		});
+
+		expect(res.status).toBe(413);
+		expect(res.json()).toEqual(TOO_LARGE);
+		const lines = await proxy.linesFor(requestId);
+		expect(lines[0]).toMatchObject(INCOMING);
+		expect(lines.at(-1)).toMatchObject({ ...OVER_LIMIT, limitBytes: 1024 });
+		expect(grantsFor(requestId)).toEqual([sessionGrant("sess-body-chunked")]);
+		expect(upstream.receivedFor(requestId)).toEqual([]);
+	});
+});

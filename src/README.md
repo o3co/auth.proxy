@@ -18,10 +18,10 @@ The whole proxy process. Wire behaviour is in the [root README](../README.md); e
 
 No README of its own; this is its description.
 
-- **Role:** route assembly that is not a mode — the liveness probe, which `app.mts` mounts, and the upstream proxy stage, the last middleware of both mode routers.
-- **Owns:** the `/_healthcheck` path and its answer; building the upstream proxy from `upstream.baseURL` and `http.bodyLimitSize`.
-- **Does not own:** what reaches upstream — each mode decides that on `req.headers` before the stage; the mode routers themselves (`modes/*/router.mts`).
-- **Why separate:** both are assembly with no decision in them (#95 F18).
+- **Role:** route assembly that is not a mode — the liveness probe, which `app.mts` mounts, and the stages both mode routers share: the body limit ahead of the mode, the upstream proxy stage after it, and the error handler that ends the router.
+- **Owns:** the `/_healthcheck` path and its answer; `http.bodyLimitSize` as the one byte count the body limit, the upstream proxy and the error handler enforce; building the upstream proxy from `upstream.baseURL`; which requests the shared stages refuse and with which status — a body over the limit is `413`, anything else that reaches the end of a mode router its own status or `500` — and the `ModeRefusals` contract ([`refusal.mts`](router/refusal.mts)) a mode says those refusals through.
+- **Does not own:** what reaches upstream — each mode decides that on `req.headers` before the stage; how a refusal is logged and what body answers it, which are the mode's vocabulary; the mode routers themselves (`modes/*/router.mts`).
+- **Why separate:** none of it is a mode's decision (#95 F18). The body limit decides only on a declared length, and no stage decides anything about a credential.
 
 ### `src/modes`
 
@@ -38,10 +38,10 @@ Code both modes need sits outside `modes/`, because neither mode may import the 
 
 ## Dependencies
 
-- `modes/*` may import the `src/` root's shared modules, `express/`, `oauth/`, `router/upstream.mts` and `config/`. Neither mode imports the other.
+- `modes/*` may import the `src/` root's shared modules, `express/`, `oauth/`, `router/` except the healthcheck, and `config/`. Neither mode imports the other.
 - Nothing under `express/`, `oauth/`, `router/` or `config/` imports a mode, and the root's shared modules import no mode. In production code, only `app-internal.mts` imports a mode, to select its router.
-- `express/` and `oauth/` import nothing else in `src/`. `config/` imports `oauth/private-key-jwt.mts`, to read a client key at boot.
-- The test support in `__tests__/` that is not itself a test is imported by tests only, never by production code: the fake provider ([`fake-provider.mts`](__tests__/fake-provider.mts)), a local `node:http` server the provider clients reach through the real `fetch`, and the controlled provider timeout beside it (#143); and, for the composition tests, the entry point run in a child process ([`app-process.mts`](__tests__/app-process.mts), with the preload [`child-preload.mts`](__tests__/child-preload.mts)) and a recording upstream ([`recording-upstream.mts`](__tests__/recording-upstream.mts)) (#144).
+- `express/` and `oauth/` import nothing else in `src/`. `config/` imports `oauth/private-key-jwt.mts`, to read a client key at boot, and `byte-size.mts`, to read `http.bodyLimitSize`.
+- The test support in `__tests__/` that is not itself a test is imported by tests only, never by production code: the fake provider ([`fake-provider.mts`](__tests__/fake-provider.mts)), a local `node:http` server the provider clients reach through the real `fetch`, and the controlled provider timeout beside it (#143); and, for the composition tests, the entry point run in a child process ([`app-process.mts`](__tests__/app-process.mts), with the preload [`child-preload.mts`](__tests__/child-preload.mts)) and a recording upstream ([`recording-upstream.mts`](__tests__/recording-upstream.mts)) (#144); and a client that sends a chunked body ([`post-chunked.mts`](__tests__/post-chunked.mts)).
 
 ## Invariants
 

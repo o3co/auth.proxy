@@ -16,7 +16,8 @@
 
 /**
  * The injection-mode router: request id, the `incoming request` line, the
- * injection middleware, then the shared upstream stage.
+ * shared body limit, the injection middleware, the shared upstream stage,
+ * then the shared error handler.
  *
  * `createRouter` builds the session path's cache, flight table and grant
  * client and — with the exchange on — the exchange's context, client, cache
@@ -31,6 +32,8 @@ import { createRequestIdMiddleware } from "../../express/requestId.mjs";
 import type { Logger } from "../../logger.mjs";
 import defaultLogger from "../../logger.mjs";
 import type { ClientAuthentication } from "../../oauth/client-authentication.mjs";
+import { bodyLimitBytes, createBodyLimitGuard } from "../../router/body-limit.mjs";
+import { createErrorHandler } from "../../router/error-handler.mjs";
 import { createUpstreamProxy } from "../../router/upstream.mjs";
 import { createSingleFlight } from "../../single-flight.mjs";
 import { decideInjection, type InjectionDeps } from "./decision.mjs";
@@ -42,6 +45,7 @@ import {
 } from "./exchange.mjs";
 import { createJwtBearerClient } from "./jwt-bearer-client.mjs";
 import { createSessionGrantClient } from "./session-grant-client.mjs";
+import { stageRefusals } from "./stage-refusals.mjs";
 import { createTokenCache } from "./token-cache.mjs";
 
 type InjectionConfig = Extract<AppConfig["auth"], { mode: "injection" }>;
@@ -195,8 +199,10 @@ export const createRouter = ({
 		throw new Error("deps.exchange supplied while auth.injection.exchange.enabled is false");
 	}
 
+	const limitBytes = bodyLimitBytes(config);
 	const router = express.Router();
 	const logger = overrides.logger ?? defaultLogger;
+	const refusals = stageRefusals(logger);
 	const exchange = cfg.exchange.enabled
 		? buildExchangeDeps(cfg, cfg.exchange, overrides.exchange ?? {}, logger)
 		: null;
@@ -224,8 +230,10 @@ export const createRouter = ({
 			);
 			next();
 		})
+		.use(createBodyLimitGuard({ limitBytes, refusals }))
 		.use(injectionMiddleware(deps, exchange))
-		.use(createUpstreamProxy(config));
+		.use(createUpstreamProxy(config))
+		.use(createErrorHandler({ limitBytes, refusals }));
 
 	return router;
 };

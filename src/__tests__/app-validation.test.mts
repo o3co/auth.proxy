@@ -498,3 +498,78 @@ describe.each(SETUPS)("the app in validation mode, $name", (setup) => {
 		}
 	});
 });
+
+// `HTTP_BODY_LIMIT_SIZE` as the README's Request body limit section states it: a
+// request that declares a body over the limit is refused before its token is
+// introspected; one that does not declare its length is refused when the body
+// is read, after the token. Both answers are the refusal shape, logged.
+describe("the app in validation mode, with HTTP_BODY_LIMIT_SIZE=1kb", () => {
+	let proxy: ProxyProcess;
+	const TOO_LARGE = { code: 413, message: "Payload Too Large" };
+	const OVER_LIMIT = line413();
+
+	beforeAll(async () => {
+		proxy = await startProxy(
+			{
+				AUTH_MODE: "validation",
+				INTROSPECT_URL: fake.url(INTROSPECT_PATH),
+				LOG_LEVEL: "debug",
+				INTROSPECT_TIMEOUT_MS: "60000",
+				HTTP_BODY_LIMIT_SIZE: "1kb",
+			},
+			upstream,
+		);
+	});
+	afterAll(async () => {
+		await proxy?.stop();
+	});
+
+	it("refuses a declared body over the limit 413 before introspecting the token, logged validation.body_too_large", async () => {
+		const requestId = "validation-body-declared";
+		fake.respond(INTROSPECT_PATH, json(500, { error: "must_not_be_asked" }));
+
+		const res = await send(proxy.origin, {
+			method: "POST",
+			path: "/orders",
+			headers: { "x-request-id": requestId, authorization: "Bearer tok-declared", "content-type": "text/plain" },
+			body: "x".repeat(4096),
+		});
+
+		expect(res.status).toBe(413);
+		expect(res.json()).toEqual(TOO_LARGE);
+		expect(await proxy.linesFor(requestId)).toMatchObject([
+			INCOMING,
+			{ ...OVER_LIMIT, contentLength: 4096, limitBytes: 1024 },
+		]);
+		expect(providerRequestsFor(requestId)).toEqual([]);
+		expect(upstream.receivedFor(requestId)).toEqual([]);
+	});
+
+	it("refuses a chunked body over the limit 413 once the token is introspected, logged validation.body_too_large", async () => {
+		const requestId = "validation-body-chunked";
+		fake.respond(INTROSPECT_PATH, json(200, { active: true }));
+
+		const res = await send(proxy.origin, {
+			method: "POST",
+			path: "/orders",
+			headers: {
+				"x-request-id": requestId,
+				authorization: "Bearer tok-chunked",
+				"content-type": "text/plain",
+				"transfer-encoding": "chunked",
+			},
+			body: "x".repeat(4096),
+		});
+
+		expect(res.status).toBe(413);
+		expect(res.json()).toEqual(TOO_LARGE);
+		expect(await proxy.linesFor(requestId)).toMatchObject([INCOMING, { ...OVER_LIMIT, limitBytes: 1024 }]);
+		expect(providerRequestsFor(requestId)).toHaveLength(1);
+		expect(upstream.receivedFor(requestId)).toEqual([]);
+	});
+});
+
+/** The body limit's refusal line. */
+function line413(): Line {
+	return { event: "validation.body_too_large", level: "info", msg: "request body over the limit" };
+}

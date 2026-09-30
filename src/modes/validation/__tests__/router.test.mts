@@ -3,11 +3,12 @@
 
 import { once } from "node:events";
 import { createServer, request as httpRequest, type IncomingHttpHeaders, type Server } from "node:http";
-import type { AddressInfo } from "node:net";
+import { type AddressInfo, connect } from "node:net";
 import express from "express";
 import request from "supertest";
 import { afterEach, beforeEach, describe, expect, it, vi } from "vitest";
 import type { AppConfig } from "../../../../config/application.schema.mjs";
+import { postChunked } from "../../../__tests__/post-chunked.mjs";
 import type { Logger } from "../../../logger.mjs";
 import logger from "../../../logger.mjs";
 import { createRouter } from "../router.mjs";
@@ -376,5 +377,141 @@ describe("validation router", () => {
 			);
 			expect(singletonError).not.toHaveBeenCalled();
 		});
+	});
+
+	// `http.bodyLimitSize` is enforced before the token is introspected when
+	// the request declares its length, and by the upstream stage, once the
+	// token has been checked, when it does not. Either way the answer is a
+	// 413 in the refusal shape and nothing reaches the upstream.
+	describe("the body limit", () => {
+		const limitedApp = () => {
+			const config = makeConfig(upstreamPort);
+			return express().use(
+				createRouter({ config: { ...config, http: { ...config.http, bodyLimitSize: "1kb" } } }),
+			);
+		};
+
+		it("refuses a declared length over http.bodyLimitSize 413 without introspecting the token", async () => {
+			const fetchMock = vi.fn(async () => Response.json({ active: true }));
+			vi.stubGlobal("fetch", fetchMock);
+
+			const res = await request(limitedApp())
+				.post("/protected")
+				.set("Authorization", "Bearer t")
+				.set("content-type", "application/octet-stream")
+				.send(Buffer.alloc(2048));
+
+			expect(res.status).toBe(413);
+			expect(res.body).toEqual({ code: 413, message: "Payload Too Large" });
+			expect(res.headers["www-authenticate"]).toBeUndefined();
+			expect(fetchMock).not.toHaveBeenCalled();
+			expect(upstreamCalls).toBe(0);
+		});
+
+		it("refuses a chunked body over the limit 413 in the refusal shape, once the token is checked", async () => {
+			const fetchMock = vi.fn(async () => Response.json({ active: true }));
+			vi.stubGlobal("fetch", fetchMock);
+
+			const res = await postChunked(limitedApp(), "/protected", { Authorization: "Bearer t" }, [
+				Buffer.alloc(1024),
+				Buffer.alloc(1024),
+			]);
+
+			expect(res.status).toBe(413);
+			expect(JSON.parse(res.text)).toEqual({ code: 413, message: "Payload Too Large" });
+			expect(fetchMock).toHaveBeenCalledTimes(1);
+			expect(upstreamCalls).toBe(0);
+		});
+
+		it("refuses any chunked body under a zero limit", async () => {
+			vi.stubGlobal("fetch", vi.fn(async () => Response.json({ active: true })));
+			const config = makeConfig(upstreamPort);
+			const app = express().use(
+				createRouter({ config: { ...config, http: { ...config.http, bodyLimitSize: "0" } } }),
+			);
+
+			const res = await postChunked(app, "/protected", { Authorization: "Bearer t" }, [Buffer.from("x")]);
+
+			expect(res.status).toBe(413);
+			expect(upstreamCalls).toBe(0);
+		});
+
+		// The body reader stops reading when it refuses; the rest of the body
+		// is drained, so a keep-alive connection answers its next request.
+		it("drains a refused chunked body, so the connection answers its next request", async () => {
+			vi.stubGlobal("fetch", vi.fn(async () => Response.json({ active: true })));
+			const server = limitedApp().listen(0, "127.0.0.1");
+			await once(server, "listening");
+			try {
+				const { port } = server.address() as AddressInfo;
+				const socket = connect(port, "127.0.0.1");
+				let received = "";
+				socket.on("data", (part: Buffer) => {
+					received += part.toString("latin1");
+				});
+				const answers = () => received.match(/HTTP\/1\.1 \d{3}/g) ?? [];
+				const until = async (count: number) => {
+					for (let waited = 0; answers().length < count && waited < 3000; waited += 20) {
+						await new Promise((resolve) => setTimeout(resolve, 20));
+					}
+				};
+				const body = Buffer.alloc(200 * 1024, "x");
+				socket.write(
+					"POST /protected HTTP/1.1\r\nHost: t\r\nAuthorization: Bearer t\r\nTransfer-Encoding: chunked\r\n\r\n",
+				);
+				socket.write(`${body.length.toString(16)}\r\n`);
+				socket.write(body);
+				socket.write("\r\n0\r\n\r\n");
+				await until(1);
+				socket.write("GET /protected HTTP/1.1\r\nHost: t\r\nAuthorization: Bearer t\r\n\r\n");
+				await until(2);
+				socket.destroy();
+
+				expect(answers()).toEqual(["HTTP/1.1 413", "HTTP/1.1 200"]);
+			} finally {
+				server.closeAllConnections();
+				server.close();
+			}
+		});
+
+		it("refuses to build with an http.bodyLimitSize that is not a byte size", () => {
+			const config = makeConfig(upstreamPort);
+			expect(() =>
+				createRouter({ config: { ...config, http: { ...config.http, bodyLimitSize: "ten" } } }),
+			).toThrow(/http\.bodyLimitSize must be a byte size/);
+		});
+
+		it("forwards a body at the limit", async () => {
+			vi.stubGlobal("fetch", vi.fn(async () => Response.json({ active: true })));
+
+			const res = await request(limitedApp())
+				.post("/protected")
+				.set("Authorization", "Bearer t")
+				.set("content-type", "application/octet-stream")
+				.send(Buffer.alloc(1024));
+
+			expect(res.status).toBe(200);
+			expect(upstreamCalls).toBe(1);
+		});
+	});
+
+	// Whatever no stage answered reaches the router's error handler and is
+	// refused in this mode's shape: an upstream that refuses the connection
+	// has no status of its own, so it is a 500.
+	it("refuses an unreachable upstream 500 in the refusal shape", async () => {
+		vi.stubGlobal("fetch", vi.fn(async () => Response.json({ active: true })));
+		const closed = createServer();
+		closed.listen(0, "127.0.0.1");
+		await once(closed, "listening");
+		const closedPort = (closed.address() as AddressInfo).port;
+		closed.close();
+		await once(closed, "close");
+
+		const res = await request(express().use(createRouter({ config: makeConfig(closedPort) })))
+			.get("/protected")
+			.set("Authorization", "Bearer t");
+
+		expect(res.status).toBe(500);
+		expect(res.body).toEqual({ code: 500, message: "Internal Server Error" });
 	});
 });

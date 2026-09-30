@@ -16,7 +16,8 @@
 
 /**
  * The validation-mode router: request id, the `incoming request` line, the
- * validation middleware, then the shared upstream stage.
+ * shared body limit, the validation middleware, the shared upstream stage,
+ * then the shared error handler.
  *
  * `createRouter` builds the introspector over a client, a cache and a flight
  * table of its own (`buildIntrospector`), or takes one from `deps.introspect`.
@@ -27,6 +28,8 @@ import express from "express";
 import type { AppConfig } from "../../../config/application.schema.mjs";
 import { createRequestIdMiddleware } from "../../express/requestId.mjs";
 import defaultLogger from "../../logger.mjs";
+import { bodyLimitBytes, createBodyLimitGuard } from "../../router/body-limit.mjs";
+import { createErrorHandler } from "../../router/error-handler.mjs";
 import { createUpstreamProxy } from "../../router/upstream.mjs";
 import { createSingleFlight } from "../../single-flight.mjs";
 import {
@@ -42,6 +45,7 @@ import {
 	createIntrospectionClient,
 	type IntrospectionResult,
 } from "./introspection-client.mjs";
+import { stageRefusals } from "./stage-refusals.mjs";
 
 type ValidationConfig = Extract<AppConfig["auth"], { mode: "validation" }>;
 
@@ -143,8 +147,10 @@ export const createRouter = ({
 	}
 	const validation: ValidationConfig["validation"] = config.auth.validation;
 
+	const limitBytes = bodyLimitBytes(config);
 	const router = express.Router();
 	const logger = overrides.logger ?? defaultLogger;
+	const refusals = stageRefusals(logger);
 	const deps: ValidationDeps = {
 		introspect: overrides.introspect ?? buildIntrospector(validation),
 		logger,
@@ -164,8 +170,10 @@ export const createRouter = ({
 			);
 			return next();
 		})
+		.use(createBodyLimitGuard({ limitBytes, refusals }))
 		.use(validationMiddleware(deps, { realm: validation.realm }))
-		.use(createUpstreamProxy(config));
+		.use(createUpstreamProxy(config))
+		.use(createErrorHandler({ limitBytes, refusals }));
 
 	return router;
 };

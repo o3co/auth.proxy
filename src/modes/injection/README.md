@@ -15,7 +15,8 @@ Injection mode turns a session cookie into the outbound `Authorization: Bearer` 
 - what is logged about each request on this path.
 
 **Does not own:**
-- the upstream proxy stage ([`src/router`](../../router/upstream.mts)) and the request id ([`src/express`](../../express/README.md));
+- the stages it shares with the other mode ([`src/router`](../../router/refusal.mts)): the body limit ahead of the injection middleware, the upstream proxy stage and the error handler. [`stage-refusals.mts`](stage-refusals.mts) says their refusals in this mode's vocabulary — the events below, the `{ "error", "error_description" }` body — but what is refused, and with which status, is theirs;
+- the request id ([`src/express`](../../express/README.md));
 - the coalescing primitive ([`single-flight.mts`](../../single-flight.mts)) and the bounded body read ([`response-body.mts`](../../response-body.mts)), which sit at `src/` root because both modes use them;
 - configuration defaults ([`config/`](../../../config/README.md));
 - verifying the inbound assertion, which is the provider's job. This side reads the assertion unverified, and uses its claims only to refuse early or to shorten a cache entry.
@@ -33,7 +34,7 @@ Injection mode turns a session cookie into the outbound `Authorization: Bearer` 
    - left as received (`forward`).
 
    With the exchange enabled, an inbound `Authorization` is never forwarded as received: it is exchanged, or the request is refused. Pinned by [`router.test.mts`](__tests__/router.test.mts) and [`exchange-router.test.mts`](__tests__/exchange-router.test.mts).
-3. **Credential bytes are not logged.** Log lines carry the request id and bounded classes, never a cookie value, an assertion, an issued token or the client secret. A provider's `error` and `error_description` are logged or relayed only after the sanitisers in [`provider-error.mts`](provider-error.mts) have run. The sanitisers refuse text containing any credential the request sent, whatever its length, because the proxy does not choose how long a session cookie value is. The unverified `iss` is not logged. The one exception is an unclassified throw, which is logged as `String(err)`. Pinned by [`provider-error.test.mts`](__tests__/provider-error.test.mts), [`cookie-extractor.test.mts`](__tests__/cookie-extractor.test.mts), [`session-grant-client.test.mts`](__tests__/session-grant-client.test.mts), [`jwt-bearer-client.test.mts`](__tests__/jwt-bearer-client.test.mts), [`exchange-decision.test.mts`](__tests__/exchange-decision.test.mts), [`router.test.mts`](__tests__/router.test.mts) and [`exchange-router.test.mts`](__tests__/exchange-router.test.mts).
+3. **Credential bytes are not logged.** Log lines carry the request id and bounded classes, never a cookie value, an assertion, an issued token or the client secret. A provider's `error` and `error_description` are logged or relayed only after the sanitisers in [`provider-error.mts`](provider-error.mts) have run. The sanitisers refuse text containing any credential the request sent, whatever its length, because the proxy does not choose how long a session cookie value is. The unverified `iss` is not logged. Two lines log an error's own text: an unclassified throw, as `String(err)`, and `injection.request_failed`, as the message of whatever reached the end of the router — a refused connection, a body that ended early — which carries nothing the request sent. Pinned by [`provider-error.test.mts`](__tests__/provider-error.test.mts), [`cookie-extractor.test.mts`](__tests__/cookie-extractor.test.mts), [`session-grant-client.test.mts`](__tests__/session-grant-client.test.mts), [`jwt-bearer-client.test.mts`](__tests__/jwt-bearer-client.test.mts), [`exchange-decision.test.mts`](__tests__/exchange-decision.test.mts), [`router.test.mts`](__tests__/router.test.mts) and [`exchange-router.test.mts`](__tests__/exchange-router.test.mts).
 4. **Success from the provider is a `200` with a token, and nothing else.** Both clients read only a `200` as success (RFC 6749 §5.1). It must carry a non-empty `access_token`, and on the exchange a Bearer `token_type`. Any other `2xx` is `provider_unavailable`. Every provider body is read against a bound, or released unread when the status alone decides the answer:
    - a token response is read up to `MAX_TOKEN_BODY_BYTES` ([`token-endpoint.mts`](token-endpoint.mts));
    - an error body is read up to `MAX_ERROR_BODY_BYTES` ([`provider-error.mts`](provider-error.mts)).
@@ -59,15 +60,18 @@ Injection mode turns a session cookie into the outbound `Authorization: Bearer` 
      - `credential_ambiguous` (400);
      - `credential_unsupported` (401);
      - `credential_rejected` (401), for an issuer outside `allowedIssuers`.
+   - **Refusals by the stages the modes share** ([`src/router`](../../router/refusal.mts)), said in this mode's shape by [`stage-refusals.mts`](stage-refusals.mts):
+     - `body_too_large` (413), a body over `http.bodyLimitSize` — before any provider call when the request declares its length, after the token is minted when it does not;
+     - `request_failed`, with the error's own `4xx` / `5xx` status or `500`, for whatever else no stage answered.
    - **A provider `401`** on the session path is `401 session_required`, unless its `error` is `invalid_client`: that means the proxy's own `clientId` was refused, and it is answered `502 provider_config_error` (#95 F47). On the exchange, a provider `401` is always `502 provider_config_error`.
    - **Everything else.** A timeout or a network error before the response arrives, or an unclassified throw, is `502 provider_unavailable`. A failure while reading a `200`'s body — a timeout or a dropped connection mid-body — is `502 provider_invalid_response`.
 
-   Each code maps to exactly one log event and level, and a code the union does not declare is logged rather than dropped. Pinned by [`decision.test.mts`](__tests__/decision.test.mts), [`exchange-decision.test.mts`](__tests__/exchange-decision.test.mts), [`router.test.mts`](__tests__/router.test.mts), [`exchange-router.test.mts`](__tests__/exchange-router.test.mts) and the two client tests.
+   Each code maps to exactly one log event and level — except `request_failed`, at info for a `4xx` and at error otherwise — and a code the union does not declare is logged rather than dropped. Pinned by [`decision.test.mts`](__tests__/decision.test.mts), [`exchange-decision.test.mts`](__tests__/exchange-decision.test.mts), [`router.test.mts`](__tests__/router.test.mts), [`exchange-router.test.mts`](__tests__/exchange-router.test.mts) and the two client tests.
 10. **The router owns only what it builds.** `createRouter({ config, deps })` refuses any mode other than `"injection"`. For each dependency, it takes what the caller supplied under `deps` or `deps.exchange`, and builds the rest. `deps.exchange` is refused while the exchange is disabled. Anything the router built lives in its closure until process exit, and nothing clears it; anything the caller supplied remains the caller's. Pinned by [`router.test.mts`](__tests__/router.test.mts) and [`exchange-router.test.mts`](__tests__/exchange-router.test.mts). That shutdown leaves the caches untouched is not tested.
 
 ## Log events
 
-Every line about a request carries `requestId` and one of these `event`s, at the level shown. The router writes `injection.incoming_request` (info) for every request, and then the decisions write the rest, in the order they happen. No line carries a credential (invariant 3). A failure line's `error` is a string. On the exchange path, a failure line also carries `providerError`: the provider's `error`, if it passed `sanitizeErrorCode`, and otherwise `null`.
+Every line about a request carries `requestId` and one of these `event`s, at the level shown. The router writes `injection.incoming_request` (info) for every request, and then the decisions write the rest, in the order they happen; a refusal by a stage the modes share is written last. No line carries a credential (invariant 3). A failure line's `error` is a string. On the exchange path, a failure line also carries `providerError`: the provider's `error`, if it passed `sanitizeErrorCode`, and otherwise `null`.
 
 Session path ([`decideInjection`](decision.mts)):
 
@@ -84,6 +88,13 @@ Session path ([`decideInjection`](decision.mts)):
 | `injection.session_unauthorized` | info | `session_unauthorized`, answered `401 session_required`. | `error` |
 | `injection.provider_config_error`, `injection.provider_invalid_response`, `injection.provider_unavailable` | error | The code of the same name. A code the union does not declare is logged as `provider_unavailable`. | `error` |
 | `injection.unexpected_error` | error | A throw that is not a `SessionGrantError`. | `error` |
+
+Shared stages ([`stage-refusals.mts`](stage-refusals.mts), saying what [`src/router`](../../router/refusal.mts) refuses):
+
+| Event | Level | When | Fields |
+| --- | --- | --- | --- |
+| `injection.body_too_large` | info | A body over `http.bodyLimitSize`: `413 body_too_large`. | `limitBytes`; `contentLength` when the request declared one |
+| `injection.request_failed` | info for a `4xx`, error otherwise | Anything else no stage answered — a body that ended early, an upstream that refused the connection: `request_failed` with the error's own status, or `500`. | `error` |
 
 Exchange path ([`decideExchange`](exchange.mts)). An exchanged token replaces `Authorization` by design, so this path writes no `authorization_override`:
 
@@ -105,7 +116,7 @@ Pinned by [`decision.test.mts`](__tests__/decision.test.mts), [`exchange-decisio
 
 ## Dependencies
 
-- **Within `src/`:** [`router/upstream.mts`](../../router/upstream.mts), `express/requestId.mts`, [`oauth/client-authentication.mts`](../../oauth/client-authentication.mts) (the exchange's client authentication, and the session grant's when it holds a key; the key's type from `oauth/private-key-jwt.mts`), and the root modules `single-flight.mts`, `response-body.mts` and `logger.mts`. Only the router takes the logger singleton; the decisions see just the `Logger` type.
+- **Within `src/`:** [`router/upstream.mts`](../../router/upstream.mts), `router/body-limit.mts`, `router/error-handler.mts` and the `ModeRefusals` contract in `router/refusal.mts`, which [`stage-refusals.mts`](stage-refusals.mts) implements, `express/requestId.mts`, [`oauth/client-authentication.mts`](../../oauth/client-authentication.mts) (the exchange's client authentication, and the session grant's when it holds a key; the key's type from `oauth/private-key-jwt.mts`), and the root modules `single-flight.mts`, `response-body.mts` and `logger.mts`. Only the router takes the logger singleton; the decisions see just the `Logger` type.
 - **Outside `src/`:** `config/application.schema.mts`, as types only.
 - **Packages:** `express` and `node:crypto`.
 - **Never imported:** `src/modes/validation`, which in turn never imports this directory. This mode does not use `express/bearer.mts`, because the exchange parses `Authorization` with its own grammar.
