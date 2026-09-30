@@ -423,6 +423,19 @@ describe("validation router", () => {
 			expect(upstreamCalls).toBe(0);
 		});
 
+		it("refuses any chunked body under a zero limit", async () => {
+			vi.stubGlobal("fetch", vi.fn(async () => Response.json({ active: true })));
+			const config = makeConfig(upstreamPort);
+			const app = express().use(
+				createRouter({ config: { ...config, http: { ...config.http, bodyLimitSize: "0" } } }),
+			);
+
+			const res = await postChunked(app, "/protected", { Authorization: "Bearer t" }, [Buffer.from("x")]);
+
+			expect(res.status).toBe(413);
+			expect(upstreamCalls).toBe(0);
+		});
+
 		it("forwards a body at the limit", async () => {
 			vi.stubGlobal("fetch", vi.fn(async () => Response.json({ active: true })));
 

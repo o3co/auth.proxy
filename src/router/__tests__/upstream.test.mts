@@ -82,8 +82,16 @@ describe("createUpstreamProxy", () => {
 		expect(proxyMock).toHaveBeenCalledWith("http://upstream.test:65531", expect.anything());
 		const options = builtOptions();
 		expect(Object.keys(options).sort()).toEqual(["limit", "proxyReqOptDecorator"]);
-		expect(options.limit).toBe(7331 * 1024);
+		expect(options.limit).toBe(String(7331 * 1024));
 		expect(options.proxyReqOptDecorator).toEqual(expect.any(Function));
+	});
+
+	// The library resolves `limit || "1mb"`, so a numeric 0 would become a
+	// 1 MiB limit; the byte count goes as a string, which it reads the same.
+	it("passes a zero limit in a form the library keeps as zero", () => {
+		proxyMock.mockClear();
+		createUpstreamProxy({ ...config, http: { bodyLimitSize: "0" } });
+		expect(builtOptions().limit).toBe("0");
 	});
 
 	describe("proxyReqOptDecorator is a casing-only no-op on what the library already copied", () => {
