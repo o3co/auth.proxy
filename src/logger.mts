@@ -69,11 +69,12 @@ const MAX_CAUSE_DEPTH = 5;
  * userinfo may carry a space, an `@`, a `?` or a `#` unencoded, and only `/`
  * and the end of a line are taken as the end of the authority.
  *
- * Known limit: a `/` inside a raw password cannot be told from the start of a
- * path, and the part after it is not redacted. The schema refuses a configured
- * introspection URL with userinfo, so no credential-bearing URL of the
- * proxy's own reaches `fetch`; the redaction is for any other raw URL that
- * reaches a message.
+ * Known limits: a `/` inside a raw password cannot be told from the start of a
+ * path, and the part after it is not redacted; a URL written with one slash
+ * after its scheme (`scheme:/user:pass@host`) is not matched at all. The schema
+ * refuses a configured introspection URL with userinfo, so no
+ * credential-bearing URL of the proxy's own reaches `fetch`; the redaction is
+ * for any other raw URL that reaches a message.
  *
  * It errs towards redacting: after a bare origin with no path, an `@` later on
  * the same line — in a query, a fragment or plain text — takes the text before

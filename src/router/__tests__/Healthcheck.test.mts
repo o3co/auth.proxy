@@ -2,13 +2,10 @@
 // SPDX-License-Identifier: Apache-2.0
 
 /**
- * Liveness, moved in from `@o3co/auth.utils/express`.
- *
- * The path is the reason it moved. `auth.utils` defaulted to `/healthcheck`
- * while this proxy, `auth.provider` and (since its 0.7.0) the verifier all
- * answer on `/_healthcheck`; the shared default was the source of the
- * divergence it was supposed to prevent. The path this proxy answers on is an
- * orchestrator's probe configuration, so it is pinned here.
+ * Liveness (`Healthcheck.mts`). The path is an orchestrator's probe
+ * configuration, and this proxy, `auth.provider` and the verifier all answer
+ * on `/_healthcheck`, so it is pinned here rather than taken from a shared
+ * default.
  */
 import express from "express";
 import request from "supertest";

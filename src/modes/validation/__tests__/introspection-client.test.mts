@@ -419,8 +419,9 @@ describe("createIntrospectionClient", () => {
 
 	// The introspection endpoint is configuration; a followed redirect re-sends
 	// the credential this request carries (the inbound token, or the proxy's
-	// Basic header) to a path nothing configured on a same-origin 307/308, and
-	// loses it cross-origin.
+	// Basic header) to a path nothing configured on the same origin, and
+	// cross-origin drops `Authorization` but a 307/308 still re-sends the body,
+	// `token=<the caller's token>`.
 	it("asks fetch not to follow a redirect", async () => {
 		fetchMock.mockResolvedValueOnce(jsonResponse(200, { active: true }));
 

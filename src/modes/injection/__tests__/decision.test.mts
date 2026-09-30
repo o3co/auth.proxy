@@ -542,10 +542,9 @@ describe("decideInjection", () => {
 			expect(fieldsOf(logger[level])).toContainEqual(
 				expect.objectContaining({ event, requestId: "rid-1", error: err.message }),
 			);
-			// Not `.not.toContain(event)`: a line keyed on the status logs a
-			// different event at the other level, not this one, so that assertion
-			// would pass with the defect. The other level carries nothing but the
-			// attempt.
+			// Not `.not.toContain(event)`: a line keyed on the status would log a
+			// different event at the other level, so that assertion would pass even
+			// then. The other level carries nothing but the attempt.
 			expect(eventsOf(logger[level === "info" ? "error" : "info"])).toEqual(
 				level === "info" ? [] : ["injection.grant_fetch"],
 			);

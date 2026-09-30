@@ -24,16 +24,18 @@
  * SIGTERM does not finish within {@link STOP_GRACE_MS} ends in SIGKILL; the
  * worker kills what is left when it exits; and a worker that is itself killed
  * leaves the child's IPC channel disconnected, which the preload answers by
- * killing the child.
+ * killing the child. The suites set {@link SUITE_TIMEOUT_MS} above the
+ * deadline and the grace together, so a hung boot fails on its own deadline,
+ * with its stderr, rather than on vitest's timer.
  *
  * The parent can read the answer to a request before the lines the child
  * logged about it, so {@link ProxyProcess.linesFor} sends a barrier request
  * and waits for the barrier's own `incoming request` line. The child writes
  * its lines in order, so every line written before the barrier's has been read
  * by then, and a line still missing was never written. The barrier also has to
- * reach the upstream: a request the proxy wrongly forwarded reaches it before
- * the barrier, so a test that asserts nothing reached the upstream after
- * `linesFor` sees it.
+ * reach the upstream: a request sent before the barrier that the proxy
+ * wrongly forwarded reaches the upstream first, so a test that asserts nothing
+ * reached the upstream after `linesFor` sees it.
  */
 
 import { type ChildProcess, spawn } from "node:child_process";

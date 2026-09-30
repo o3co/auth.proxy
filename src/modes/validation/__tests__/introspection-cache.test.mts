@@ -88,9 +88,10 @@ describe("createIntrospectionCache", () => {
 	});
 
 	it("evicts nothing when the write is a key it already holds, even at the bound", () => {
-		// Reachable by a direct caller only: the introspector writes once per
-		// flight, so it never writes a key the cache holds (the concurrent-
-		// requests test in `introspect.test.mts`). The property is the cache's own.
+		// Reachable by a direct caller only: the introspector writes only after
+		// a miss, once per flight (the concurrent-requests test in
+		// `introspect.test.mts`), and `set` sweeps the stale entry a miss leaves
+		// before it checks. The property is the cache's own.
 		const cache = createIntrospectionCache({ maxEntries: 2 });
 		const live = Date.now() + 60_000;
 		cache.set("a", { active: true, sub: "a" }, live);

@@ -142,9 +142,10 @@ export const createIntrospectionClient = ({
 				},
 				body: new URLSearchParams({ token }).toString(),
 				// The endpoint is configuration, and a followed redirect cannot be
-				// reported honestly, as on the token clients: a same-origin 307/308
-				// re-sends this request's credential — the inbound token, or the
-				// proxy's Basic header — to a path nothing configured. Cross-origin,
+				// reported honestly, as on the token clients: a followed same-origin
+				// redirect re-sends this request's `Authorization` — the inbound
+				// token, or the proxy's Basic header — to a path nothing configured,
+				// and a 307/308 re-sends the body with it. Cross-origin,
 				// `fetch` drops the `Authorization` header, but a 307/308 still
 				// re-sends the body, which is `token=<the caller's token>`, and the
 				// provider's 401 would read as the caller's token being bad. A 3xx

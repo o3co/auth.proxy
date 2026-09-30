@@ -18,8 +18,8 @@
  * The expected values are the documented contract, not the code's: the
  * README's Validation mode section (its challenge table, its Logging table and
  * "What a provider 401 means") and the validation README's invariants 1 and 8.
- * What the READMEs do not state is the CHANGELOG's 0.7.0 entry: the messages
- * `introspect failed` and `introspect endpoint redirected`, the event
+ * What the READMEs do not state comes from the CHANGELOG's 0.7.0 entry: the
+ * messages `introspect failed` and `introspect endpoint redirected`, the event
  * `validation.incoming_request`, and `Authorization` reaching the upstream in
  * canonical casing.
  */

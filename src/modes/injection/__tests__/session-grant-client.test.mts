@@ -40,11 +40,11 @@ const getFetchCallHeaders = (
 ): Record<string, string> =>
 	getFetchCallInit(fetchMock, index).headers as Record<string, string>;
 
-// Most fixtures below pass `sessionCookieValue: "c"`, a credential that
-// matches every string. They assert code, status or a body with no
-// error_description, so nothing depends on a provider's text being relayed —
-// but adding an error_description to one of them gets the proxy's generic
-// wording, not the provider's.
+// Most fixtures below pass `sessionCookieValue: "c"`, a one-character
+// credential, so any provider text with a `c` in it echoes it. They assert
+// code, status or a body with no error_description, so nothing depends on a
+// provider's text being relayed — but an error_description with a `c` in it,
+// added to one of them, gets the proxy's generic wording, not the provider's.
 describe("createSessionGrantClient.exchange", () => {
 	let fetchMock: ReturnType<typeof vi.fn>;
 	const client = () => createSessionGrantClient(baseCfg);
@@ -240,8 +240,9 @@ describe("createSessionGrantClient.exchange", () => {
 	});
 
 	// A redirecting token endpoint is refused, not followed, as the jwt-bearer
-	// client refuses one: `fetch` follows by default, which sends the session
-	// cookie wherever the Location points.
+	// client refuses one: `fetch` follows by default, which re-sends the
+	// session cookie to a path nothing configured on the same origin, and drops
+	// it cross-origin, so the provider's 401 reads as an expired session.
 	it("asks fetch not to follow a redirect", async () => {
 		fetchMock.mockResolvedValueOnce(
 			jsonResponse(200, { access_token: "tok", token_type: "Bearer" }),

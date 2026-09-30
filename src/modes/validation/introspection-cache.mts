@@ -23,15 +23,16 @@ import type { IntrospectionResult } from "./introspection-client.mjs";
  * served and is swept on the next write, so a cache that is never written to
  * again keeps its dead entries and serves none of them.
  *
- * Two deliberate differences from the injection path's `TokenCache`: `get`
- * does not delete the stale entry it declines to serve, so the bound is
- * enforced on write alone; and `set` does not re-insert a key it already
- * holds, so a refreshed entry keeps its position and is evicted on its
- * original age. Eviction is by insertion rather than by use.
+ * Two differences from the injection path's `TokenCache`: `get` does not
+ * delete the stale entry it declines to serve, so the bound is enforced on
+ * write alone; and `set` does not re-insert a key it already holds, so a
+ * refreshed entry keeps its position and is evicted on its original age.
+ * Eviction is by insertion rather than by use.
  *
  * Writing a key the map already holds evicts nothing: it cannot push the map
- * past its bound. The introspector does not reach such a write — one flight
- * means one write — but the property is the cache's own, and
+ * past its bound. The introspector does not reach that case — it writes only
+ * after a miss, once per flight, and `set` sweeps the stale entry a miss
+ * leaves before it checks — but the property is the cache's own, and
  * `introspection-cache.test.mts` pins it.
  */
 export interface IntrospectionCache {

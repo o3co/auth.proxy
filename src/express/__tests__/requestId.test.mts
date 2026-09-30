@@ -2,7 +2,7 @@
 // SPDX-License-Identifier: Apache-2.0
 
 /**
- * Request-id correlation, moved in from `@o3co/auth.utils/express`.
+ * Request-id correlation (`requestId.mts`).
  *
  * Both proxy modes mount this, and every log line and upstream call is
  * correlated by what it decides, so the header name and the reuse rule are

@@ -38,8 +38,9 @@ export const JWT_BEARER_GRANT_TYPE = "urn:ietf:params:oauth:grant-type:jwt-beare
  *   - `exchange_not_permitted` (403): the assertion may be fine, but not for
  *     this client / scope / target (`invalid_scope`, `invalid_target`,
  *     `unauthorized_client`).
- *   - `provider_config_error` (502): the provider refused the proxy itself — a
- *     401 (`invalid_client`), any other 400, or a redirect.
+ *   - `provider_config_error` (502): the provider refused the proxy itself —
+ *     any 401 (the proxy's `client_secret_basic` refused), any other 400, or a
+ *     redirect.
  *   - `provider_unavailable` (502): 5xx, 429, a network error or timeout before
  *     the response arrives, or an unexpected status.
  *   - `provider_invalid_response` (502): a 200 whose body is not a JSON object,

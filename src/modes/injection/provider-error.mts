@@ -50,7 +50,9 @@ const JWT_SHAPE_RE = /[A-Za-z0-9_-]+\.[A-Za-z0-9_-]+\.[A-Za-z0-9_-]*/;
  * sanitising and substitutes its own wording for a refusal, so the status, the
  * code and the logged event are unaffected and only the relayed or logged text
  * changes. A short cookie degrades that caller's requests; a short client
- * secret degrades every exchange refusal until it is rotated.
+ * secret degrades every exchange refusal until it is rotated. Exempting a
+ * short client secret would buy back diagnostics at the price of a credential
+ * in a log; a lost diagnostic is the cheaper failure.
  *
  * An empty credential is skipped: `value.includes("")` is true of every
  * string, so one would otherwise refuse everything.

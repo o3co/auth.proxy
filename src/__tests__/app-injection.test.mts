@@ -20,7 +20,7 @@
  * contract, not the code's: the README's Injection mode, Inbound Authorization
  * headers, Cookie forwarding and External credential exchange sections, and
  * the injection README's invariants 1, 2, 3 and 9. Two things the READMEs do
- * not state are the CHANGELOG's 0.7.0 entry: `Authorization` reaches the
+ * not state come from the CHANGELOG's 0.7.0 entry: `Authorization` reaches the
  * upstream in canonical casing, and the `invalid_client` refusal's
  * `error_description`. The events, their levels and their fields are the
  * injection README's Log events tables. The one assertion the documentation

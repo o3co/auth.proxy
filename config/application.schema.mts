@@ -51,12 +51,14 @@ const COOKIE_NAME_RE = /^[!#$%&'*+.^_`|~0-9A-Za-z-]+$/;
  * introspection client authenticates with `auth.validation.client`, or
  * presents the inbound token when that is unset.
  *
- * Anything else stops the process at boot. `fetch` refuses a URL with
- * userinfo, or a string that is not a URL, on every call, and its refusal
- * quotes the value exactly as configured, credential included, in the line
- * the validation path logs. A non-http(s) scheme is refused too: `fetch`
- * answers a POST to a `data:` URL with the body it encodes, so
- * `data:application/json,{"active":true}` would admit every token.
+ * Anything else stops the process at boot. `fetch` would refuse a URL with
+ * userinfo, or a string that is not a URL, on every call, and its error
+ * quotes the value as configured; the logger's URL redaction does not cover
+ * every raw form (a `/` in a password, or `https:/` with one slash), so the
+ * schema, not the logger, keeps the configured credential out of the log. A
+ * non-http(s) scheme is refused too: `fetch` answers a POST to a `data:` URL
+ * with the body it encodes, so `data:application/json,{"active":true}` would
+ * admit every token.
  *
  * A refine rather than `.url()`, so the message is this one and never quotes
  * the value it refused.

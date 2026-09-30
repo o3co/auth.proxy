@@ -78,8 +78,8 @@ const NO_REALM: ValidationPolicy = { realm: null };
  * included an access token** — `invalid_token` (the 401) or, for a Bearer
  * credential too malformed to read, `invalid_request` (§3.1). A request using
  * another method gets no error code (§3.1's last paragraph); its challenge is
- * `realm` alone, and without a configured realm there is no auth-param left
- * to send, so no header at all.
+ * `realm` alone, as in §3.1's own example, and without a configured realm
+ * there is no auth-param left to send, so no header at all.
  *
  * No `error_description`: §3 makes it a MAY, and the body already carries the
  * wording; the same string in two places would drift.
@@ -151,9 +151,11 @@ const reject = (
  *
  * Every challenge carries `policy.realm` when one is configured.
  *
- * Every provider failure is logged once, with `requestId`, a `validation.*`
- * `event` and the thrown value under `error`, as on the injection path. The
- * provider's 401 about the caller's token is info; everything that is the
+ * Every provider failure is logged once per request it answers (waiters on a
+ * shared flight each log it), with `requestId`, a `validation.*` `event` and
+ * the thrown value itself under `error`. The keys are the injection path's;
+ * the `error` value is not — injection logs a string there (`src/README.md`).
+ * The provider's 401 about the caller's token is info; everything that is the
  * proxy's or the provider's own failure is error.
  */
 export const decideValidation = async (
@@ -200,7 +202,8 @@ export const decideValidation = async (
 		// A 401 that refused the proxy's own client authentication is not a
 		// statement about the caller's token — the provider never examined it.
 		// It is the deployment's own configuration, so it is reported as a
-		// provider-side failure, under the event the injection path gives it.
+		// provider-side failure, under `validation.provider_config_error`, this
+		// mode's counterpart of injection's `provider_config_error` events.
 		if (
 			e instanceof IntrospectHttpError &&
 			e.status === 401 &&

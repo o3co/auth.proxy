@@ -100,9 +100,9 @@ describe("proxy config — validation mode", () => {
 	});
 
 	// fetch refuses a URL that carries credentials, and fails to parse a URL
-	// that is not one, so either would fail every introspection, and the
-	// refusal would quote the URL as configured — credential included — into
-	// the log. Both fail at boot, as a bad `providerOrigin` does.
+	// that is not one, so either would fail every introspection, and its error
+	// would quote the URL as configured, in a form the logger's redaction does
+	// not always clean. Both fail at boot, as a bad `providerOrigin` does.
 	describe("auth.validation.introspect.url", () => {
 		const urlOf = (url: string) => {
 			const config = validate(
@@ -384,7 +384,8 @@ describe("proxy config — injection mode", () => {
 	});
 
 	// The external credential exchange is opt-in inside injection mode.
-	// Disabled, nothing about it is read; enabled, the proxy authenticates to
+	// Disabled, it parses to `{ enabled: false }` and nothing else is used,
+	// though every field is still validated; enabled, the proxy authenticates to
 	// the token endpoint as a confidential client, so a client_id alone is a
 	// boot failure rather than an unauthenticated exchange.
 	describe("exchange", () => {

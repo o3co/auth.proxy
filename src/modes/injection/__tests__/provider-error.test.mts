@@ -112,11 +112,11 @@ describe("credential matching", () => {
 		expect(sanitizeErrorDescription("bad 12345678 here", ["12345678"])).toBe(null);
 	});
 
-	// A credential shorter than 8 characters is matched as a substring too,
-	// not only as an exact echo, so `bad abc` with the cookie value `abc` is
-	// refused. Length is not something the proxy can bound for a value the
-	// caller chose, and losing a provider's diagnostic costs less than putting
-	// a credential in a log.
+	// A credential of any length is matched as a substring, not only as an
+	// exact echo, so `bad abc` with the cookie value `abc` is refused. Length
+	// is not something the proxy can bound for a value the caller chose, and
+	// losing a provider's diagnostic costs less than putting a credential in a
+	// log.
 	it.each([1, 2, 3, 7])(
 		"refuses text containing a credential of %d characters, not only an exact echo",
 		(length) => {

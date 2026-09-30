@@ -34,9 +34,10 @@ export interface UpstreamStageConfig {
  * is assembly (built from `upstream.baseURL` and `http.bodyLimitSize`), not a
  * mode's decision, so both routers mount this one function.
  *
- * What the decorator does. When an `Authorization` header arrived — empty
- * included, as the injection paths read presence — it sets `Authorization`,
- * in canonical casing, to the inbound value, and it re-sets `x-request-id` to
+ * What the decorator does. When `req.headers.authorization` is present as this
+ * stage runs — empty included, as the injection paths read presence — it sets
+ * `Authorization`, in canonical casing, to that value: the minted token after
+ * an `inject`, the inbound header otherwise. It also re-sets `x-request-id` to
  * the value it already has.
  *
  * What it does not do: choose what is forwarded. What reaches upstream is
