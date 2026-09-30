@@ -11,8 +11,10 @@ import type { ModeRefusals } from "../../router/refusal.mjs";
  * the stage's reason as the `error` code, and `injection.*` events with the
  * error as a string under `error`, as every injection failure line has it. A
  * body over the limit is the caller's to fix, as is any other `4xx`, so both
- * are logged at info; anything else is a `5xx`, logged at error — the proxy
- * or its upstream failing, or a request the proxy cannot forward (`501`).
+ * are logged at info. An upstream that could not be reached or dropped the
+ * exchange is `upstream_unavailable`, logged at error under its own event;
+ * any other `5xx` is logged at error too — the proxy failing, or a request
+ * it cannot forward (`501`).
  */
 export const stageRefusals = (logger: Logger): ModeRefusals => ({
 	log: (requestId, refusal) => {
@@ -25,11 +27,15 @@ export const stageRefusals = (logger: Logger): ModeRefusals => ({
 			return;
 		}
 		const { error } = refusal;
-		const line = {
-			requestId,
-			event: "injection.request_failed",
-			error: error instanceof Error ? error.message : String(error),
-		};
+		const message = error instanceof Error ? error.message : String(error);
+		if (refusal.reason === "upstream_unavailable") {
+			logger.error(
+				{ requestId, event: "injection.upstream_unavailable", error: message },
+				"upstream unavailable",
+			);
+			return;
+		}
+		const line = { requestId, event: "injection.request_failed", error: message };
 		if (refusal.status < 500) logger.info(line, "request failed");
 		else logger.error(line, "request failed");
 	},
@@ -37,7 +43,7 @@ export const stageRefusals = (logger: Logger): ModeRefusals => ({
 		refusal.reason === "body_too_large"
 			? { error: "body_too_large", error_description: "request body over the limit" }
 			: {
-					error: "request_failed",
-					error_description: STATUS_CODES[refusal.status] ?? "request failed",
+					error: refusal.reason,
+					error_description: STATUS_CODES[refusal.status] ?? refusal.reason,
 				},
 });

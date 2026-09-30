@@ -1,6 +1,6 @@
 # `src`
 
-Last updated: 2026-09-30
+Last updated: 2026-10-01
 
 The whole proxy process. Wire behaviour is in the [root README](../README.md); each directory that owns a contract has its own README. The boundary review behind this file is [#95](https://github.com/o3co/auth.proxy/issues/95).
 
@@ -19,7 +19,7 @@ The whole proxy process. Wire behaviour is in the [root README](../README.md); e
 No README of its own; this is its description.
 
 - **Role:** route assembly that is not a mode — the liveness probe, which `app.mts` mounts, and the stages both mode routers share: the body limit ahead of the mode, the upstream proxy stage after it, and the error handler that ends the router.
-- **Owns:** the `/_healthcheck` path and its answer; `http.bodyLimitSize` as the one byte count the body limit, the upstream proxy and the error handler enforce; building the upstream proxy from `upstream.baseURL`; which requests the shared stages refuse and with which status — a body over the limit is `413`, anything else that reaches the end of a mode router its own status or `500` — and the `ModeRefusals` contract ([`refusal.mts`](router/refusal.mts)) a mode says those refusals through.
+- **Owns:** the `/_healthcheck` path and its answer; `http.bodyLimitSize` as the one byte count the body limit, the upstream proxy and the error handler enforce; building the upstream proxy from `upstream.baseURL`; which requests the shared stages refuse and with which status — a body over the limit is `413`, an upstream that could not be reached or dropped the exchange `502` (`504` on a connect timeout), anything else that reaches the end of a mode router its own status or `500` — and the `ModeRefusals` contract ([`refusal.mts`](router/refusal.mts)) a mode says those refusals through.
 - **Does not own:** what reaches upstream — each mode decides that on `req.headers` before the stage; how a refusal is logged and what body answers it, which are the mode's vocabulary; the mode routers themselves (`modes/*/router.mts`).
 - **Why separate:** none of it is a mode's decision (#95 F18). The body limit decides only on a declared length, and no stage decides anything about a credential.
 

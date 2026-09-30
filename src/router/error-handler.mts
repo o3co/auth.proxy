@@ -6,19 +6,22 @@
  *
  * What reaches it is what no stage answered: the upstream stage's own
  * failures — a body over the limit that declared no length, a body that
- * ended early, a transfer coding it cannot forward (`501`), an upstream that
- * refused the connection — and anything a mode's middleware threw. Without it, express answers these with its HTML
+ * ended early, a transfer coding it cannot forward (`501`), an upstream it
+ * could not reach or that dropped the exchange (`UpstreamUnavailableError`)
+ * — and anything a mode's middleware threw. Without it, express answers these with its HTML
  * page, and prints the stack to stderr outside the logger. With it, each is
  * a `StageRefusal` the mode logs and answers in its own vocabulary.
  *
  * The status is read as express reads it: the error's `status` when it is a
- * `4xx` or `5xx`, then its `statusCode`, and `500` otherwise. A `413` is the
+ * `4xx` or `5xx`, then its `statusCode`, and `500` otherwise. An unavailable
+ * upstream is `upstream_unavailable`, with its `502` or `504`; a `413` is the
  * body limit, refused exactly as `createBodyLimitGuard` refuses it; anything
  * else is `request_failed`.
  */
 
 import type { ErrorRequestHandler } from "express";
-import { type ModeRefusals, refuse } from "./refusal.mjs";
+import { type ModeRefusals, refuse, type StageRefusal } from "./refusal.mjs";
+import { UpstreamUnavailableError } from "./upstream.mjs";
 
 const isErrorStatus = (value: unknown): value is number =>
 	typeof value === "number" && Number.isInteger(value) && value >= 400 && value <= 599;
@@ -41,12 +44,12 @@ export const createErrorHandler = ({
 	refusals: ModeRefusals;
 }): ErrorRequestHandler => {
 	return (err, req, res, _next) => {
-		const status = statusOf(err);
+		const refusal = refusalFor(err, limitBytes);
 		// Once the answer has started its status is spent: the failure is
 		// logged, and the connection closed, which is all express would do
 		// with it besides printing the stack.
 		if (res.headersSent) {
-			refusals.log(req.headers["x-request-id"], { reason: "request_failed", status, error: err });
+			refusals.log(req.headers["x-request-id"], refusal);
 			req.socket.destroy();
 			return;
 		}
@@ -56,13 +59,17 @@ export const createErrorHandler = ({
 		if (!req.complete) {
 			req.resume();
 		}
-		refuse(
-			req,
-			res,
-			refusals,
-			status === 413
-				? { reason: "body_too_large", status, limitBytes }
-				: { reason: "request_failed", status, error: err },
-		);
+		refuse(req, res, refusals, refusal);
 	};
+};
+
+/** What `err` is refused as: the upstream failing, the body limit, or anything else. */
+const refusalFor = (err: unknown, limitBytes: number): StageRefusal => {
+	if (err instanceof UpstreamUnavailableError) {
+		return { reason: "upstream_unavailable", status: err.status, error: err.cause };
+	}
+	const status = statusOf(err);
+	return status === 413
+		? { reason: "body_too_large", status, limitBytes }
+		: { reason: "request_failed", status, error: err };
 };

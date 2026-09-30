@@ -1,6 +1,6 @@
 # `src/modes/validation`
 
-Last updated: 2026-09-30
+Last updated: 2026-10-01
 
 In validation mode, an inbound `Authorization: Bearer <token>` is checked against the provider's RFC 7662 introspection endpoint, and the request is then forwarded or refused. The root README covers the wire behaviour and the credential choice under [Validation mode](../../../README.md#validation-mode-authmode--validation) and [Introspection client identity](../../../README.md#introspection-client-identity). It covers revocation under [Revocation and the access-token lifetime](../../../README.md#revocation-and-the-access-token-lifetime). The boundary review behind this directory is [#95](https://github.com/o3co/auth.proxy/issues/95).
 
@@ -17,7 +17,7 @@ In validation mode, an inbound `Authorization: Bearer <token>` is checked agains
 - the coalescing of concurrent misses.
 
 **Does not own:**
-- the stages it shares with the other mode ([`src/router`](../../router/refusal.mts)): the body limit ahead of the validation middleware, the upstream proxy stage and the error handler. [`stage-refusals.mts`](stage-refusals.mts) says their refusals in this mode's vocabulary — `validation.body_too_large` and `validation.request_failed`, the `{ "code", "message" }` body — but what is refused, and with which status, is theirs;
+- the stages it shares with the other mode ([`src/router`](../../router/refusal.mts)): the body limit ahead of the validation middleware, the upstream proxy stage and the error handler. [`stage-refusals.mts`](stage-refusals.mts) says their refusals in this mode's vocabulary — `validation.body_too_large`, `validation.upstream_unavailable` and `validation.request_failed`, the `{ "code", "message" }` body — but what is refused, and with which status, is theirs;
 - the request id and the Bearer grammar ([`src/express`](../../express/README.md));
 - the coalescing primitive ([`single-flight.mts`](../../single-flight.mts)) and the bounded body read ([`response-body.mts`](../../response-body.mts)), both of which sit at `src/` root because both modes use them;
 - configuration defaults ([`config/`](../../../config/README.md));

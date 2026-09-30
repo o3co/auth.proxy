@@ -24,6 +24,55 @@ import type { RequestHandler } from "express";
 import proxy from "express-http-proxy";
 import { bodyLimitBytes } from "./body-limit.mjs";
 
+/**
+ * The upstream failing rather than the request: it could not be reached, or it
+ * dropped the exchange or answered something that is not HTTP (`502`), or
+ * connecting to it timed out (`504`, RFC 9110 §15.6.5). `cause` is what the
+ * connection threw. The router's error handler answers it as the
+ * `upstream_unavailable` refusal.
+ */
+export class UpstreamUnavailableError extends Error {
+	constructor(
+		readonly status: 502 | 504,
+		cause: unknown,
+	) {
+		super(`upstream unavailable: ${cause instanceof Error ? cause.message : String(cause)}`, {
+			cause,
+		});
+		this.name = "UpstreamUnavailableError";
+	}
+}
+
+/** The connection failures `UpstreamUnavailableError` stands for, by the code Node gives them. */
+const CONNECTION_FAILURES = new Set([
+	"ECONNREFUSED",
+	"ECONNRESET",
+	"EPIPE",
+	"ENOTFOUND",
+	"EAI_AGAIN",
+	"EHOSTUNREACH",
+	"ENETUNREACH",
+]);
+const CONNECT_TIMEOUTS = new Set(["ETIMEDOUT"]);
+
+/**
+ * What the library rejects with, handed on to the router: a failure of the
+ * connection to the upstream as an `UpstreamUnavailableError`, anything else
+ * as it came. Everything the library does fails through here — the body read,
+ * which carries its own status (a body over the limit, one that ended early),
+ * and the decorator's refusal of a transfer coding — so only an error with no
+ * status of its own and the code of a connection failure is the upstream's.
+ */
+const toUpstreamFailure = (err: unknown): unknown => {
+	if (typeof err !== "object" || err === null) return err;
+	const { status, statusCode, code } = err as { status?: unknown; statusCode?: unknown; code?: unknown };
+	if (status !== undefined || statusCode !== undefined || typeof code !== "string") return err;
+	if (CONNECT_TIMEOUTS.has(code)) return new UpstreamUnavailableError(504, err);
+	// `HPE_*`: Node's HTTP parser could not read what the upstream sent.
+	if (CONNECTION_FAILURES.has(code) || code.startsWith("HPE_")) return new UpstreamUnavailableError(502, err);
+	return err;
+};
+
 /** The two config fields the stage reads. `AppConfig` satisfies it structurally. */
 export interface UpstreamStageConfig {
 	upstream: { baseURL: string };
@@ -45,6 +94,11 @@ const upstreamLimit = (bytes: number): number | string => (bytes === 0 ? "0" : b
  * mount this one function. It reads the request body against that limit; a
  * body over it that declared no length is refused here, as an error the
  * router's error handler answers.
+ *
+ * Every failure the library meets goes to the router's error handler, through
+ * `proxyErrorHandler`: the library's own handler answers a reset itself, as a
+ * bodyless `504` nothing logs, and hands everything else on untouched.
+ * `toUpstreamFailure` names the upstream's failures on the way.
  *
  * What the decorator does. When `req.headers.authorization` is present as this
  * stage runs — empty included, as the injection paths read presence — it sets
@@ -93,6 +147,9 @@ const upstreamLimit = (bytes: number): number | string => (bytes === 0 ? "0" : b
 export const createUpstreamProxy = (config: UpstreamStageConfig): RequestHandler =>
 	proxy(config.upstream.baseURL, {
 		limit: upstreamLimit(bodyLimitBytes(config)),
+		proxyErrorHandler: (err, _res, next) => {
+			next(toUpstreamFailure(err));
+		},
 		proxyReqOptDecorator: async (proxyReqOpts, srcReq) => {
 			// Presence, as the injection paths read it: an empty
 			// `Authorization:` is re-set in canonical casing too.
