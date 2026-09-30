@@ -16,8 +16,12 @@
  * for the request.
  *
  * The expected values are the documented contract, not the code's: the
- * README's challenge table and "What a provider 401 means", the validation
- * README's invariants 1 and 8, and the v0.7.0 CHANGELOG.
+ * README's Validation mode section (its challenge table, its Logging table and
+ * "What a provider 401 means") and the validation README's invariants 1 and 8.
+ * What the READMEs do not state is the CHANGELOG's 0.7.0 entry: the messages
+ * `introspect failed` and `introspect endpoint redirected`, the event
+ * `validation.incoming_request`, and `Authorization` reaching the upstream in
+ * canonical casing.
  */
 
 import { afterAll, afterEach, beforeAll, describe, expect, it, vi } from "vitest";
@@ -55,10 +59,12 @@ afterEach(() => {
 type Line = { event: string; level: string } & Record<string, unknown>;
 const INCOMING: Line = { event: "validation.incoming_request", level: "info", msg: "incoming request" };
 /**
- * A provider failure line: the event, the level and the message the README
- * and the v0.7.0 CHANGELOG name, and the error itself under `error`, through
- * the logger's allowlist — an object with the class and the message, never
- * the string injection logs (`src/README.md`).
+ * A provider failure line. The event and the level are the README's Logging
+ * table; the message is the README's for refused client credentials and the
+ * CHANGELOG's 0.7.0 entry for the others. The error itself is under `error`,
+ * through the logger's allowlist: an object with the message and the stack
+ * (`src/README.md`) and the class as `type` (the CHANGELOG's 0.7.0 entry),
+ * never the string injection logs.
  */
 const failure = (event: string, level: string, msg: string): Line => ({
 	event,

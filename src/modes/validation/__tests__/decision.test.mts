@@ -4,9 +4,11 @@
 /**
  * The validation decision on its own: `decideValidation` takes the two header
  * values and the injectable deps, and returns `forward` or `reject` for the
- * middleware to apply. Nothing here touches Express or `fetch`; the wire
- * shape of each outcome and the real introspection call are pinned by
- * `router.test.mts` and `introspect.test.mts`.
+ * middleware to apply. Nothing here touches Express or `fetch`: the wire
+ * shape of each outcome is pinned by `router.test.mts`, what the bundled
+ * introspector accepts and caches by `introspect.test.mts`, and the
+ * introspection call itself by `introspection-client.test.mts` and
+ * `introspection-client-wire.test.mts`.
  */
 import { PassThrough } from "node:stream";
 import { describe, expect, it, vi } from "vitest";

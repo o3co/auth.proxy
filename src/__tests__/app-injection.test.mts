@@ -18,12 +18,14 @@
  *
  * The expected statuses, `error` codes, headers and grants are the documented
  * contract, not the code's: the README's Injection mode, Inbound Authorization
- * headers, Cookie forwarding and External credential exchange sections, the
- * injection README's invariants 2, 3 and 9, and the v0.7.0 CHANGELOG. The
- * events, their levels and their fields are the injection README's Log events
- * tables. The one assertion the documentation does not back is an
- * `error_description` where it names no wording: that is the one the client or
- * the decision writes, which their own tests pin.
+ * headers, Cookie forwarding and External credential exchange sections, and
+ * the injection README's invariants 1, 2, 3 and 9. Two things the READMEs do
+ * not state are the CHANGELOG's 0.7.0 entry: `Authorization` reaches the
+ * upstream in canonical casing, and the `invalid_client` refusal's
+ * `error_description`. The events, their levels and their fields are the
+ * injection README's Log events tables. The one assertion the documentation
+ * does not back is an `error_description` where it names no wording: that is
+ * the one the client or the decision writes, which their own tests pin.
  */
 
 import { afterAll, afterEach, beforeAll, describe, expect, it, vi } from "vitest";

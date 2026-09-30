@@ -39,13 +39,13 @@ export interface IntrospectionResult {
 /**
  * Which credential the provider refused, on a 401 and nowhere else.
  *
- * RFC 7662 §2.3 requires the introspection request to be authenticated, so a
- * 401 answers whichever credential this module presented — and only this
- * module knows which that was. `token` means the inbound token was the
- * credential and the provider refused it, which is a statement about the
- * caller. `client` means the proxy authenticated as itself and was refused,
- * which is a statement about the deployment: the caller's token was never
- * examined.
+ * RFC 7662 §2.1 requires the introspection request to carry a credential, and
+ * §2.3 answers an invalid one with a 401. So a 401 answers whichever
+ * credential this module presented, and only this module knows which that
+ * was. `token` means the inbound token was the credential and the provider
+ * refused it, which is a statement about the caller. `client` means the proxy
+ * authenticated as itself and was refused, which is a statement about the
+ * deployment: the caller's token was never examined.
  */
 export type RefusedCredential = "client" | "token";
 

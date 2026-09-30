@@ -48,9 +48,9 @@ export interface UpstreamStageConfig {
  * Node's `setHeader` dedups header names case-insensitively and the last
  * write wins, so the decorator's `Authorization` replaces the name, not the
  * value: `Authorization` is sent once, and the `x-request-id` write changes
- * nothing on the wire. That is why `stripInboundAuthorization` deletes the
- * header from `req.headers` in `src/modes/injection/decision.mts` (see the
- * comment above `forwardWithoutInjection`) rather than acting here.
+ * nothing on the wire. That is why `stripInboundAuthorization` takes effect
+ * by deleting the header from `req.headers`, in the `forward_stripped` case of
+ * `injectionMiddleware` (`src/modes/injection/router.mts`), rather than here.
  *
  * Why it is kept: header-name casing. HTTP header names are case-insensitive
  * (RFC 9110 §5.1), so a conforming upstream sees no difference; without the

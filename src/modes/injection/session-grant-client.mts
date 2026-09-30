@@ -129,7 +129,7 @@ export const createSessionGrantClient = (
 					signal: AbortSignal.timeout(cfg.timeoutMs),
 				});
 			} catch (err) {
-				// Network error, timeout (AbortError), DNS failure, etc.
+				// Network error, timeout (TimeoutError), DNS failure, etc.
 				throw new SessionGrantError(
 					"provider_unavailable",
 					502,

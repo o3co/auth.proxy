@@ -382,9 +382,10 @@ describe("createIntrospectionClient", () => {
 		});
 	});
 
-	// RFC 7662 section 2.3: the introspection request is authenticated. Which
-	// credential it carried decides what the provider's 401 is about, and only
-	// this module knows which one it sent.
+	// RFC 7662 section 2.1: the introspection request carries a credential, and
+	// section 2.3 answers an invalid one with a 401. Which credential it carried
+	// decides what the provider's 401 is about, and only this module knows
+	// which one it sent.
 	it("marks a 401 as the proxy's own client credentials when they are configured", async () => {
 		fetchMock.mockResolvedValueOnce(new Response("", { status: 401 }));
 
