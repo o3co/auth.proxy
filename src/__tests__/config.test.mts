@@ -1,3 +1,4 @@
+import { generateKeyPairSync } from "node:crypto";
 import { readFileSync } from "node:fs";
 import { parseFile, parseString } from "@o3co/ts.hocon";
 import { validate } from "@o3co/ts.hocon/zod";
@@ -423,6 +424,7 @@ describe("proxy config — injection mode", () => {
 				enabled: true,
 				clientId: "proxy-exchange",
 				clientSecret: "s3cret",
+				clientKey: null,
 				scope: null,
 				audience: null,
 				resource: null,
@@ -445,6 +447,7 @@ describe("proxy config — injection mode", () => {
 				enabled: true,
 				clientId: "proxy-exchange",
 				clientSecret: "s3cret",
+				clientKey: null,
 				scope: "orders.read orders.write",
 				audience: "https://api.example.com",
 				resource: "https://api.example.com/orders",
@@ -562,6 +565,232 @@ auth.injection.exchange.allowedIssuers = [${entry}]
 			},
 		});
 		expect(() => validate(raw, AppConfigSchema)).toThrow();
+	});
+});
+
+// private_key_jwt: a client authenticates with exactly one of a secret or a
+// key, and a key needs the provider's issuer, the assertion's audience. A key
+// the proxy cannot sign with fails boot, naming the key and never quoting it.
+describe("proxy config — client keys", () => {
+	const privateJwk = (): Record<string, unknown> =>
+		generateKeyPairSync("ed25519").privateKey.export({ format: "jwk" }) as Record<string, unknown>;
+	const KEY = JSON.stringify({ ...privateJwk(), kid: "proxy-1" });
+	const ISSUER = "https://auth.example.test";
+	const load = (env: Record<string, string>) => validate(parseFile(confPath, { env }), AppConfigSchema);
+	const refusal = (env: Record<string, string>): string => {
+		try {
+			load(env);
+		} catch (err) {
+			return (err as Error).message;
+		}
+		throw new Error("expected the configuration to be refused");
+	};
+
+	describe("validation", () => {
+		const env = (extra: Record<string, string> = {}) => ({
+			AUTH_MODE: "validation",
+			CLIENT_ID: "orders-proxy",
+			...extra,
+		});
+
+		it("reads CLIENT_KEY and VALIDATION_PROVIDER_ISSUER", () => {
+			const config = load(env({ CLIENT_KEY: KEY, VALIDATION_PROVIDER_ISSUER: ISSUER }));
+			if (config.auth.mode !== "validation") throw new Error("narrow");
+			expect(config.auth.validation.client.clientSecret).toBeNull();
+			expect(config.auth.validation.client.clientKey).toMatchObject({ alg: "EdDSA", kid: "proxy-1" });
+			expect(config.auth.validation.providerIssuer).toBe(ISSUER);
+		});
+
+		it("refuses a provider issuer that no key uses, naming it", () => {
+			expect(refusal(env({ CLIENT_SECRET: "s3cret", VALIDATION_PROVIDER_ISSUER: ISSUER }))).toMatch(
+				/auth\.validation\.providerIssuer/,
+			);
+		});
+
+		it("defaults to no key and no issuer", () => {
+			const config = load({ AUTH_MODE: "validation" });
+			if (config.auth.mode !== "validation") throw new Error("narrow");
+			expect(config.auth.validation.client.clientKey).toBeNull();
+			expect(config.auth.validation.providerIssuer).toBeNull();
+		});
+
+		it("reads a key written as a HOCON object", () => {
+			const text = `${readFileSync(confPath, "utf8")}
+auth.validation.client.clientKey = ${JSON.stringify(privateJwk())}
+`;
+			const config = validate(
+				parseString(text, { env: env({ VALIDATION_PROVIDER_ISSUER: ISSUER }) }),
+				AppConfigSchema,
+			);
+			if (config.auth.mode !== "validation") throw new Error("narrow");
+			expect(config.auth.validation.client.clientKey).toMatchObject({ alg: "EdDSA" });
+		});
+
+		it("refuses a secret and a key together, naming both", () => {
+			const message = refusal(
+				env({ CLIENT_SECRET: "s3cret", CLIENT_KEY: KEY, VALIDATION_PROVIDER_ISSUER: ISSUER }),
+			);
+			expect(message).toMatch(/auth\.validation\.client\.clientSecret/);
+			expect(message).toMatch(/auth\.validation\.client\.clientKey/);
+		});
+
+		it("refuses a key without a client id", () => {
+			expect(
+				refusal({ AUTH_MODE: "validation", CLIENT_KEY: KEY, VALIDATION_PROVIDER_ISSUER: ISSUER }),
+			).toMatch(/auth\.validation\.client\.clientId/);
+		});
+
+		it("refuses a client id with neither a secret nor a key, naming both", () => {
+			const message = refusal(env());
+			expect(message).toMatch(/auth\.validation\.client\.clientSecret/);
+			expect(message).toMatch(/auth\.validation\.client\.clientKey/);
+		});
+
+		it("refuses a key without the provider's issuer, naming it", () => {
+			expect(refusal(env({ CLIENT_KEY: KEY }))).toMatch(/auth\.validation\.providerIssuer/);
+		});
+
+		it("refuses a key it cannot sign with, naming the key and never quoting it", () => {
+			const jwk = privateJwk();
+			const unusable = JSON.stringify({ ...jwk, alg: "HS256" });
+			const message = refusal(env({ CLIENT_KEY: unusable, VALIDATION_PROVIDER_ISSUER: ISSUER }));
+			expect(message).toMatch(/auth\.validation\.client\.clientKey/);
+			expect(message).not.toContain(jwk.d as string);
+		});
+
+		it.each([
+			["with a path", "https://auth.example.test/tenant-a"],
+			["http on localhost", "http://localhost:3000"],
+			["http on 127.0.0.1", "http://127.0.0.1:3000"],
+			["http on [::1]", "http://[::1]:3000"],
+		])("accepts a provider issuer %s", (_label, issuer) => {
+			const config = load(env({ CLIENT_KEY: KEY, VALIDATION_PROVIDER_ISSUER: issuer }));
+			if (config.auth.mode !== "validation") throw new Error("narrow");
+			expect(config.auth.validation.providerIssuer).toBe(issuer);
+		});
+
+		// What the provider refuses as its own issuer (auth.provider's
+		// checkCanonicalIssuer), and anything the URL parser would rewrite: the
+		// value is sent as written, so a form the parser cleans up would never
+		// equal the provider's.
+		it.each([
+			["not a URL", "auth.example.test"],
+			["not http(s)", "urn:issuer:auth"],
+			["carrying a query", "https://auth.example.test/?x=1"],
+			["carrying a fragment", "https://auth.example.test/#x"],
+			["http on a host that is not loopback", "http://auth.internal:3000"],
+			["with userinfo", "https://user:pw@auth.example.test"],
+			["with a leading space", " https://auth.example.test"],
+			["with a tab in the host", "https://auth\t.example.test"],
+			["with backslashes", "https:\\\\auth.example.test"],
+			["with a fullwidth host", "https://ａuth.example.test"],
+		])("refuses a provider issuer %s", (_label, issuer) => {
+			expect(refusal(env({ CLIENT_KEY: KEY, VALIDATION_PROVIDER_ISSUER: issuer }))).toMatch(
+				/auth\.validation\.providerIssuer/,
+			);
+		});
+	});
+
+	describe("injection", () => {
+		const env = (extra: Record<string, string> = {}) => ({
+			AUTH_MODE: "injection",
+			INJECTION_CLIENT_ID: "bff",
+			INJECTION_SCOPE: "api",
+			...extra,
+		});
+
+		// An issuer no key uses is a key that did not arrive: the session grant
+		// would stay a public client without a word.
+		it("refuses a provider issuer that no key uses, naming it", () => {
+			expect(refusal(env({ INJECTION_PROVIDER_ISSUER: ISSUER }))).toMatch(
+				/auth\.injection\.providerIssuer/,
+			);
+			expect(refusal(env({ INJECTION_PROVIDER_ISSUER: ISSUER, INJECTION_CLIENT_KEY: "" }))).toMatch(
+				/auth\.injection\.providerIssuer/,
+			);
+		});
+
+		it("says an exchange key counts only with the exchange enabled", () => {
+			expect(
+				refusal(
+					env({
+						INJECTION_PROVIDER_ISSUER: ISSUER,
+						INJECTION_EXCHANGE_ENABLED: "false",
+						INJECTION_EXCHANGE_CLIENT_KEY: KEY,
+					}),
+				),
+			).toMatch(/enable the exchange/);
+		});
+
+		it("defaults to a public session-grant client: no key, no issuer", () => {
+			const config = load(env());
+			if (config.auth.mode !== "injection") throw new Error("narrow");
+			expect(config.auth.injection.clientKey).toBeNull();
+			expect(config.auth.injection.providerIssuer).toBeNull();
+		});
+
+		it("reads INJECTION_CLIENT_KEY and INJECTION_PROVIDER_ISSUER", () => {
+			const config = load(env({ INJECTION_CLIENT_KEY: KEY, INJECTION_PROVIDER_ISSUER: ISSUER }));
+			if (config.auth.mode !== "injection") throw new Error("narrow");
+			expect(config.auth.injection.clientKey).toMatchObject({ alg: "EdDSA", kid: "proxy-1" });
+			expect(config.auth.injection.providerIssuer).toBe(ISSUER);
+		});
+
+		it("refuses a session-grant key without the provider's issuer, naming it", () => {
+			expect(refusal(env({ INJECTION_CLIENT_KEY: KEY }))).toMatch(/auth\.injection\.providerIssuer/);
+		});
+
+		it("refuses a session-grant key it cannot sign with, naming the key", () => {
+			expect(
+				refusal(env({ INJECTION_CLIENT_KEY: "not a key", INJECTION_PROVIDER_ISSUER: ISSUER })),
+			).toMatch(/auth\.injection\.clientKey/);
+		});
+
+		describe("exchange", () => {
+			const enabled = (extra: Record<string, string> = {}) =>
+				env({
+					INJECTION_EXCHANGE_ENABLED: "true",
+					INJECTION_EXCHANGE_CLIENT_ID: "proxy-exchange",
+					...extra,
+				});
+
+			it("authenticates with a key instead of a secret", () => {
+				const config = load(
+					enabled({ INJECTION_EXCHANGE_CLIENT_KEY: KEY, INJECTION_PROVIDER_ISSUER: ISSUER }),
+				);
+				if (config.auth.mode !== "injection") throw new Error("narrow");
+				expect(config.auth.injection.exchange).toMatchObject({
+					enabled: true,
+					clientId: "proxy-exchange",
+					clientSecret: null,
+					clientKey: { alg: "EdDSA", kid: "proxy-1" },
+				});
+			});
+
+			it("refuses a secret and a key together, naming both", () => {
+				const message = refusal(
+					enabled({
+						INJECTION_EXCHANGE_CLIENT_SECRET: "s3cret",
+						INJECTION_EXCHANGE_CLIENT_KEY: KEY,
+						INJECTION_PROVIDER_ISSUER: ISSUER,
+					}),
+				);
+				expect(message).toMatch(/auth\.injection\.exchange\.clientSecret/);
+				expect(message).toMatch(/auth\.injection\.exchange\.clientKey/);
+			});
+
+			it("refuses neither a secret nor a key, naming both", () => {
+				const message = refusal(enabled());
+				expect(message).toMatch(/auth\.injection\.exchange\.clientSecret/);
+				expect(message).toMatch(/auth\.injection\.exchange\.clientKey/);
+			});
+
+			it("refuses a key without the provider's issuer, naming it", () => {
+				expect(refusal(enabled({ INJECTION_EXCHANGE_CLIENT_KEY: KEY }))).toMatch(
+					/auth\.injection\.providerIssuer/,
+				);
+			});
+		});
 	});
 });
 

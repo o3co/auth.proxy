@@ -28,6 +28,8 @@
  * the one the client or the decision writes, which their own tests pin.
  */
 
+import { generateKeyPairSync, type KeyObject } from "node:crypto";
+import { jwtVerify } from "jose";
 import { afterAll, afterEach, beforeAll, describe, expect, it, vi } from "vitest";
 
 import { type ProxyProcess, SUITE_TIMEOUT_MS, send, startProxy } from "./app-process.mjs";
@@ -845,6 +847,131 @@ describe.each(SETUPS)("the app in injection mode, $name", (setup) => {
 		expect(aboutRequests.length).toBeGreaterThan(0);
 		for (const logged of aboutRequests) {
 			expect(logged).toMatchObject({ requestId: expect.any(String), event: expect.stringMatching(/^injection\./) });
+		}
+	});
+});
+
+// private_key_jwt: both injection clients authenticate with their own key, and
+// the provider's issuer is the assertions' audience (README, Client
+// authentication with a private key).
+describe("the app in injection mode, with client keys", () => {
+	const ISSUER = "https://auth.example.test";
+	const SESSION_KEY = generateKeyPairSync("ed25519");
+	const EXCHANGE_KEY = generateKeyPairSync("ed25519");
+	const jwk = (pair: { privateKey: KeyObject }, kid: string) => ({
+		...pair.privateKey.export({ format: "jwk" }),
+		kid,
+	});
+	const SESSION_JWK = jwk(SESSION_KEY, "bff-spa-1");
+	const EXCHANGE_JWK = jwk(EXCHANGE_KEY, "bff-exchanger-1");
+	const CLIENT_ASSERTION_TYPE = "urn:ietf:params:oauth:client-assertion-type:jwt-bearer";
+	let proxy: ProxyProcess;
+
+	beforeAll(async () => {
+		proxy = await startProxy(
+			{
+				...sessionEnv(),
+				INJECTION_CLIENT_KEY: JSON.stringify(SESSION_JWK),
+				INJECTION_PROVIDER_ISSUER: ISSUER,
+				INJECTION_EXCHANGE_ENABLED: "true",
+				INJECTION_EXCHANGE_CLIENT_ID: "bff-exchanger",
+				INJECTION_EXCHANGE_CLIENT_KEY: JSON.stringify(EXCHANGE_JWK),
+				INJECTION_EXCHANGE_SCOPE: "orders:read",
+			},
+			upstream,
+		);
+	});
+	afterAll(async () => {
+		await proxy?.stop();
+	});
+
+	/** The one grant a request made, with its client assertion verified for `clientId`. */
+	const verifiedGrant = async (requestId: string, clientId: string, publicKey: KeyObject, kid: string) => {
+		const grants = grantsFor(requestId);
+		expect(grants).toHaveLength(1);
+		const [grant] = grants;
+		expect(grant.authorization).toBeUndefined();
+		expect(grant.form).toMatchObject({ client_id: clientId, client_assertion_type: CLIENT_ASSERTION_TYPE });
+		const { protectedHeader } = await jwtVerify(grant.form.client_assertion, publicKey, {
+			issuer: clientId,
+			subject: clientId,
+			audience: ISSUER,
+			algorithms: ["EdDSA"],
+		});
+		expect(protectedHeader.kid).toBe(kid);
+		return grant;
+	};
+
+	it("exchanges the session cookie as a confidential client and injects the token", async () => {
+		const requestId = "injection-keys-session";
+		fake.respond(TOKEN_PATH, issued("minted-keyed"));
+
+		const res = await send(proxy.origin, {
+			path: RESOURCE,
+			headers: { "x-request-id": requestId, cookie: "sid=sess-keyed" },
+		});
+
+		expect(res.status).toBe(200);
+		const grant = await verifiedGrant(requestId, "bff-spa", SESSION_KEY.publicKey, "bff-spa-1");
+		expect(grant.cookie).toBe("sid=sess-keyed");
+		expect(grant.form).toMatchObject({ grant_type: "session", scope: "api read" });
+		expect(headerPairs(upstream.receivedFor(requestId)[0].rawHeaders, "authorization")).toEqual([
+			["Authorization", "Bearer minted-keyed"],
+		]);
+		for (const logged of await proxy.linesFor(requestId)) {
+			expect(logged.raw).not.toContain(grant.form.client_assertion);
+		}
+	});
+
+	it("exchanges a Bearer JWT with the exchange's own client assertion", async () => {
+		const requestId = "injection-keys-exchange";
+		const assertion = jwt({ iss: "https://idp.example", sub: "alice", jti: "k-1" });
+		fake.respond(TOKEN_PATH, issued("exchanged-keyed"));
+
+		const res = await send(proxy.origin, {
+			path: RESOURCE,
+			headers: { "x-request-id": requestId, authorization: `Bearer ${assertion}` },
+		});
+
+		expect(res.status).toBe(200);
+		const grant = await verifiedGrant(
+			requestId,
+			"bff-exchanger",
+			EXCHANGE_KEY.publicKey,
+			"bff-exchanger-1",
+		);
+		expect(grant.form).toMatchObject({ grant_type: JWT_BEARER, assertion, scope: "orders:read" });
+		expect(headerPairs(upstream.receivedFor(requestId)[0].rawHeaders, "authorization")).toEqual([
+			["Authorization", "Bearer exchanged-keyed"],
+		]);
+	});
+
+	it("answers the provider refusing the session grant's client authentication 502 provider_config_error", async () => {
+		const requestId = "injection-keys-refused";
+		fake.respond(TOKEN_PATH, json(401, { error: "invalid_client" }));
+
+		const res = await send(proxy.origin, {
+			path: RESOURCE,
+			headers: { "x-request-id": requestId, cookie: "sid=sess-keyed-refused" },
+		});
+
+		expect(res.status).toBe(502);
+		expect(res.json()).toEqual({
+			error: "provider_config_error",
+			error_description: "provider rejected the proxy's client authentication",
+		});
+		expect(upstream.receivedFor(requestId)).toEqual([]);
+	});
+
+	it("logged neither private key", async () => {
+		await proxy.linesFor("injection-keys-every-line");
+		for (const secret of [
+			JSON.stringify(SESSION_JWK),
+			JSON.stringify(EXCHANGE_JWK),
+			SESSION_JWK.d as string,
+			EXCHANGE_JWK.d as string,
+		]) {
+			for (const logged of proxy.lines) expect(logged.raw).not.toContain(secret);
 		}
 	});
 });

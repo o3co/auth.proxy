@@ -32,7 +32,8 @@ const validationConfig: AppConfig = {
 	auth: {
 		mode: "validation" as const,
 		validation: {
-			client: { clientId: null, clientSecret: null },
+			client: { clientId: null, clientSecret: null, clientKey: null },
+			providerIssuer: null,
 			realm: null,
 			introspect: {
 				url: "http://auth/introspect",
@@ -52,6 +53,8 @@ const injectionConfig: AppConfig = {
 		injection: {
 			providerOrigin: "http://provider",
 			clientId: "my-spa",
+			clientKey: null,
+			providerIssuer: null,
 			scope: "api",
 			sessionCookieName: "sid",
 			stripInboundAuthorization: false,

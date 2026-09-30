@@ -1,6 +1,6 @@
 # `src/modes/validation`
 
-Last updated: 2026-09-24
+Last updated: 2026-09-30
 
 In validation mode, an inbound `Authorization: Bearer <token>` is checked against the provider's RFC 7662 introspection endpoint, and the request is then forwarded or refused. The root README covers the wire behaviour and the credential choice under [Validation mode](../../../README.md#validation-mode-authmode--validation) and [Introspection client identity](../../../README.md#introspection-client-identity). It covers revocation under [Revocation and the access-token lifetime](../../../README.md#revocation-and-the-access-token-lifetime). The boundary review behind this directory is [#95](https://github.com/o3co/auth.proxy/issues/95).
 
@@ -76,7 +76,7 @@ In validation mode, an inbound `Authorization: Bearer <token>` is checked agains
 - **Within `src/`:**
   - [`express/bearer.mts`](../../express/bearer.mts) and `express/requestId.mts`;
   - [`router/upstream.mts`](../../router/upstream.mts);
-  - [`oauth/client-secret-basic.mts`](../../oauth/client-secret-basic.mts), used when client credentials are configured;
+  - [`oauth/client-authentication.mts`](../../oauth/client-authentication.mts), used when client credentials are configured (a secret, or a key), with the credential types of `oauth/client-secret-basic.mts`;
   - the root modules `single-flight.mts`, `response-body.mts` and `logger.mts`. Only the router takes the logger singleton; the decision sees just the `Logger` type.
 - **Outside `src/`:** `config/application.schema.mts`, for types only.
 - **Packages:** `express` and `node:crypto`.

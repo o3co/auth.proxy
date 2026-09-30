@@ -25,7 +25,8 @@ const makeConfig = (
 		bodyLimitSize: "10mb", cors: { origin: { pattern: null } },
 	},
 	auth: { mode: "validation", validation: {
-		client,
+		client: { ...client, clientKey: null },
+		providerIssuer: null,
 		realm,
 		introspect: { url: "http://provider.test/introspect", cacheTtlSec: 30, cacheMaxEntries: 100, timeoutMs: 5000 },
 	} },

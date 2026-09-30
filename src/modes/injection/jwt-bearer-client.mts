@@ -16,12 +16,13 @@
 
 /**
  * The token-endpoint client for the exchange: one RFC 7523 jwt-bearer grant
- * per call, authenticated with `client_secret_basic`. Declares the client's
+ * per call, authenticated with `client_secret_basic` or `private_key_jwt`,
+ * whichever is configured. Declares the client's
  * contract and its error class beside the bundled client, with the code each
  * failure maps to.
  */
 
-import { clientSecretBasic } from "../../oauth/client-secret-basic.mjs";
+import { authenticateClient, type ClientAuthentication } from "../../oauth/client-authentication.mjs";
 import { discardBody, readBoundedJsonObject } from "../../response-body.mjs";
 import { MAX_ERROR_BODY_BYTES, sanitizeErrorCode } from "./provider-error.mjs";
 import { buildTokenUrl, parseJsonBody } from "./token-endpoint.mjs";
@@ -39,7 +40,7 @@ export const JWT_BEARER_GRANT_TYPE = "urn:ietf:params:oauth:grant-type:jwt-beare
  *     this client / scope / target (`invalid_scope`, `invalid_target`,
  *     `unauthorized_client`).
  *   - `provider_config_error` (502): the provider refused the proxy itself —
- *     any 401 (the proxy's `client_secret_basic` refused), any other 400, or a
+ *     any 401 (the proxy's client authentication refused), any other 400, or a
  *     redirect.
  *   - `provider_unavailable` (502): 5xx, 429, a network error or timeout before
  *     the response arrives, or an unexpected status.
@@ -79,8 +80,8 @@ export interface JwtBearerResult {
 export interface JwtBearerClientConfig {
 	providerOrigin: string;
 	timeoutMs: number;
-	clientId: string;
-	clientSecret: string;
+	/** How the proxy authenticates as the exchange's client. */
+	credentials: ClientAuthentication;
 	scope: string | null;
 	audience: string | null;
 	resource: string | null;
@@ -109,33 +110,40 @@ const NOT_PERMITTED: ReadonlySet<string> = new Set([
  * replay. Whether the assertion is trustworthy, for which client, scope and
  * audience, is the provider's decision; this client only maps the answer.
  *
- * Same origin, URL construction and timeout as the session grant client. It
- * authenticates with `client_secret_basic`, so the body carries no
- * `client_id`. Redirects are not followed: the body carries a bearer
- * credential and the header the proxy's own secret, and a token endpoint that
- * redirects is misconfigured.
+ * Same origin, URL construction and timeout as the session grant client. With
+ * a client secret it authenticates with `client_secret_basic`, and the body
+ * carries no `client_id`; with a client key, a new client assertion and the
+ * `client_id` go in the body and no `Authorization` header is sent. Redirects
+ * are not followed: the body carries a bearer credential, and the header or
+ * the body the proxy's own, and a token endpoint that redirects is
+ * misconfigured.
  */
 export const createJwtBearerClient = (cfg: JwtBearerClientConfig): JwtBearerClient => {
 	const url = buildTokenUrl(cfg.providerOrigin);
-	const authorization = clientSecretBasic(cfg);
 
 	return {
 		async exchange({ assertion, requestId }) {
-			const params = new URLSearchParams({ grant_type: JWT_BEARER_GRANT_TYPE, assertion });
+			const client = await authenticateClient(cfg.credentials);
+			const params = new URLSearchParams({
+				grant_type: JWT_BEARER_GRANT_TYPE,
+				assertion,
+				...client.params,
+			});
 			if (cfg.scope !== null) params.set("scope", cfg.scope);
 			if (cfg.audience !== null) params.set("audience", cfg.audience);
 			if (cfg.resource !== null) params.set("resource", cfg.resource);
+			const headers: Record<string, string> = {
+				"Content-Type": "application/x-www-form-urlencoded",
+				"X-Request-Id": requestId,
+				Accept: "application/json",
+			};
+			if (client.authorization !== null) headers.Authorization = client.authorization;
 
 			let resp: Response;
 			try {
 				resp = await fetch(url, {
 					method: "POST",
-					headers: {
-						"Content-Type": "application/x-www-form-urlencoded",
-						Authorization: authorization,
-						"X-Request-Id": requestId,
-						Accept: "application/json",
-					},
+					headers,
 					body: params.toString(),
 					redirect: "manual",
 					signal: AbortSignal.timeout(cfg.timeoutMs),
@@ -197,7 +205,7 @@ export const createJwtBearerClient = (cfg: JwtBearerClientConfig): JwtBearerClie
 			if (resp.status === 400 || resp.status === 401) {
 				const data = await readBoundedJsonObject(resp, MAX_ERROR_BODY_BYTES);
 				const rawError = data?.error;
-				const providerError = sanitizeErrorCode(rawError, [assertion, cfg.clientSecret]);
+				const providerError = sanitizeErrorCode(rawError, [assertion, client.credential]);
 				if (resp.status === 400 && rawError === "invalid_grant") {
 					throw new JwtBearerError(
 						"credential_rejected",
@@ -237,7 +245,7 @@ export const createJwtBearerClient = (cfg: JwtBearerClientConfig): JwtBearerClie
 					? `provider call failed: returned ${resp.status}`
 					: `unexpected provider response: ${resp.status}`,
 				retryAfter,
-				sanitizeErrorCode(data?.error, [assertion, cfg.clientSecret]),
+				sanitizeErrorCode(data?.error, [assertion, client.credential]),
 			);
 		},
 	};

@@ -16,6 +16,7 @@
  *   with CORS for an origin the pattern admits.
  */
 
+import { generateKeyPairSync } from "node:crypto";
 import { afterAll, afterEach, beforeAll, describe, expect, it, vi } from "vitest";
 
 import { bootProxy, type ProxyProcess, SUITE_TIMEOUT_MS, send, startProxy } from "./app-process.mjs";
@@ -33,6 +34,10 @@ const INJECTION = {
 	INJECTION_CLIENT_ID: "bff-spa",
 	INJECTION_SCOPE: "api",
 };
+
+/** A private JWK with an algorithm that does not fit it: a key the proxy cannot sign with. */
+const UNUSABLE_JWK = { ...generateKeyPairSync("ed25519").privateKey.export({ format: "jwk" }), alg: "HS256" };
+const USABLE_KEY = JSON.stringify(generateKeyPairSync("ed25519").privateKey.export({ format: "jwk" }));
 
 /** A configuration the documentation says is refused at boot. */
 interface Refusal {
@@ -94,6 +99,25 @@ describe("the entry point at boot", () => {
 			env: { ...VALIDATION, CLIENT_ID: "orders-proxy" },
 			path: ["auth", "validation", "client"],
 			names: ["auth.validation.client.clientId", "auth.validation.client.clientSecret"],
+			unprinted: [],
+		},
+		{
+			name: "refuses a CLIENT_KEY it cannot sign with, naming the key and not quoting it",
+			env: {
+				...VALIDATION,
+				CLIENT_ID: "orders-proxy",
+				CLIENT_KEY: JSON.stringify(UNUSABLE_JWK),
+				VALIDATION_PROVIDER_ISSUER: "https://auth.example.test",
+			},
+			path: ["auth", "validation", "client", "clientKey"],
+			names: ["auth.validation.client.clientKey"],
+			unprinted: [UNUSABLE_JWK.d as string],
+		},
+		{
+			name: "refuses an INJECTION_CLIENT_KEY without INJECTION_PROVIDER_ISSUER, naming the issuer",
+			env: { ...INJECTION, INJECTION_CLIENT_KEY: USABLE_KEY },
+			path: ["auth", "injection", "providerIssuer"],
+			names: ["auth.injection.providerIssuer"],
 			unprinted: [],
 		},
 		{

@@ -128,8 +128,9 @@ export interface ExchangeDeps {
 	 * instance: the grant type leading each key keeps their entries apart.
 	 * `exchangeCacheKey` carries the context (endpoint, client id, scope,
 	 * audience, resource), so routers differing in any of those may share one.
-	 * The caller must match what it cannot carry: `clientSecret`, which is not
-	 * part of the context; the supplied `client`, which cannot be hashed; and
+	 * The caller must match what it cannot carry: the client's credential
+	 * (`clientSecret` or `clientKey`), which is not part of the context; the
+	 * supplied `client`, which cannot be hashed; and
 	 * the cache policy, which decides how long an entry lives rather than which
 	 * token comes back.
 	 */

@@ -1,3 +1,4 @@
+import { generateKeyPairSync } from "node:crypto";
 import type { IncomingMessage, Server, ServerResponse } from "node:http";
 import http from "node:http";
 import type { AddressInfo } from "node:net";
@@ -7,6 +8,7 @@ import { afterEach, beforeEach, describe, expect, it, vi } from "vitest";
 import type { AppConfig, ExchangeConfig } from "../../../../config/application.schema.mjs";
 import type { Logger } from "../../../logger.mjs";
 import logger from "../../../logger.mjs";
+import { parseClientKey } from "../../../oauth/private-key-jwt.mjs";
 import { createSingleFlight, type SingleFlight } from "../../../single-flight.mjs";
 import { exchangeCacheKey, exchangeContext } from "../exchange.mjs";
 import { createRouter } from "../router.mjs";
@@ -42,6 +44,7 @@ const ENABLED: Extract<ExchangeConfig, { enabled: true }> = {
 	enabled: true,
 	clientId: "proxy-exchange",
 	clientSecret: "s3cret",
+	clientKey: null,
 	scope: null,
 	audience: null,
 	resource: null,
@@ -65,6 +68,8 @@ const makeConfig = (
 		injection: {
 			providerOrigin: "http://provider.example",
 			clientId: "my-spa",
+			clientKey: null,
+			providerIssuer: null,
 			scope: "api",
 			sessionCookieName: "sid",
 			stripInboundAuthorization: false,
@@ -904,5 +909,18 @@ describe("injection router — external credential exchange", () => {
 			expect(singletonInfo).not.toHaveBeenCalled();
 			expect(singletonWarn).not.toHaveBeenCalled();
 		});
+	});
+});
+
+// The schema admits a key only with an issuer; a hand-built configuration that
+// bypasses it is refused when the router is built.
+describe("injection router — exchange client authentication", () => {
+	it("refuses an exchange client key without the provider's issuer", () => {
+		const clientKey = parseClientKey(generateKeyPairSync("ed25519").privateKey.export({ format: "jwk" }));
+		const exchange: ExchangeConfig = { ...ENABLED, clientSecret: null, clientKey };
+
+		expect(() => createRouter({ config: makeConfig("http://127.0.0.1:1", exchange) })).toThrow(
+			/providerIssuer/,
+		);
 	});
 });

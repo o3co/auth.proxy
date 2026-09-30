@@ -9,9 +9,11 @@
  * `exchange-router.test.mts`; the exchange decision is `exchange-decision.test.mts`
  * and is only handed off to from here.
  */
+import { generateKeyPairSync } from "node:crypto";
 import { describe, expect, it, vi } from "vitest";
 import type { AppConfig } from "../../../../config/application.schema.mjs";
 import type { Logger } from "../../../logger.mjs";
+import { parseClientKey } from "../../../oauth/private-key-jwt.mjs";
 import { createSingleFlight } from "../../../single-flight.mjs";
 import {
 	decideInjection,
@@ -34,6 +36,8 @@ type InjectionCfg = Extract<AppConfig["auth"], { mode: "injection" }>["injection
 const baseCfg: InjectionCfg = {
 	providerOrigin: "http://provider.example",
 	clientId: "my-spa",
+	clientKey: null,
+	providerIssuer: null,
 	scope: "api",
 	sessionCookieName: "sid",
 	stripInboundAuthorization: false,
@@ -91,6 +95,61 @@ const keyFor = (cookieValue: string, cfgOverrides: Partial<InjectionCfg> = {}): 
 // different question about the same cookie value, and must not be served
 // another router's answer.
 describe("sessionCacheKey", () => {
+	// How the client authenticates is keyed too, by what names it without
+	// revealing it: the method, the issuer and the key's thumbprint. A router
+	// sharing the cache with one configured differently is not served tokens
+	// it could not obtain itself.
+	it("differs by how the session grant's client authenticates", () => {
+		const keyA = parseClientKey(generateKeyPairSync("ed25519").privateKey.export({ format: "jwk" }));
+		const keyB = parseClientKey(generateKeyPairSync("ed25519").privateKey.export({ format: "jwk" }));
+		const issuer = "https://auth.example.test";
+		const publicClient = keyFor("s1");
+		const keyed = keyFor("s1", { clientKey: keyA, providerIssuer: issuer });
+
+		expect(keyed).not.toBe(publicClient);
+		expect(keyFor("s1", { clientKey: keyA, providerIssuer: "https://other.example.test" })).not.toBe(keyed);
+		expect(keyFor("s1", { clientKey: keyB, providerIssuer: issuer })).not.toBe(keyed);
+		expect(keyFor("s1", { clientKey: keyA, providerIssuer: issuer })).toBe(keyed);
+		expect(keyed).not.toContain(keyA.thumbprint);
+	});
+
+	// The same key material under another kid or alg is another credential to
+	// the provider: an unregistered kid, or an alg the registered key does not
+	// name, is refused.
+	it("differs by the key's kid and alg, not only its material", () => {
+		const issuer = "https://auth.example.test";
+		const ed = generateKeyPairSync("ed25519").privateKey.export({ format: "jwk" });
+		const rsa = generateKeyPairSync("rsa", { modulusLength: 2048 }).privateKey.export({ format: "jwk" });
+		const withKey = (jwk: object) =>
+			keyFor("s1", { clientKey: parseClientKey(jwk), providerIssuer: issuer });
+
+		expect(withKey({ ...ed, kid: "registered" })).not.toBe(withKey({ ...ed, kid: "unregistered" }));
+		expect(withKey({ ...ed, kid: "k1" })).not.toBe(withKey(ed));
+		expect(withKey({ ...rsa, alg: "RS256" })).not.toBe(withKey({ ...rsa, alg: "PS256" }));
+		expect(withKey({ ...ed, kid: "k1" })).toBe(withKey({ ...ed, kid: "k1" }));
+	});
+
+	it("does not serve a router with an unregistered kid the token a router with the registered one obtained, over a shared cache", async () => {
+		const ed = generateKeyPairSync("ed25519").privateKey.export({ format: "jwk" });
+		const keyed = (kid: string): Partial<InjectionCfg> => ({
+			clientKey: parseClientKey({ ...ed, kid }),
+			providerIssuer: "https://auth.example.test",
+		});
+		const registered = makeDeps(keyed("registered"));
+		const unregistered = makeDeps(keyed("unregistered"));
+		unregistered.deps.tokenCache = registered.deps.tokenCache;
+		unregistered.deps.singleFlight = registered.deps.singleFlight;
+		registered.grantClient.exchange.mockResolvedValueOnce(grant("tok-registered"));
+		unregistered.grantClient.exchange.mockRejectedValueOnce(
+			new SessionGrantError("provider_config_error", 502, "provider rejected the proxy's client authentication"),
+		);
+
+		const cookie = inputs({ cookieHeader: "sid=s1" });
+		expect(await decideInjection(cookie, registered.deps)).toEqual({ kind: "inject", token: "tok-registered" });
+		expect(await decideInjection(cookie, unregistered.deps)).toMatchObject({ kind: "respond", status: 502 });
+		expect(unregistered.grantClient.exchange).toHaveBeenCalledTimes(1);
+	});
+
 	it("never contains the cookie value", () => {
 		expect(keyFor("s3cret-session")).not.toContain("s3cret-session");
 		expect(keyFor("s3cret-session")).toMatch(/^[0-9a-f]{64}$/);

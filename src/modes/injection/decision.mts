@@ -50,11 +50,18 @@ type InjectionConfig = Extract<AppConfig["auth"], { mode: "injection" }>;
  * serve two routers, and a different provider, client, scope or cookie name
  * is a different question about the same cookie value.
  *
+ * How the client authenticates is keyed too, by what names it without
+ * revealing it — the method, the issuer, and the key's RFC 7638 thumbprint,
+ * `kid` and `alg`, since the same material under another `kid` or `alg` is
+ * another credential to the provider — so a router that could not obtain a
+ * token itself (public where the provider wants a key, or holding another key
+ * or another `kid`) is not served one another router obtained.
+ *
  * Hashed as a JSON array rather than joined, so no field's text can shift into
  * its neighbour's, and the cookie value never leaves the digest. The cache
  * policy is not in it (`ttlSeconds` bounds how long an entry lives, not which
- * token comes back), and neither is the grant client, which cannot be hashed:
- * a caller sharing one cache between routers must match those two.
+ * token comes back), and neither is the grant client, which cannot be hashed: a
+ * caller sharing one cache between routers must match those two.
  *
  * The parameter is the client's own config minus `timeoutMs`, and the rest
  * element below is what makes that a guarantee rather than a convention: a
@@ -65,7 +72,9 @@ export const sessionCacheKey = (
 	cfg: Omit<SessionGrantClientConfig, "timeoutMs">,
 	sessionCookieValue: string,
 ): string => {
-	const { providerOrigin, clientId, scope, sessionCookieName, ..._unkeyed } = cfg;
+	const { providerOrigin, clientId, scope, sessionCookieName, clientKey, providerIssuer, ..._unkeyed } =
+		cfg;
+	const keyed = clientKey !== undefined && clientKey !== null;
 	// Empty by construction today; a new field makes it non-empty and this
 	// assignment stops compiling.
 	const _everythingIsKeyed: Record<string, never> = _unkeyed;
@@ -79,6 +88,11 @@ export const sessionCacheKey = (
 				clientId,
 				scope,
 				sessionCookieName,
+				keyed ? "private_key_jwt" : "none",
+				keyed ? (providerIssuer ?? null) : null,
+				keyed ? clientKey.thumbprint : null,
+				keyed ? clientKey.kid : null,
+				keyed ? clientKey.alg : null,
 				sessionCookieValue,
 			]),
 		)
@@ -95,9 +109,10 @@ export interface InjectionDeps {
 	cfg: InjectionConfig["injection"];
 	/**
 	 * Both keyed by {@link sessionCacheKey}, which carries the grant context —
-	 * provider, client, scope, cookie name — beside the cookie value, so an
-	 * instance supplied through `createRouter({ deps })` may be shared between
-	 * routers that differ in any of those. What is not in the key is the
+	 * provider, client, scope, cookie name, and how the client authenticates —
+	 * beside the cookie value, so an instance supplied through
+	 * `createRouter({ deps })` may be shared between routers that differ in any
+	 * of those. What is not in the key is the
 	 * caller's to match: the `grantClient`, which cannot be hashed, and the
 	 * cache policy, which decides how long an entry lives rather than which
 	 * token comes back.

@@ -1,5 +1,8 @@
+import { generateKeyPairSync } from "node:crypto";
+import { jwtVerify } from "jose";
 import { afterEach, beforeEach, describe, expect, it, vi } from "vitest";
 import { clientSecretBasic } from "../../../oauth/client-secret-basic.mjs";
+import { CLIENT_ASSERTION_TYPE, parseClientKey } from "../../../oauth/private-key-jwt.mjs";
 import {
 	createJwtBearerClient,
 	JWT_BEARER_GRANT_TYPE,
@@ -11,8 +14,7 @@ import { MAX_TOKEN_BODY_BYTES } from "../token-endpoint.mjs";
 const baseCfg: JwtBearerClientConfig = {
 	providerOrigin: "http://provider.example",
 	timeoutMs: 5000,
-	clientId: "proxy-exchange",
-	clientSecret: "s3cret",
+	credentials: { clientId: "proxy-exchange", clientSecret: "s3cret" },
 	scope: null,
 	audience: null,
 	resource: null,
@@ -124,7 +126,7 @@ describe("createJwtBearerClient.exchange", () => {
 		it("percent-encodes reserved characters in the client credentials (RFC 6749 section 2.3.1)", async () => {
 			fetchMock.mockResolvedValueOnce(okResponse());
 			const credentials = { clientId: "https://proxy.example/x", clientSecret: "a:b c" };
-			await exchange({ ...baseCfg, ...credentials });
+			await exchange({ ...baseCfg, credentials });
 
 			expect(callHeaders().Authorization).toBe(clientSecretBasic(credentials));
 			const decoded = Buffer.from(
@@ -132,6 +134,33 @@ describe("createJwtBearerClient.exchange", () => {
 				"base64",
 			).toString("utf8");
 			expect(decoded).toBe("https%3A%2F%2Fproxy.example%2Fx:a%3Ab%20c");
+		});
+
+		it("authenticates with a client assertion in the body, and no Authorization header, when a client key is configured", async () => {
+			fetchMock.mockResolvedValueOnce(okResponse());
+			const { privateKey, publicKey } = generateKeyPairSync("ed25519");
+			await exchange({
+				...baseCfg,
+				credentials: {
+					clientId: "proxy-exchange",
+					clientKey: parseClientKey(privateKey.export({ format: "jwk" })),
+					audience: "https://auth.example.test",
+				},
+			});
+
+			expect(callHeaders()).not.toHaveProperty("Authorization");
+			const params = callParams();
+			expect(params.get("grant_type")).toBe(JWT_BEARER_GRANT_TYPE);
+			expect(params.get("assertion")).toBe(ASSERTION);
+			expect(params.get("client_id")).toBe("proxy-exchange");
+			expect(params.get("client_assertion_type")).toBe(CLIENT_ASSERTION_TYPE);
+			await expect(
+				jwtVerify(params.get("client_assertion") ?? "", publicKey, {
+					issuer: "proxy-exchange",
+					subject: "proxy-exchange",
+					audience: "https://auth.example.test",
+				}),
+			).resolves.toBeDefined();
 		});
 
 		it("passes the configured timeout as AbortSignal.timeout", async () => {
@@ -349,6 +378,26 @@ describe("createJwtBearerClient.exchange", () => {
 				expect(err.code, String(error)).toBe("provider_config_error");
 				expect(err.providerError, String(error)).toBe("invalid_error_code");
 			}
+		});
+
+		it("never records a client assertion the provider echoes as its error", async () => {
+			fetchMock.mockImplementationOnce(async (_url: string, init: RequestInit) =>
+				jsonResponse(401, {
+					error: new URLSearchParams(init.body as string).get("client_assertion"),
+				}),
+			);
+			const err = (await exchange({
+				...baseCfg,
+				credentials: {
+					clientId: "proxy-exchange",
+					clientKey: parseClientKey(generateKeyPairSync("ed25519").privateKey.export({ format: "jwk" })),
+					audience: "https://auth.example.test",
+				},
+			}).catch((e: unknown) => e)) as JwtBearerError;
+
+			expect(err).toBeInstanceOf(JwtBearerError);
+			expect(err.code).toBe("provider_config_error");
+			expect(err.providerError).toBe("invalid_error_code");
 		});
 
 		it("maps a redirect to provider_config_error", async () => {

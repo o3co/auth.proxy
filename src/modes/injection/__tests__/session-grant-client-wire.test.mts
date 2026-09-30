@@ -12,6 +12,8 @@
  * `AbortSignal.timeout` ends a call — or a body read — on a real socket, and
  * what reaches the provider.
  */
+import { generateKeyPairSync } from "node:crypto";
+import { jwtVerify } from "jose";
 import { afterAll, afterEach, beforeAll, describe, expect, it } from "vitest";
 
 import {
@@ -21,6 +23,7 @@ import {
 	startFakeProvider,
 } from "../../../__tests__/fake-provider.mjs";
 import { controlledTimeout, timeoutAfterResponseHeaders } from "../../../__tests__/provider-timeout.mjs";
+import { CLIENT_ASSERTION_TYPE, parseClientKey } from "../../../oauth/private-key-jwt.mjs";
 import { MAX_ERROR_BODY_BYTES } from "../provider-error.mjs";
 import {
 	createSessionGrantClient,
@@ -31,6 +34,13 @@ import { MAX_TOKEN_BODY_BYTES } from "../token-endpoint.mjs";
 
 const PATH = "/oauth/token";
 const COOKIE_VALUE = "sess-5b2d";
+const ISSUER = "https://auth.example.test";
+const KEY_PAIR = generateKeyPairSync("ed25519");
+/** A confidential session-grant client: the proxy signs a client assertion. */
+const WITH_KEY: Partial<SessionGrantClientConfig> = {
+	clientKey: parseClientKey({ ...KEY_PAIR.privateKey.export({ format: "jwk" }), kid: "bff-1" }),
+	providerIssuer: ISSUER,
+};
 
 describe("createSessionGrantClient on the wire", () => {
 	let fake: FakeProvider;
@@ -105,6 +115,36 @@ describe("createSessionGrantClient on the wire", () => {
 				client_id: "proxy-client",
 				scope: "openid profile",
 			});
+		});
+
+		it("with a client key, a new client assertion in the body on every call, and still no Authorization", async () => {
+			fake.respond(PATH, json(200, { access_token: "at-1", token_type: "Bearer" }));
+
+			await exchange(WITH_KEY);
+			await exchange(WITH_KEY);
+
+			expect(fake.requests).toHaveLength(2);
+			const assertions: string[] = [];
+			for (const req of fake.requests) {
+				expect(req.headers.authorization).toBeUndefined();
+				expect(req.headers.cookie).toBe(`sid=${COOKIE_VALUE}`);
+				const body = Object.fromEntries(new URLSearchParams(req.body.toString("utf8")));
+				expect(body).toMatchObject({
+					grant_type: "session",
+					client_id: "proxy-client",
+					scope: "openid profile",
+					client_assertion_type: CLIENT_ASSERTION_TYPE,
+				});
+				const { protectedHeader } = await jwtVerify(body.client_assertion, KEY_PAIR.publicKey, {
+					issuer: "proxy-client",
+					subject: "proxy-client",
+					audience: ISSUER,
+					algorithms: ["EdDSA"],
+				});
+				expect(protectedHeader.kid).toBe("bff-1");
+				assertions.push(body.client_assertion);
+			}
+			expect(assertions[0]).not.toBe(assertions[1]);
 		});
 	});
 
@@ -240,6 +280,36 @@ describe("createSessionGrantClient on the wire", () => {
 				message: "provider rejected the proxy's client (client_id)",
 				retryAfter: "9",
 			});
+		});
+
+		it("refuses to be built with a client key and no providerIssuer, the assertion's audience", () => {
+			expect(() => client({ clientKey: WITH_KEY.clientKey, providerIssuer: null })).toThrow(/providerIssuer/);
+		});
+
+		it("invalid_client with a client key names the proxy's client authentication", async () => {
+			fake.respond(PATH, json(401, { error: "invalid_client" }));
+
+			const err = await refusal(exchange(WITH_KEY));
+
+			expect(err).toMatchObject({
+				code: "provider_config_error",
+				status: 502,
+				message: "provider rejected the proxy's client authentication",
+			});
+		});
+
+		it("never relays a client assertion the provider echoes as its description", async () => {
+			fake.respond(PATH, (req) =>
+				json(401, {
+					error: "invalid_client",
+					error_description: new URLSearchParams(req.body.toString("utf8")).get("client_assertion"),
+				}),
+			);
+
+			const err = await refusal(exchange(WITH_KEY));
+
+			expect(err.code).toBe("provider_config_error");
+			expect(err.message).toBe("provider rejected the proxy's client authentication");
 		});
 
 		it("with a body past the bound is the expired session, and the connection is closed", async () => {

@@ -32,6 +32,7 @@ const ENABLED: Extract<ExchangeConfig, { enabled: true }> = {
 	enabled: true,
 	clientId: "proxy-exchange",
 	clientSecret: "s3cret",
+	clientKey: null,
 	scope: null,
 	audience: null,
 	resource: null,
