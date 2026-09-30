@@ -195,19 +195,18 @@ const upstreamLimit = (bytes: number): number | string => (bytes === 0 ? "0" : b
  * outbound request and sets `connection: close` before any decorator runs
  * (`reqHeaders` in `express-http-proxy/lib/requestOptions.js`). Node
  * lower-cases every inbound header name in `req.headers`, so that copy
- * already carries `authorization`.
- * Node's `setHeader` dedups header names case-insensitively and the last
- * write wins, so the decorator's `Authorization` replaces the name, not the
- * value: `Authorization` is sent once, and the `x-request-id` write changes
- * nothing on the wire. That is why `stripInboundAuthorization` takes effect
+ * already carries `authorization`. Node's `setHeader` dedups header names
+ * case-insensitively and the last write wins, so the decorator's
+ * `Authorization` replaces the name, not the value: `Authorization` is sent
+ * once, and the `x-request-id` write changes nothing on the wire. That is why `stripInboundAuthorization` takes effect
  * by deleting the header from `req.headers`, in the `forward_stripped` case of
  * `injectionMiddleware` (`src/modes/injection/router.mts`), rather than here.
  *
  * Why it is kept: the framing above, the connection's own fields, and
  * header-name casing. HTTP header names are case-insensitive (RFC 9110 §5.1),
  * so a conforming upstream sees no difference; without the decorator an
- * upstream would receive `authorization` in lower case, and one
- * that matches the name case-sensitively would miss it. The casing on the
+ * upstream would receive `authorization` in lower case, and one that matches
+ * the name case-sensitively would miss it. The casing on the
  * wire is pinned by `__tests__/upstream-wire.test.mts`.
  */
 export const createUpstreamProxy = (config: UpstreamStageConfig): RequestHandler =>

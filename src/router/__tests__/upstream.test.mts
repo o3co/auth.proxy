@@ -194,8 +194,8 @@ describe("createUpstreamProxy", () => {
 		});
 
 		// The fields the proxy decides are not the caller's to remove by naming
-		// them in Connection: what reaches the upstream as Authorization and
-		// x-request-id stays the proxy's choice.
+		// them in Connection: what reaches the upstream as Authorization,
+		// x-request-id and Connection stays the proxy's choice.
 		it("keeps Authorization, x-request-id and the library's Connection though the inbound Connection names them", async () => {
 			const result = await decorate({ ...inbound, connection: "Authorization, X-Request-Id, Connection" });
 			expect(result.headers).toEqual({ ...libraryHeaders(inbound), Authorization: "Bearer inbound-7f3a" });
