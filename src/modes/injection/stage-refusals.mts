@@ -28,12 +28,12 @@ const ERROR_CODES: Record<StageRefusal["reason"], string> = {
  * `{ "error", "error_description" }` body every injection refusal has, each
  * reason mapped to its `error` code through `ERROR_CODES`, and `injection.*`
  * events with the error as a string under `error`, as every injection
- * failure line has it. A
- * body over the limit is the caller's to fix, as is any other `4xx`, so both
- * are logged at info. An upstream that could not be reached or dropped the
- * exchange before its answer started is `upstream_unavailable`, logged at
- * error under its own event; any other `5xx` is logged at error too — the
- * proxy failing, or a request it cannot forward (`501`).
+ * failure line has it. A body over the limit is the caller's to fix, as is
+ * any other `4xx`, so both are logged at info. An upstream that could not be
+ * reached or dropped the exchange before its answer started is
+ * `upstream_unavailable`, logged at error under its own event; any other
+ * `5xx` is logged at error too — the proxy failing, or a request it cannot
+ * forward (`501`).
  */
 export const stageRefusals = (logger: Logger): ModeRefusals => ({
 	log: (requestId, refusal) => {

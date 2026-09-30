@@ -129,8 +129,9 @@ const upstreamLimit = (bytes: number): number | string => (bytes === 0 ? "0" : b
  * own upstream request when the caller leaves, which fails as a hang-up, and
  * there is no one to answer and no upstream failure to report. A refusal that
  * says its status — the body reader's, of a body the caller cut short — is
- * handed on, and logged, though no one is left to read the answer. Once the upstream's answer starts it is streamed
- * to the caller as it arrives, and a failure after that point is not seen here.
+ * handed on, and logged, though no one is left to read the answer. Once the
+ * upstream's answer starts it is streamed to the caller as it arrives, and a
+ * failure after that point is not seen here.
  *
  * What the decorator does. When `req.headers.authorization` is present as this
  * stage runs — empty included, as the injection paths read presence — it sets
