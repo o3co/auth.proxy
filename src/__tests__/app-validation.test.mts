@@ -440,6 +440,34 @@ describe.each(SETUPS)("the app in validation mode, $name", (setup) => {
 		expect(providerRequestsFor(requestId)).toHaveLength(1);
 	});
 
+	// The recording upstream is a plain node:http server, which refuses a
+	// request framed by both Transfer-Encoding and Content-Length.
+	it("forwards a chunked POST body intact, framed by Content-Length", async () => {
+		const requestId = `validation-${SETUPS.indexOf(setup)}-chunked`;
+		const token = `tok-${requestId}`;
+		const body = JSON.stringify({ order: 43, note: "y".repeat(4096) });
+		fake.respond(INTROSPECT_PATH, json(200, { active: true }));
+
+		const res = await send(proxy.origin, {
+			method: "POST",
+			path: "/orders",
+			headers: {
+				"x-request-id": requestId,
+				authorization: `Bearer ${token}`,
+				"content-type": "application/json",
+				"transfer-encoding": "chunked",
+			},
+			body,
+		});
+
+		expect(res.status).toBe(200);
+		const reached = upstream.receivedFor(requestId);
+		expect(reached.map((request) => [request.method, request.path, request.body.toString("utf8")])).toEqual([
+			["POST", "/orders", body],
+		]);
+		expect(headerPairs(reached[0].rawHeaders, "transfer-encoding")).toEqual([]);
+	});
+
 	it("generates a request id when none is sent, echoes it, and carries it to the provider, the upstream and the log", async () => {
 		const token = `tok-generated-${SETUPS.indexOf(setup)}`;
 		fake.respond(INTROSPECT_PATH, json(200, { active: true }));

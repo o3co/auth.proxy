@@ -102,7 +102,19 @@ describe("createUpstreamProxy", () => {
 		expect(builtOptions().limit).toBe(1_000_000 * 1024 ** 5);
 	});
 
-	describe("proxyReqOptDecorator is a casing-only no-op on what the library already copied", () => {
+	describe("proxyReqOptDecorator on what the library already copied", () => {
+		// The library reads the whole body and then frames what it sends by a
+		// Content-Length it sets itself; a Transfer-Encoding left beside it
+		// would frame the one message twice.
+		it("drops the inbound Transfer-Encoding, and changes nothing else", async () => {
+			const chunked = { ...inbound, "transfer-encoding": "chunked" };
+			const result = await decorate(chunked);
+			const { "transfer-encoding": _te, ...rest } = libraryHeaders(chunked);
+			expect(result.headers).toEqual({ ...rest, Authorization: "Bearer inbound-7f3a" });
+		});
+	});
+
+	describe("proxyReqOptDecorator is otherwise a casing-only no-op on what the library already copied", () => {
 		it("adds Authorization in canonical casing beside the lowercase copy, leaves x-request-id as copied, touches nothing else", async () => {
 			const result = await decorate(inbound);
 			expect(result.headers).toEqual({

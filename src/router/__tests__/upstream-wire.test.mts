@@ -17,6 +17,7 @@ import type { AddressInfo } from "node:net";
 import express from "express";
 import request from "supertest";
 import { afterEach, beforeEach, describe, expect, it } from "vitest";
+import { postChunked } from "../../__tests__/post-chunked.mjs";
 import { createUpstreamProxy } from "../upstream.mjs";
 
 /** Every `[name, value]` pair whose name matches `name` case-insensitively, names as sent. */
@@ -29,13 +30,23 @@ const rawPairs = (rawHeaders: string[], name: string): [string, string][] =>
 describe("createUpstreamProxy on the wire", () => {
 	let upstream: Server;
 	let received: string[][];
+	let bodies: Buffer[];
 	let app: express.Express;
 
 	beforeEach(async () => {
 		received = [];
+		bodies = [];
+		// A plain node:http server: it refuses a request framed by both
+		// Transfer-Encoding and Content-Length (RFC 9112 §6.3), as a conforming
+		// upstream does, before this handler runs.
 		upstream = createServer((req, res) => {
 			received.push([...req.rawHeaders]);
-			res.end("upstream response");
+			const parts: Buffer[] = [];
+			req.on("data", (part: Buffer) => parts.push(part));
+			req.on("end", () => {
+				bodies.push(Buffer.concat(parts));
+				res.end("upstream response");
+			});
 		});
 		await new Promise<void>((resolve) => upstream.listen(0, "127.0.0.1", resolve));
 		const { port } = upstream.address() as AddressInfo;
@@ -79,5 +90,38 @@ describe("createUpstreamProxy on the wire", () => {
 		expect(res.status).toBe(200);
 		expect(received).toHaveLength(1);
 		expect(rawPairs(received[0], "authorization")).toEqual([]);
+	});
+
+	// The stage reads the whole body before it sends it on, and the library
+	// frames what it sends by Content-Length; the inbound Transfer-Encoding
+	// described the inbound message only, so it is not sent on.
+	describe("a body that arrived chunked", () => {
+		it("reaches the upstream intact, framed by Content-Length alone", async () => {
+			const res = await postChunked(app, "/upload", {}, [Buffer.from("hello, "), Buffer.from("world")]);
+
+			expect(res.status).toBe(200);
+			expect(bodies.map((body) => body.toString("utf8"))).toEqual(["hello, world"]);
+			expect(rawPairs(received[0], "transfer-encoding")).toEqual([]);
+			expect(rawPairs(received[0], "content-length").map(([, value]) => value)).toEqual(["12"]);
+		});
+
+		it("reaches the upstream as an empty body when it had no chunks", async () => {
+			const res = await postChunked(app, "/upload", {}, []);
+
+			expect(res.status).toBe(200);
+			expect(bodies.map((body) => body.length)).toEqual([0]);
+			expect(rawPairs(received[0], "transfer-encoding")).toEqual([]);
+		});
+	});
+
+	it("sends a body that declared its length on unchanged", async () => {
+		const res = await request(app)
+			.post("/upload")
+			.set("content-type", "application/octet-stream")
+			.send(Buffer.from("declared"));
+
+		expect(res.status).toBe(200);
+		expect(bodies.map((body) => body.toString("utf8"))).toEqual(["declared"]);
+		expect(rawPairs(received[0], "content-length").map(([, value]) => value)).toEqual(["8"]);
 	});
 });
