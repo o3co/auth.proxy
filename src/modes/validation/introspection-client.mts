@@ -94,8 +94,8 @@ export const buildAuthHeader = (token: string): string => `Bearer ${token}`;
  * it. Replaceable: the decision reaches it through `Introspector`, and
  * `createRouter` builds the bundled implementation or takes another.
  *
- * @throws {IntrospectHttpError} the provider's status for anything but a
- * `200`, the only status read as an answer, another `2xx` included — carrying
+ * @throws {IntrospectHttpError} the provider's status for any status but
+ * `200`, the only one read as an answer (another `2xx` included) — carrying
  * {@link RefusedCredential} on a 401, which says whether the provider refused
  * the inbound token or the proxy's own client authentication — and `502`
  * for a 200 whose body is not a JSON object, is over the

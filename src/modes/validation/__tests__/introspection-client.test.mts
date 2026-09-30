@@ -287,9 +287,9 @@ describe("createIntrospectionClient", () => {
 	});
 
 	// Only a 200 is read as an answer. Any other 2xx — even one carrying a
-	// live token — is refused, and the error carries its own status. Every 2xx that may carry a body
-	// here, and the two that may not below, so no single status can slip
-	// through.
+	// live token — is refused, and the error carries its own status. Every
+	// 2xx that may carry a body here, and the two that may not below, so no
+	// single status can slip through.
 	it.each([201, 202, 203, 206, 207, 208, 226, 299])(
 		"refuses a %d carrying a live token with its own status",
 		async (status) => {
@@ -313,10 +313,10 @@ describe("createIntrospectionClient", () => {
 		await expect(p).rejects.toMatchObject({ status, message: `introspect returned ${status}` });
 	});
 
-	// Nothing here reads an error body. Past undici's 64 KiB
-	// read-ahead an unread one would hold its socket until the response is
-	// collected; within it undici has already pooled the socket, so this is
-	// defensive. The non-200 path is the only one that throws before the body
+	// Nothing here reads the body of a status that is not an answer. Past
+	// undici's 64 KiB read-ahead an unread one would hold its socket until the
+	// response is collected; within it undici has already pooled the socket,
+	// so this is defensive. The non-200 path is the only one that throws before the body
 	// is dealt with: every other refusal runs after readBoundedJsonObject has
 	// read it to the end or cancelled it at the bound.
 	it.each([201, 401, 503])(
