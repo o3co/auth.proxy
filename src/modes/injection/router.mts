@@ -145,8 +145,7 @@ const buildExchangeDeps = (
 		createJwtBearerClient({
 			providerOrigin: cfg.providerOrigin,
 			timeoutMs: cfg.timeoutMs,
-			clientId: exchange.clientId,
-			clientSecret: exchange.clientSecret,
+			credentials: { clientId: exchange.clientId, clientSecret: exchange.clientSecret },
 			scope: exchange.scope,
 			audience: exchange.audience,
 			resource: exchange.resource,
