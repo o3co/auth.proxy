@@ -33,6 +33,7 @@ import { jwtVerify } from "jose";
 import { afterAll, afterEach, beforeAll, describe, expect, it, vi } from "vitest";
 
 import { type ProxyProcess, SUITE_TIMEOUT_MS, send, startProxy } from "./app-process.mjs";
+import { expectContinue } from "./expect-continue.mjs";
 import { type FakeProvider, type FakeResponse, json, startFakeProvider } from "./fake-provider.mjs";
 import {
 	headerPairs,
@@ -1064,5 +1065,43 @@ describe("the app in injection mode, with HTTP_BODY_LIMIT_SIZE=1kb", () => {
 		expect(lines.at(-1)).toMatchObject({ ...OVER_LIMIT, limitBytes: 1024 });
 		expect(grantsFor(requestId)).toEqual([sessionGrant("sess-body-chunked")]);
 		expect(upstream.receivedFor(requestId)).toEqual([]);
+	});
+
+	// `Expect: 100-continue`: an oversized upload is refused on its headers,
+	// before the client is told to send the body; one within the limit is told
+	// to go ahead and is forwarded.
+	it("refuses a declared body over the limit without saying 100 Continue, before minting a token", async () => {
+		const requestId = "injection-body-expect-over";
+		fake.respond(TOKEN_PATH, json(500, { error: "must_not_be_asked" }));
+
+		const exchange = await expectContinue(
+			proxy.origin,
+			`POST /orders HTTP/1.1\r\nHost: t\r\nx-request-id: ${requestId}\r\nCookie: sid=sess-expect-over\r\nContent-Length: 4096\r\nExpect: 100-continue\r\n\r\n`,
+			Buffer.alloc(4096, "x"),
+		);
+
+		expect(exchange.statusLines).toEqual(["HTTP/1.1 413 Payload Too Large"]);
+		expect(exchange.bodySent).toBe(false);
+		expect(JSON.parse(exchange.body)).toEqual(TOO_LARGE);
+		expect(await proxy.linesFor(requestId)).toMatchObject([
+			INCOMING,
+			{ ...OVER_LIMIT, contentLength: 4096, limitBytes: 1024 },
+		]);
+		expect(grantsFor(requestId)).toEqual([]);
+		expect(upstream.receivedFor(requestId)).toEqual([]);
+	});
+
+	it("says 100 Continue to a declared body within the limit, and forwards it", async () => {
+		const requestId = "injection-body-expect-within";
+		fake.respond(TOKEN_PATH, issued("minted-expect"));
+
+		const exchange = await expectContinue(
+			proxy.origin,
+			`POST /orders HTTP/1.1\r\nHost: t\r\nx-request-id: ${requestId}\r\nCookie: sid=sess-expect-within\r\nContent-Length: 5\r\nExpect: 100-continue\r\n\r\n`,
+			Buffer.from("hello"),
+		);
+
+		expect(exchange.statusLines).toEqual(["HTTP/1.1 100 Continue", "HTTP/1.1 200 OK"]);
+		expect(upstream.receivedFor(requestId).map((request) => request.body.toString("utf8"))).toEqual(["hello"]);
 	});
 });

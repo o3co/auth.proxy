@@ -14,7 +14,10 @@ import { Readable } from "node:stream";
 import express, { type NextFunction, type Request, type Response } from "express";
 import request from "supertest";
 import { describe, expect, it } from "vitest";
-import { createBodyLimitGuard } from "../body-limit.mjs";
+import { createServer } from "node:http";
+import type { AddressInfo } from "node:net";
+import { expectContinue } from "../../__tests__/expect-continue.mjs";
+import { continueWithinLimit, createBodyLimitGuard } from "../body-limit.mjs";
 import { createErrorHandler } from "../error-handler.mjs";
 import type { ModeRefusals, StageRefusal } from "../refusal.mjs";
 
@@ -185,5 +188,51 @@ describe("createErrorHandler", () => {
 		expect(outcome).toBe("closed");
 		expect(handedOn).toBe(false);
 		expect(logged).toEqual([["rid-3", { reason: "request_failed", status: 500, error: err }]]);
+	});
+});
+
+// Node answers `Expect: 100-continue` itself unless the server installs a
+// `checkContinue` listener; without one, an oversized upload is told to go
+// ahead and is sent in full before the guard refuses it.
+describe("continueWithinLimit", () => {
+	const serverWith = async (limitBytes: number) => {
+		const { refusals } = recordingMode();
+		const handle = appWith(limitBytes, refusals, { count: 0 });
+		const server = createServer();
+		server.on("request", handle);
+		server.on("checkContinue", continueWithinLimit(limitBytes, handle));
+		await new Promise<void>((resolve) => server.listen(0, "127.0.0.1", resolve));
+		const { port } = server.address() as AddressInfo;
+		return { origin: `http://127.0.0.1:${port}`, server };
+	};
+	const head = (length: number) =>
+		`POST /x HTTP/1.1\r\nHost: t\r\nContent-Type: application/octet-stream\r\nContent-Length: ${length}\r\nExpect: 100-continue\r\n\r\n`;
+
+	it("refuses a declared length over the limit without saying 100 Continue, so the body is never sent", async () => {
+		const { origin, server } = await serverWith(1024);
+		try {
+			const exchange = await expectContinue(origin, head(4096), Buffer.alloc(4096));
+
+			expect(exchange.statusLines).toEqual(["HTTP/1.1 413 Payload Too Large"]);
+			expect(exchange.bodySent).toBe(false);
+			expect(JSON.parse(exchange.body)).toEqual({ reason: "body_too_large", status: 413 });
+		} finally {
+			server.closeAllConnections();
+			server.close();
+		}
+	});
+
+	it("says 100 Continue to a declared length within the limit, then answers the request", async () => {
+		const { origin, server } = await serverWith(1024);
+		try {
+			const exchange = await expectContinue(origin, head(5), Buffer.from("hello"));
+
+			expect(exchange.statusLines).toEqual(["HTTP/1.1 100 Continue", "HTTP/1.1 200 OK"]);
+			expect(exchange.bodySent).toBe(true);
+			expect(JSON.parse(exchange.body)).toEqual({ ok: true });
+		} finally {
+			server.closeAllConnections();
+			server.close();
+		}
 	});
 });

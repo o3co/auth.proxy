@@ -148,4 +148,20 @@ describe("createUpstreamProxy on the wire", () => {
 		expect(bodies.map((body) => body.toString("utf8"))).toEqual(["declared"]);
 		expect(rawPairs(received[0], "content-length").map(([, value]) => value)).toEqual(["8"]);
 	});
+
+	// The stage has the whole body before it sends the request on, so there
+	// is nothing to ask the upstream to wait for. Forwarded, the expectation
+	// makes Node send the request's headers at once, before the library sets
+	// the Content-Length it frames the body by, and the request fails.
+	it("sends a body that expected 100-continue on without the expectation", async () => {
+		const res = await request(app)
+			.post("/upload")
+			.set("content-type", "application/octet-stream")
+			.set("expect", "100-continue")
+			.send(Buffer.from("expected"));
+
+		expect(res.status).toBe(200);
+		expect(bodies.map((body) => body.toString("utf8"))).toEqual(["expected"]);
+		expect(rawPairs(received[0], "expect")).toEqual([]);
+	});
 });
