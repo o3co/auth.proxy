@@ -72,7 +72,7 @@
 | --- | --- | --- |
 | `validation.token_unauthorized` | info | プロバイダーが呼び出し元のトークンについて `401` を返した（`401 Invalid Token`）。 |
 | `validation.provider_config_error` | error | プロバイダーがプロキシ自身のクライアント資格情報を拒否した、またはエンドポイントがリダイレクトした（`502 Provider Configuration Error`）。 |
-| `validation.provider_error` | error | それ以外のプロバイダーの失敗 — `5xx`、`429`、その他の `4xx`、イントロスペクション応答ではない応答、タイムアウト、ネットワークエラー（`502 Bad Gateway`）。 |
+| `validation.provider_error` | error | それ以外のプロバイダーの失敗 — `5xx`、`429`、その他の `4xx`、`200` 以外の `2xx`、イントロスペクション応答ではない応答、タイムアウト、ネットワークエラー（`502 Bad Gateway`）。 |
 | `validation.unexpected_error` | error | それ以外に投げられたもの（`500 Internal Server Error`）。 |
 
 プロバイダーが拒否したトークンはプロキシではなく呼び出し元の問題なので、`injection.session_unauthorized` と同じレベルでログし、error レベルの行に対するアラートは発火しない。`active: false` の応答はログしない。

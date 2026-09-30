@@ -140,8 +140,8 @@ const reject = (
  *     authentication.
  *   - the endpoint redirects: 502 Provider Configuration Error.
  *   - any other provider failure (an IntrospectHttpError): 502 Bad Gateway —
- *     a 5xx, a 429, a 4xx that is not 401, a 200 that is not an introspection
- *     response, no answer at all.
+ *     a 5xx, a 429, a 4xx that is not 401, a 2xx that is not 200, a 200
+ *     that is not an introspection response, no answer at all.
  *   - anything else thrown: 500 Internal Server Error.
  *   - `active: true`: forward.
  *
