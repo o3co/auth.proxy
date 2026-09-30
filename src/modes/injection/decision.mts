@@ -107,9 +107,9 @@ export interface InjectionDeps {
 	/**
 	 * Both keyed by {@link sessionCacheKey}, which carries the grant context —
 	 * provider, client, scope, cookie name, and how the client authenticates —
-	 * beside the cookie value, so an
-	 * instance supplied through `createRouter({ deps })` may be shared between
-	 * routers that differ in any of those. What is not in the key is the
+	 * beside the cookie value, so an instance supplied through
+	 * `createRouter({ deps })` may be shared between routers that differ in any
+	 * of those. What is not in the key is the
 	 * caller's to match: the `grantClient`, which cannot be hashed, and the
 	 * cache policy, which decides how long an entry lives rather than which
 	 * token comes back.

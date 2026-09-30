@@ -201,7 +201,7 @@ const isIssuerIdentifier = (value: string): boolean => {
  */
 const providerIssuer = (key: string) =>
 	optionalString().refine((value) => value === null || isIssuerIdentifier(value), {
-		message: `${key} must be the provider's issuer identifier as its discovery document names it: https (http only on a loopback host), printable ASCII (an IDN host in its xn-- form), with no query, fragment, userinfo or whitespace`,
+		message: `${key} must be the provider's issuer identifier as its discovery document names it: https (http only on a loopback host), printable ASCII (configure a Unicode host at the provider in its xn-- form), with no query, fragment, userinfo or whitespace`,
 	});
 
 const EXCHANGE_KEY = "auth.injection.exchange";

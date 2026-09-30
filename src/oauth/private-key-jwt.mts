@@ -129,8 +129,10 @@ const thumbprintOf = (publicJwk: Record<string, unknown>): string => {
  * text (the form an environment variable carries). The key must be one the
  * provider can verify an assertion from: an Ed25519, EC P-256/P-384/P-521 or
  * RSA (2048 bits or more) private key, not marked for another use than
- * signing (`use`, `key_ops`). The JWK's `alg`, when present, must fit the
- * key; its `kid`, when present, goes in every assertion's header.
+ * signing (`use`, `key_ops`), whose public members are its private key's. The
+ * JWK's `alg`, when present, must fit the key by its JWS name (`EdDSA`, not
+ * RFC 9864's `Ed25519`); its `kid`, when present, goes in every assertion's
+ * header.
  *
  * @throws {ClientKeyError} naming what is wrong, never quoting the key.
  */
@@ -168,6 +170,11 @@ export const parseClientKey = (value: unknown): ClientKey => {
 	}
 	// The provider matches a registered key's alg to the header's exactly, so
 	// RFC 9864's Ed25519 would be refused where EdDSA is verified.
+	if (alg === "Ed25519") {
+		throw new ClientKeyError(
+			"the client key's alg is RFC 9864's Ed25519, which is not what the provider verifies: set alg to EdDSA or remove it, and register the public key the same way",
+		);
+	}
 	if (alg !== undefined && !algorithms.includes(alg as ClientAssertionAlgorithm)) {
 		throw new ClientKeyError(
 			`the client key's alg does not fit the key; for this key use one of ${algorithms.join(", ")}, or no alg`,
