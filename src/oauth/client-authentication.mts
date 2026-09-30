@@ -37,6 +37,14 @@ export interface ClientKeyCredentials {
 /** How the proxy authenticates as a client: a secret, or a key. */
 export type ClientAuthentication = ClientCredentials | ClientKeyCredentials;
 
+/**
+ * Whether `auth` authenticates with a key. A key must be present, not only
+ * named: a secret's credentials spread from a configuration that also carries
+ * `clientKey: null` still authenticate with the secret.
+ */
+export const isClientKeyCredentials = (auth: ClientAuthentication): auth is ClientKeyCredentials =>
+	"clientKey" in auth && auth.clientKey !== null && auth.clientKey !== undefined;
+
 /** What one call carries to authenticate the client. */
 export interface ClientAuthenticationParts {
 	/** The `Authorization` header value, or `null` when the body carries the credential. */
@@ -58,8 +66,8 @@ export interface ClientAuthenticationParts {
 export const authenticateClient = async (
 	auth: ClientAuthentication,
 ): Promise<ClientAuthenticationParts> => {
-	if ("clientKey" in auth) {
-		const assertion = await signClientAssertion({
+	if (isClientKeyCredentials(auth)) {
+		const assertion = signClientAssertion({
 			clientId: auth.clientId,
 			audience: auth.audience,
 			key: auth.clientKey,
