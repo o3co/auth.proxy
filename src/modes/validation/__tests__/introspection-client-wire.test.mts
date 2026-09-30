@@ -12,6 +12,8 @@
  * that `AbortSignal.timeout` ends a call on a real socket, and what reaches
  * the provider.
  */
+import { generateKeyPairSync } from "node:crypto";
+import { decodeJwt, jwtVerify } from "jose";
 import { afterAll, afterEach, beforeAll, describe, expect, it } from "vitest";
 
 import {
@@ -21,6 +23,7 @@ import {
 	startFakeProvider,
 } from "../../../__tests__/fake-provider.mjs";
 import { controlledTimeout, timeoutAfterResponseHeaders } from "../../../__tests__/provider-timeout.mjs";
+import { CLIENT_ASSERTION_TYPE, parseClientKey } from "../../../oauth/private-key-jwt.mjs";
 import {
 	createIntrospectionClient,
 	IntrospectHttpError,
@@ -30,6 +33,13 @@ import {
 
 const PATH = "/oauth/introspect";
 const TOKEN = "tok-3f9a+/=";
+const ISSUER = "https://auth.example.test";
+const KEY_PAIR = generateKeyPairSync("ed25519");
+const CLIENT_KEY = {
+	clientId: "proxy",
+	clientKey: parseClientKey({ ...KEY_PAIR.privateKey.export({ format: "jwk" }), kid: "proxy-1" }),
+	audience: ISSUER,
+};
 
 describe("createIntrospectionClient on the wire", () => {
 	let fake: FakeProvider;
@@ -95,6 +105,41 @@ describe("createIntrospectionClient on the wire", () => {
 			const [req] = fake.requests;
 			expect(req.headers.authorization).toBe(`Basic ${Buffer.from("proxy:s3cret").toString("base64")}`);
 			expect(new URLSearchParams(req.body.toString("utf8")).get("token")).toBe(TOKEN);
+		});
+
+		it("a client assertion in the body and no Authorization header, when a client key is configured", async () => {
+			fake.respond(PATH, json(200, { active: true }));
+
+			await client({ credentials: CLIENT_KEY }).introspect(TOKEN, "r");
+
+			const [req] = fake.requests;
+			expect(req.headers.authorization).toBeUndefined();
+			const body = new URLSearchParams(req.body.toString("utf8"));
+			expect(body.get("token")).toBe(TOKEN);
+			expect(body.get("client_id")).toBe("proxy");
+			expect(body.get("client_assertion_type")).toBe(CLIENT_ASSERTION_TYPE);
+			const { payload, protectedHeader } = await jwtVerify(
+				body.get("client_assertion") ?? "",
+				KEY_PAIR.publicKey,
+				{ issuer: "proxy", subject: "proxy", audience: ISSUER, algorithms: ["EdDSA"] },
+			);
+			expect(protectedHeader.kid).toBe("proxy-1");
+			expect(payload.jti).toEqual(expect.any(String));
+		});
+
+		it("a new client assertion on every call", async () => {
+			fake.respond(PATH, json(200, { active: true }));
+			const introspection = client({ credentials: CLIENT_KEY });
+
+			await introspection.introspect(TOKEN, "r1");
+			await introspection.introspect(TOKEN, "r2");
+
+			const jtis = fake.requests.map(
+				(req) =>
+					decodeJwt(new URLSearchParams(req.body.toString("utf8")).get("client_assertion") ?? "").jti,
+			);
+			expect(jtis).toHaveLength(2);
+			expect(jtis[0]).not.toBe(jtis[1]);
 		});
 	});
 
@@ -207,6 +252,15 @@ describe("createIntrospectionClient on the wire", () => {
 			const err = await refusal(
 				client({ credentials: { clientId: "proxy", clientSecret: "s3cret" } }).introspect(TOKEN, "r"),
 			);
+
+			expect(err.status).toBe(401);
+			expect(err.refusedCredential).toBe("client");
+		});
+
+		it("401 names the proxy's client when it presented a client assertion", async () => {
+			fake.respond(PATH, json(401, { error: "invalid_client" }));
+
+			const err = await refusal(client({ credentials: CLIENT_KEY }).introspect(TOKEN, "r"));
 
 			expect(err.status).toBe(401);
 			expect(err.refusedCredential).toBe("client");
