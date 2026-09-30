@@ -46,9 +46,9 @@ Injection mode turns a session cookie into the outbound `Authorization: Bearer` 
    - an entry whose expiry has already passed is not written.
 
    Pinned by [`cache-expiry.test.mts`](__tests__/cache-expiry.test.mts), [`decision.test.mts`](__tests__/decision.test.mts), [`exchange-decision.test.mts`](__tests__/exchange-decision.test.mts), [`router.test.mts`](__tests__/router.test.mts) and [`exchange-router.test.mts`](__tests__/exchange-router.test.mts).
-7. **Cache keys and bounds.** Each key is a SHA-256 over a JSON array of the grant context and the credential ([`sessionCacheKey`](decision.mts), [`exchangeCacheKey`](exchange.mts)), so the credential never appears in the key. The session and exchange paths each have their own cache and flight table. Each cache is bounded at `tokenCache.maxEntries`: writes sweep expired entries and then drop the oldest insertion. Because the key carries the grant context, a supplied cache or flight table may be shared between routers. Those routers must still match what the key cannot carry:
+7. **Cache keys and bounds.** Each key is a SHA-256 over a JSON array of the grant context and the credential ([`sessionCacheKey`](decision.mts), [`exchangeCacheKey`](exchange.mts)), so the credential never appears in the key. The session key also carries how the proxy's client authenticates — the method, and with a key the issuer and the key's RFC 7638 thumbprint. The session and exchange paths each have their own cache and flight table. Each cache is bounded at `tokenCache.maxEntries`: writes sweep expired entries and then drop the oldest insertion. Because the key carries the grant context, a supplied cache or flight table may be shared between routers. Those routers must still match what the key cannot carry:
    - the supplied client;
-   - either client's credential (`clientSecret` or `clientKey`) and the provider's issuer;
+   - the exchange's client credential (`clientSecret` or `clientKey`);
    - the cache policy.
 
    Pinned by [`token-cache.test.mts`](__tests__/token-cache.test.mts), [`decision.test.mts`](__tests__/decision.test.mts), [`exchange.test.mts`](__tests__/exchange.test.mts) and [`exchange-router.test.mts`](__tests__/exchange-router.test.mts).
@@ -105,7 +105,7 @@ Pinned by [`decision.test.mts`](__tests__/decision.test.mts), [`exchange-decisio
 
 ## Dependencies
 
-- **Within `src/`:** [`router/upstream.mts`](../../router/upstream.mts), `express/requestId.mts`, [`oauth/client-authentication.mts`](../../oauth/client-authentication.mts) (the exchange's client authentication, and the session grant's when it holds a key), and the root modules `single-flight.mts`, `response-body.mts` and `logger.mts`. Only the router takes the logger singleton; the decisions see just the `Logger` type.
+- **Within `src/`:** [`router/upstream.mts`](../../router/upstream.mts), `express/requestId.mts`, [`oauth/client-authentication.mts`](../../oauth/client-authentication.mts) (the exchange's client authentication, and the session grant's when it holds a key; the key's type from `oauth/private-key-jwt.mts`), and the root modules `single-flight.mts`, `response-body.mts` and `logger.mts`. Only the router takes the logger singleton; the decisions see just the `Logger` type.
 - **Outside `src/`:** `config/application.schema.mts`, as types only.
 - **Packages:** `express` and `node:crypto`.
 - **Never imported:** `src/modes/validation`, which in turn never imports this directory. This mode does not use `express/bearer.mts`, because the exchange parses `Authorization` with its own grammar.

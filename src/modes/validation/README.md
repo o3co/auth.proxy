@@ -76,7 +76,7 @@ In validation mode, an inbound `Authorization: Bearer <token>` is checked agains
 - **Within `src/`:**
   - [`express/bearer.mts`](../../express/bearer.mts) and `express/requestId.mts`;
   - [`router/upstream.mts`](../../router/upstream.mts);
-  - [`oauth/client-authentication.mts`](../../oauth/client-authentication.mts), used when client credentials are configured (a secret, or a key);
+  - [`oauth/client-authentication.mts`](../../oauth/client-authentication.mts), used when client credentials are configured (a secret, or a key), with the credential types of `oauth/client-secret-basic.mts`;
   - the root modules `single-flight.mts`, `response-body.mts` and `logger.mts`. Only the router takes the logger singleton; the decision sees just the `Logger` type.
 - **Outside `src/`:** `config/application.schema.mts`, for types only.
 - **Packages:** `express` and `node:crypto`.

@@ -115,7 +115,7 @@ What that trades away:
 
 Rate limiting is unaffected by the choice — it is keyed on the proxy's IP either way (see [Provider rate limiting](#provider-rate-limiting)).
 
-**Credentials containing reserved characters.** RFC 6749 §2.3.1 requires both halves to be `application/x-www-form-urlencoded`-encoded *before* they are joined with `:` and base64'd into the Basic header; otherwise a `:` inside either half re-splits the credential in the wrong place and the provider reads a different pair than the one configured. `buildAuthHeader` does this (`clientSecretBasic`, `src/oauth/client-secret-basic.mts`), and the provider decodes with the matching form-urlencoded decoder, so a credential containing reserved characters round-trips byte for byte. Set the raw value in the environment variable — do not pre-encode it yourself.
+**Credentials containing reserved characters.** RFC 6749 §2.3.1 requires both halves to be `application/x-www-form-urlencoded`-encoded *before* they are joined with `:` and base64'd into the Basic header; otherwise a `:` inside either half re-splits the credential in the wrong place and the provider reads a different pair than the one configured. `clientSecretBasic` (`src/oauth/client-secret-basic.mts`) does this, and the provider decodes with the matching form-urlencoded decoder, so a credential containing reserved characters round-trips byte for byte. Set the raw value in the environment variable — do not pre-encode it yourself.
 
 ### Injection mode (`auth.mode = "injection"`)
 
@@ -161,8 +161,9 @@ A provider response of `400 invalid_grant` is mapped to `401 session_required`,
 so a revoked session prompts authentication rather than appearing as a proxy
 configuration failure. Other provider 400 responses retain their configuration-error mapping.
 Conversely, a provider `401` is `session_required` unless its `error` is `invalid_client`,
-which means the proxy's own `auth.injection.clientId` was refused — a configuration failure that
-signing in again cannot fix, answered `502 provider_config_error` rather than a login prompt.
+which means the proxy's own client was refused — its `auth.injection.clientId`, or with a key its
+client assertion — a configuration failure that signing in again cannot fix, answered
+`502 provider_config_error` rather than a login prompt.
 
 Only a `200` is a successful token response on either injection path (RFC 6749 §5.1). Any other
 `2xx` — even one carrying a token — is `502 provider_unavailable`, "unexpected provider response", with
@@ -256,7 +257,7 @@ It is not [RFC 8693](https://www.rfc-editor.org/rfc/rfc8693.html) token exchange
 | 502 | `provider_unavailable` | Provider `5xx` or `429`, a network error or timeout before the response arrives, or an unexpected status. The provider's `Retry-After` is passed through. |
 | 502 | `provider_invalid_response` | A `200` whose body is not a JSON object (empty, not JSON, or an array), exceeds the 64 KiB bound, or could not be read — a timeout or a dropped connection while reading it; one without an `access_token`; or one with a `token_type` other than `Bearer` (e.g. `DPoP`). |
 
-Each outcome is logged as an `injection.exchange_*` event (`exchange_fetch`, `exchange_success`, `exchange_cache_hit`, `exchange_credential_ambiguous` at warn, `exchange_credential_unsupported` with a `reason` of `scheme` or `format`, `exchange_issuer_refused`, `exchange_rejected`, `exchange_not_permitted` at warn, `exchange_provider_config_error` / `exchange_provider_unavailable` / `exchange_provider_invalid_response` at error, with the provider's `error` code where there is one). The assertion, the issued token, the client secret and the unverified `iss` are never logged. The provider's `error` is logged only when it is shaped like an RFC 6749 error code — no whitespace, at most 64 characters, nothing JWT-shaped, not echoing the assertion or secret — and as `invalid_error_code` otherwise; its `error_description` is not logged.
+Each outcome is logged as an `injection.exchange_*` event (`exchange_fetch`, `exchange_success`, `exchange_cache_hit`, `exchange_credential_ambiguous` at warn, `exchange_credential_unsupported` with a `reason` of `scheme` or `format`, `exchange_issuer_refused`, `exchange_rejected`, `exchange_not_permitted` at warn, `exchange_provider_config_error` / `exchange_provider_unavailable` / `exchange_provider_invalid_response` at error, with the provider's `error` code where there is one). The assertion, the issued token, the client secret or key, the client assertion signed with the key, and the unverified `iss` are never logged. The provider's `error` is logged only when it is shaped like an RFC 6749 error code — no whitespace, at most 64 characters, nothing JWT-shaped, not echoing the assertion or secret — and as `invalid_error_code` otherwise; its `error_description` is not logged.
 
 **Issuer prefilter.** `allowedIssuers` (default empty = off) refuses an assertion whose unverified `iss` is not listed, before any provider call — a way to shed traffic from issuers the deployment never expects. It is not required for the security of the exchange and never replaces provider validation: a listed issuer is still verified by the provider in full, and an unlisted one gets the same `credential_rejected` a provider refusal does. From the environment the list is whitespace-separated, like `INJECTION_SCOPE`.
 
@@ -272,7 +273,7 @@ where `sent` is the instant the token request went out. `ttlSeconds` and `expire
 
 #### Threat model — process memory
 
-Active access tokens reside in process memory. An attacker with read access to proxy process memory can extract all cached tokens. Standard host-security practices apply (container isolation, minimal image, no unnecessary `ptrace` capabilities).
+Active access tokens reside in process memory, and so does a configured client secret or private key, which also sits in the process environment. An attacker with read access to proxy process memory can extract all cached tokens and the proxy's own client credentials. Standard host-security practices apply (container isolation, minimal image, no unnecessary `ptrace` capabilities).
 
 Graceful shutdown does not clear the caches: the drain closes the listener and lets in-flight requests finish within `drainTimeoutMs`, after which the remaining connections are force-closed, and the cached tokens stay in memory until the process exits (#95 F21).
 
@@ -318,11 +319,11 @@ Content-Type: application/x-www-form-urlencoded
 grant_type=…&client_id=<client id>&client_assertion_type=urn:ietf:params:oauth:client-assertion-type:jwt-bearer&client_assertion=<JWT>
 ```
 
-The assertion's `iss` and `sub` are the client id, its only `aud` is the provider's issuer identifier, and it carries a random `jti` and an `exp` 60 seconds after its `iat`. The provider accepts each `jti` once, and the proxy never reuses one.
+The assertion's `iss` and `sub` are the client id, its only `aud` is the provider's issuer identifier, and it carries a random `jti` and an `exp` 60 seconds after its `iat`. Its header names `typ: client-authentication+jwt`, so it cannot be taken for another kind of JWT signed with the same key. The provider accepts each `jti` once, and the proxy never reuses one.
 
-**The provider's issuer.** `VALIDATION_PROVIDER_ISSUER` or `INJECTION_PROVIDER_ISSUER` is required with a key: the provider's issuer identifier, exactly as the provider is configured with it (an http(s) URL with no query or fragment). It is not derived from `INTROSPECT_URL` or `INJECTION_PROVIDER_ORIGIN`, since the URL the proxy reaches the provider at can differ from the issuer the provider names itself by. The issuer alone is the audience, as recommended for `private_key_jwt`, rather than the token endpoint URL RFC 7523 also allows.
+**The provider's issuer.** `VALIDATION_PROVIDER_ISSUER` or `INJECTION_PROVIDER_ISSUER` is required with a key, and refused without one (an issuer no key uses is a key that did not arrive). Copy it from the `issuer` of the provider's discovery document (`/.well-known/openid-configuration`), character for character: `https` (`http` only on a loopback host), a path allowed, no query, fragment, userinfo or whitespace. It is not derived from `INTROSPECT_URL` or `INJECTION_PROVIDER_ORIGIN`, since the URL the proxy reaches the provider at can differ from the issuer the provider names itself by. The issuer alone is the audience, as recommended for `private_key_jwt`, rather than the token endpoint URL RFC 7523 also allows.
 
-**The key.** A private JWK, as JSON text in the environment variable (or a HOCON object in `application.conf`): an Ed25519 key (`EdDSA`), an EC P-256, P-384 or P-521 key (`ES256`, `ES384`, `ES512`), or an RSA key of 2048 bits or more (`RS256` unless the JWK's `alg` names `RS384`, `RS512` or a `PS*`). Its `kid`, when present, goes in every assertion's header, so the provider picks the matching public key. Anything else — a public key, a symmetric key, an algorithm that does not fit the key — stops the process at boot, naming the key and never printing it. The proxy logs neither the key nor an assertion.
+**The key.** A private JWK, as JSON text in the environment variable: an Ed25519 key (`EdDSA`), an EC P-256, P-384 or P-521 key (`ES256`, `ES384`, `ES512`), or an RSA key of 2048 bits or more (`RS256` unless the JWK's `alg` names `RS384`, `RS512` or a `PS*`). RFC 9864's `alg: "Ed25519"` is read as `EdDSA`. A `use` other than `sig`, or `key_ops` without `sign`, is refused. Its `kid`, when present, goes in every assertion's header, so the provider picks the matching public key. Anything else — a public key, a symmetric key, an algorithm that does not fit the key — stops the process at boot, naming the key and never printing it. The proxy logs neither the key nor an assertion. Supply the key from the environment (or a secret store that sets it), not by writing it into `application.conf`: the image build copies `config/`, so a key written there ends up in an image layer.
 
 For example, an Ed25519 key generated with Node and the public half to register:
 
@@ -334,7 +335,9 @@ console.log("CLIENT_KEY=" + JSON.stringify({ ...privateKey.export({ format: "jwk
 console.log("public JWK: " + JSON.stringify({ ...publicKey.export({ format: "jwk" }), kid }));'
 ```
 
-**At the provider** (auth.provider: the oauth package's README, "Client authentication: `private_key_jwt`"), register the client with `tokenEndpointAuthMethod: "private_key_jwt"`, no `clientSecret`, and its public key — inline as `jwks`, or at a `jwksUri` the provider fetches. The provider records each `jti` in its replay seen-set, which a composition must wire for `private_key_jwt` to be accepted at all. A session-grant client that authenticates with a key is a confidential client: register it as one.
+**At the provider** (auth.provider: the oauth package's README, "Client authentication: `private_key_jwt`"), register the client with `tokenEndpointAuthMethod: "private_key_jwt"`, no `clientSecret`, and its public key — inline as `jwks`, or at a `jwksUri` the provider fetches. The provider records each `jti` in its replay seen-set, which a composition must wire for `private_key_jwt` to be accepted at all: without one, the provider answers a client assertion `500 server_error`, which the proxy reports as a provider failure (`502 Bad Gateway` in validation, `502 provider_unavailable` in injection), not as a configuration error. A session-grant client that authenticates with a key is a confidential client: register it as one.
+
+**Switching an existing client to a key.** The provider allows one authentication method per client (`tokenEndpointAuthMethod`), so changing an existing client from a secret, or from a public client, to `private_key_jwt` in place is a hard cutover: every instance still sending the old credential is refused from that moment. Instead, register a new client id with `private_key_jwt` and the same scopes, grant types and `allowedAudiences`, roll the proxy to the new client id and key, then retire the old client. Two things depend on the client id: validation's audience pin is the calling client's id and its `allowedAudiences`, and a session-grant token's `aud` falls back to the client id when the client has no `allowedAudiences` — give the new client the `allowedAudiences` that keep both where they were.
 
 **Rotating the key.** The proxy signs with one key at a time; rotation happens where keys are verified. Publish the new public key beside the old one in the client's `jwks` or `jwksUri`, switch the proxy's key (with a new `kid`), and remove the old public key once no instance signs with it. Instances mid-rollout keep working, since the provider picks the key by `kid`.
 

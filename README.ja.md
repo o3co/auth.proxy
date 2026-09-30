@@ -110,7 +110,7 @@ JWT ローカル検証との比較:
 
 レート制限はこの選択に影響されない — どちらでもプロキシの IP でキーイングされる（[プロバイダーのレート制限](#プロバイダーのレート制限)を参照）。
 
-**予約文字を含む資格情報。** RFC 6749 §2.3.1 は、`client_id` とシークレットを `:` で連結して base64 する*前に*、それぞれを `application/x-www-form-urlencoded` でエンコードすることを要求する。そうしないと、どちらかに含まれる `:` が資格情報を誤った位置で再分割し、プロバイダーは設定したのとは別のペアを読むことになる。`buildAuthHeader` はこれを行っており（`clientSecretBasic`、`src/oauth/client-secret-basic.mts`）、プロバイダー側も対応する form-urlencoded デコーダで復号するため、予約文字を含む資格情報もバイト単位でラウンドトリップする。環境変数には生の値を設定すること（自分で事前エンコードしない）。
+**予約文字を含む資格情報。** RFC 6749 §2.3.1 は、`client_id` とシークレットを `:` で連結して base64 する*前に*、それぞれを `application/x-www-form-urlencoded` でエンコードすることを要求する。そうしないと、どちらかに含まれる `:` が資格情報を誤った位置で再分割し、プロバイダーは設定したのとは別のペアを読むことになる。`clientSecretBasic`（`src/oauth/client-secret-basic.mts`）はこれを行っており、プロバイダー側も対応する form-urlencoded デコーダで復号するため、予約文字を含む資格情報もバイト単位でラウンドトリップする。環境変数には生の値を設定すること（自分で事前エンコードしない）。
 
 ### インジェクションモード（`auth.mode = "injection"`）
 
@@ -152,7 +152,7 @@ UserSession の追跡が設定されている場合、プロバイダーの `ses
 
 1 インスタンスは 1 つの OAuth スコープドメインを担当する。`auth.injection.clientId` と `auth.injection.scope` はデプロイ時に固定する。交換の `clientId`・`scope`・`audience`・`resource` も同様。複数のスコープドメインを扱う場合は、インスタンスを複数用意する。
 
-プロバイダーの `400 invalid_grant` 応答は `401 session_required` に対応付ける。失効したセッションは、プロキシの設定障害に見えるのではなく、認証を促すことになる。その他のプロバイダー 400 応答は設定エラーとしての対応付けのままである。逆に、プロバイダーの `401` は `session_required` だが、`error` が `invalid_client` の場合は別である。それはプロキシ自身の `auth.injection.clientId` が拒否されたことを意味し、再ログインでは直らない設定障害なので、ログインを促すのではなく `502 provider_config_error` を返す。
+プロバイダーの `400 invalid_grant` 応答は `401 session_required` に対応付ける。失効したセッションは、プロキシの設定障害に見えるのではなく、認証を促すことになる。その他のプロバイダー 400 応答は設定エラーとしての対応付けのままである。逆に、プロバイダーの `401` は `session_required` だが、`error` が `invalid_client` の場合は別である。それはプロキシ自身のクライアント — `auth.injection.clientId`、鍵を使う場合はそのクライアントアサーション — が拒否されたことを意味し、再ログインでは直らない設定障害なので、ログインを促すのではなく `502 provider_config_error` を返す。
 
 どちらのインジェクション経路でも、成功したトークン応答とみなすのは `200` だけである（RFC 6749 §5.1）。それ以外の `2xx` は — トークンを含んでいても — `502 provider_unavailable`（「unexpected provider response」、メッセージにステータス付き）になる。
 
@@ -238,7 +238,7 @@ grant_type=urn:ietf:params:oauth:grant-type:jwt-bearer&assertion=<JWT>[&scope=�
 | 502 | `provider_unavailable` | プロバイダーの `5xx` または `429`、レスポンス到着前のネットワークエラーやタイムアウト、想定外のステータス。プロバイダーの `Retry-After` はそのまま透過する。 |
 | 502 | `provider_invalid_response` | ボディが JSON オブジェクトでない（空、JSON でない、配列）、64 KiB の上限を超える、または読み切れなかった（読み取り中のタイムアウトや切断）`200`、`access_token` の無い `200`、または `token_type` が `Bearer` 以外（例: `DPoP`）の `200`。 |
 
-各結果は `injection.exchange_*` イベントとしてログされる（`exchange_fetch`、`exchange_success`、`exchange_cache_hit`、warn の `exchange_credential_ambiguous`、`reason` が `scheme` / `format` の `exchange_credential_unsupported`、`exchange_issuer_refused`、`exchange_rejected`、warn の `exchange_not_permitted`、error の `exchange_provider_config_error` / `exchange_provider_unavailable` / `exchange_provider_invalid_response`。プロバイダーの `error` コードがあれば付く）。アサーション、発行されたトークン、クライアントシークレット、未検証の `iss` はログに出ない。プロバイダーの `error` は RFC 6749 のエラーコードの形 — 空白なし、64 文字以内、JWT の形でない、アサーションやシークレットを含まない — のときだけそのままログされ、それ以外は `invalid_error_code` としてログされる。`error_description` はログに出ない。
+各結果は `injection.exchange_*` イベントとしてログされる（`exchange_fetch`、`exchange_success`、`exchange_cache_hit`、warn の `exchange_credential_ambiguous`、`reason` が `scheme` / `format` の `exchange_credential_unsupported`、`exchange_issuer_refused`、`exchange_rejected`、warn の `exchange_not_permitted`、error の `exchange_provider_config_error` / `exchange_provider_unavailable` / `exchange_provider_invalid_response`。プロバイダーの `error` コードがあれば付く）。アサーション、発行されたトークン、クライアントシークレットや鍵、鍵で署名したクライアントアサーション、未検証の `iss` はログに出ない。プロバイダーの `error` は RFC 6749 のエラーコードの形 — 空白なし、64 文字以内、JWT の形でない、アサーションやシークレットを含まない — のときだけそのままログされ、それ以外は `invalid_error_code` としてログされる。`error_description` はログに出ない。
 
 **発行者プレフィルター。** `allowedIssuers`（デフォルトは空 = 無効）は、未検証の `iss` が一覧に無いアサーションを、プロバイダーを呼ぶ前に拒否する — デプロイが想定しない発行者からのトラフィックを落とすための手段である。交換の安全性に必須ではなく、プロバイダーの検証を置き換えることもない。一覧にある発行者もプロバイダーが完全に検証し、一覧に無いものはプロバイダーの拒否と同じ `credential_rejected` を受け取る。環境変数では `INJECTION_SCOPE` と同様に空白区切りで指定する。
 
@@ -254,7 +254,7 @@ grant_type=urn:ietf:params:oauth:grant-type:jwt-bearer&assertion=<JWT>[&scope=�
 
 #### 脅威モデル — プロセスメモリ
 
-アクティブなアクセストークンはプロセスメモリに保持される。プロキシプロセスのメモリに読み取りアクセスできる攻撃者は、キャッシュしたトークンをすべて抽出できる。標準的なホストセキュリティプラクティスを適用すること（コンテナ分離、最小イメージ、不要な `ptrace` ケーパビリティの排除）。
+アクティブなアクセストークンはプロセスメモリに保持され、設定したクライアントシークレットや秘密鍵も同様である（これらはプロセスの環境変数にも置かれる）。プロキシプロセスのメモリに読み取りアクセスできる攻撃者は、キャッシュしたトークンをすべて、そしてプロキシ自身のクライアント資格情報を抽出できる。標準的なホストセキュリティプラクティスを適用すること（コンテナ分離、最小イメージ、不要な `ptrace` ケーパビリティの排除）。
 
 グレースフルシャットダウンはキャッシュを消去しない。ドレインはリスナーを閉じて処理中のリクエストの完了を `drainTimeoutMs` まで待つ（超過すると残りの接続を強制的に閉じる）だけで、キャッシュしたトークンはプロセスが終了するまでメモリに残る（#95 F21）。
 
@@ -300,11 +300,11 @@ Content-Type: application/x-www-form-urlencoded
 grant_type=…&client_id=<クライアント ID>&client_assertion_type=urn:ietf:params:oauth:client-assertion-type:jwt-bearer&client_assertion=<JWT>
 ```
 
-アサーションの `iss` と `sub` はクライアント ID、唯一の `aud` はプロバイダーの issuer 識別子で、ランダムな `jti` と、`iat` の 60 秒後の `exp` を持つ。プロバイダーは各 `jti` を一度しか受け付けず、プロキシが `jti` を再利用することはない。
+アサーションの `iss` と `sub` はクライアント ID、唯一の `aud` はプロバイダーの issuer 識別子で、ランダムな `jti` と、`iat` の 60 秒後の `exp` を持つ。ヘッダーには `typ: client-authentication+jwt` を載せ、同じ鍵で署名した別種の JWT と取り違えられないようにする。プロバイダーは各 `jti` を一度しか受け付けず、プロキシが `jti` を再利用することはない。
 
-**プロバイダーの issuer。** 鍵を使う場合、`VALIDATION_PROVIDER_ISSUER` または `INJECTION_PROVIDER_ISSUER` が必須になる。プロバイダーに設定されているとおりの issuer 識別子（クエリもフラグメントも持たない http(s) URL）を指定する。`INTROSPECT_URL` や `INJECTION_PROVIDER_ORIGIN` からは導出しない — プロキシがプロバイダーに到達する URL と、プロバイダーが名乗る issuer は異なりうるからである。audience には、RFC 7523 が許すトークンエンドポイント URL ではなく、`private_key_jwt` で推奨されているとおり issuer だけを使う。
+**プロバイダーの issuer。** 鍵を使う場合、`VALIDATION_PROVIDER_ISSUER` または `INJECTION_PROVIDER_ISSUER` が必須になり、鍵が無いのに設定すると拒否される（どの鍵にも使われない issuer は、届かなかった鍵である）。プロバイダーのディスカバリー文書（`/.well-known/openid-configuration`）の `issuer` を一字一句そのまま写す: `https`（`http` はループバックホストのみ）、パスは可、クエリ・フラグメント・userinfo・空白は不可。`INTROSPECT_URL` や `INJECTION_PROVIDER_ORIGIN` からは導出しない — プロキシがプロバイダーに到達する URL と、プロバイダーが名乗る issuer は異なりうるからである。audience には、RFC 7523 が許すトークンエンドポイント URL ではなく、`private_key_jwt` で推奨されているとおり issuer だけを使う。
 
-**鍵。** 秘密鍵の JWK を、環境変数では JSON テキストとして（`application.conf` では HOCON オブジェクトとしても）与える。使えるのは Ed25519 鍵（`EdDSA`）、EC P-256・P-384・P-521 鍵（`ES256`・`ES384`・`ES512`）、2048 ビット以上の RSA 鍵（JWK の `alg` が `RS384`・`RS512`・`PS*` を指定しない限り `RS256`）。JWK に `kid` があれば、すべてのアサーションのヘッダーに載り、プロバイダーが対応する公開鍵を選ぶ。それ以外 — 公開鍵、共通鍵、鍵に合わないアルゴリズム — はキー名を示して起動時に失敗し、鍵そのものは出力しない。プロキシは鍵もアサーションもログに書かない。
+**鍵。** 秘密鍵の JWK を、環境変数に JSON テキストとして与える。使えるのは Ed25519 鍵（`EdDSA`）、EC P-256・P-384・P-521 鍵（`ES256`・`ES384`・`ES512`）、2048 ビット以上の RSA 鍵（JWK の `alg` が `RS384`・`RS512`・`PS*` を指定しない限り `RS256`）。RFC 9864 の `alg: "Ed25519"` は `EdDSA` として読む。`use` が `sig` 以外のもの、`key_ops` に `sign` を含まないものは拒否する。JWK に `kid` があれば、すべてのアサーションのヘッダーに載り、プロバイダーが対応する公開鍵を選ぶ。それ以外 — 公開鍵、共通鍵、鍵に合わないアルゴリズム — はキー名を示して起動時に失敗し、鍵そのものは出力しない。プロキシは鍵もアサーションもログに書かない。鍵は環境変数（またはそれを設定するシークレットストア）から与え、`application.conf` には書かないこと。イメージのビルドは `config/` をコピーするので、そこに書いた鍵はイメージのレイヤーに残る。
 
 たとえば Node で Ed25519 鍵を生成し、登録する公開鍵も得るには:
 
@@ -316,7 +316,9 @@ console.log("CLIENT_KEY=" + JSON.stringify({ ...privateKey.export({ format: "jwk
 console.log("public JWK: " + JSON.stringify({ ...publicKey.export({ format: "jwk" }), kid }));'
 ```
 
-**プロバイダー側では**（auth.provider の oauth パッケージ README の「Client authentication: `private_key_jwt`」）、クライアントを `tokenEndpointAuthMethod: "private_key_jwt"`、`clientSecret` なしで登録し、公開鍵を `jwks` としてインラインで、またはプロバイダーが取得する `jwksUri` で与える。プロバイダーは各 `jti` をリプレイ seen-set に記録するので、`private_key_jwt` を受け付けるにはコンポジションがそれを組み込んでいる必要がある。鍵で認証するセッショングラントのクライアントはコンフィデンシャルクライアントであり、そのように登録すること。
+**プロバイダー側では**（auth.provider の oauth パッケージ README の「Client authentication: `private_key_jwt`」）、クライアントを `tokenEndpointAuthMethod: "private_key_jwt"`、`clientSecret` なしで登録し、公開鍵を `jwks` としてインラインで、またはプロバイダーが取得する `jwksUri` で与える。プロバイダーは各 `jti` をリプレイ seen-set に記録するので、`private_key_jwt` を受け付けるにはコンポジションがそれを組み込んでいる必要がある。組み込まれていないと、プロバイダーはクライアントアサーションに `500 server_error` を返し、プロキシはそれを設定エラーではなくプロバイダー障害（バリデーションでは `502 Bad Gateway`、インジェクションでは `502 provider_unavailable`）として報告する。鍵で認証するセッショングラントのクライアントはコンフィデンシャルクライアントであり、そのように登録すること。
+
+**既存クライアントを鍵に切り替える。** プロバイダーはクライアントごとに 1 つの認証方式（`tokenEndpointAuthMethod`）しか認めないので、既存クライアントをシークレットやパブリッククライアントからその場で `private_key_jwt` に変えると即時切り替えになり、古い資格情報を送っているインスタンスはその瞬間から拒否される。代わりに、同じスコープ・グラントタイプ・`allowedAudiences` を持つ新しいクライアント ID を `private_key_jwt` で登録し、プロキシを新しいクライアント ID と鍵に順に切り替え、その後で古いクライアントを廃止する。クライアント ID に依存するものが 2 つある: バリデーションの audience 固定は呼び出し元クライアントの ID と `allowedAudiences` であり、セッショングラントのトークンの `aud` はクライアントに `allowedAudiences` が無ければクライアント ID になる — 新しいクライアントには、どちらも元のままになる `allowedAudiences` を与えること。
 
 **鍵のローテーション。** プロキシが署名に使う鍵は常に 1 本で、ローテーションは鍵を検証する側で行う。新しい公開鍵をクライアントの `jwks` または `jwksUri` に古いものと並べて公開し、プロキシの鍵を（新しい `kid` とともに）切り替え、古い鍵で署名するインスタンスが無くなったら古い公開鍵を外す。プロバイダーは `kid` で鍵を選ぶので、ロールアウト途中のインスタンスも動き続ける。
 

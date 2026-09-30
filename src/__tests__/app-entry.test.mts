@@ -35,11 +35,11 @@ const INJECTION = {
 	INJECTION_SCOPE: "api",
 };
 
-/** A configuration the documentation says is refused at boot. */
 /** A private JWK with an algorithm that does not fit it: a key the proxy cannot sign with. */
 const UNUSABLE_JWK = { ...generateKeyPairSync("ed25519").privateKey.export({ format: "jwk" }), alg: "HS256" };
 const USABLE_KEY = JSON.stringify(generateKeyPairSync("ed25519").privateKey.export({ format: "jwk" }));
 
+/** A configuration the documentation says is refused at boot. */
 interface Refusal {
 	name: string;
 	env: Record<string, string>;
