@@ -147,6 +147,13 @@ describe("createUpstreamProxy", () => {
 			expect(outcome.called).toBe(false);
 		});
 
+		// The body reader's refusal of a body the caller cut short carries its
+		// own status, and arrives after the caller's socket is gone.
+		it("hands on a refusal with a status of its own though the caller has closed its connection", () => {
+			const aborted = Object.assign(new Error("request aborted"), { status: 400, code: "ECONNABORTED" });
+			expect(handedFrom(aborted, { destroyed: true })).toEqual({ called: true, passed: aborted });
+		});
+
 		it.each([
 			["a body over the limit", Object.assign(new Error("request entity too large"), { status: 413 })],
 			["a body that ended early", Object.assign(new Error("request aborted"), { status: 400, code: "ECONNABORTED" })],

@@ -540,7 +540,9 @@ describe("validation router", () => {
 	// failing, so nothing is logged as an unavailable upstream.
 	it("logs no unavailable upstream when the caller leaves before a slow upstream answers", async () => {
 		vi.stubGlobal("fetch", vi.fn(async () => Response.json({ active: true })));
+		let slowReached = 0;
 		const slow = createServer((_req, res) => {
+			slowReached++;
 			setTimeout(() => res.end("late"), 400);
 		});
 		slow.listen(0, "127.0.0.1");
@@ -563,6 +565,8 @@ describe("validation router", () => {
 			caller.destroy();
 			await new Promise((resolve) => setTimeout(resolve, 500));
 
+			// The request reached the upstream, so the library's own abort ran.
+			expect(slowReached).toBe(1);
 			const events = logged.error.mock.calls.map(([fields]) => (fields as { event?: string }).event);
 			expect(events).not.toContain("validation.upstream_unavailable");
 		} finally {
@@ -570,6 +574,36 @@ describe("validation router", () => {
 			front.close();
 			slow.closeAllConnections();
 			slow.close();
+		}
+	});
+
+	// A caller that leaves partway through its body is the body reader's
+	// 400, which carries its own status: still logged, at info, as the
+	// request failing, though no one is left to answer.
+	it("logs a caller that leaves partway through its body as request_failed at info", async () => {
+		vi.stubGlobal("fetch", vi.fn(async () => Response.json({ active: true })));
+		const logged = { info: vi.fn(), warn: vi.fn(), error: vi.fn(), debug: vi.fn() };
+		const front = express()
+			.use(createRouter({ config: makeConfig(upstreamPort), deps: { logger: logged } }))
+			.listen(0, "127.0.0.1");
+		await once(front, "listening");
+		try {
+			const socket = connect((front.address() as AddressInfo).port, "127.0.0.1");
+			socket.on("error", () => {});
+			socket.write(
+				"POST /protected HTTP/1.1\r\nHost: t\r\nAuthorization: Bearer t\r\nContent-Length: 1000\r\n\r\n",
+			);
+			socket.write(Buffer.alloc(100, "x"));
+			await new Promise((resolve) => setTimeout(resolve, 100));
+			socket.destroy();
+			await new Promise((resolve) => setTimeout(resolve, 300));
+
+			const events = logged.info.mock.calls.map(([fields]) => (fields as { event?: string }).event);
+			expect(events).toContain("validation.request_failed");
+			expect(upstreamCalls).toBe(0);
+		} finally {
+			front.closeAllConnections();
+			front.close();
 		}
 	});
 });
