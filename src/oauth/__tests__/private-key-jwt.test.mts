@@ -50,8 +50,10 @@ describe("parseClientKey", () => {
 		expect(parseClientKey({ ...rsa().jwk, alg: "PS256" }).alg).toBe("PS256");
 	});
 
-	it("reads RFC 9864's fully specified Ed25519 as EdDSA, the name the provider verifies", () => {
-		expect(parseClientKey({ ...ed25519().jwk, alg: "Ed25519" }).alg).toBe("EdDSA");
+	// The provider matches a registered key's alg to the header's exactly, and
+	// verifies EdDSA: a key labelled Ed25519 would sign what it never accepts.
+	it("refuses RFC 9864's fully specified Ed25519, pointing at EdDSA", () => {
+		expect(() => parseClientKey({ ...ed25519().jwk, alg: "Ed25519" })).toThrow(/EdDSA/);
 	});
 
 	it("accepts a key marked for signing", () => {
@@ -95,6 +97,15 @@ describe("parseClientKey", () => {
 		["a key marked for encryption", () => ({ ...rsa().jwk, use: "enc" })],
 		["a key whose key_ops do not include sign", () => ({ ...ec("P-256").jwk, key_ops: ["verify"] })],
 		["key material that does not form a key", () => ({ ...ed25519().jwk, x: "AAAA" })],
+		// The provider verifies with the public part the operator registers,
+		// taken from this JWK: one that does not match the private part would
+		// sign what the provider never accepts.
+		["an Ed25519 key whose public part is another key's", () => ({ ...ed25519().jwk, x: ed25519().jwk.x })],
+		["an EC key whose public part is another key's", () => {
+			const other = ec("P-256").jwk;
+			return { ...ec("P-256").jwk, x: other.x, y: other.y };
+		}],
+		["an RSA key whose modulus is another key's", () => ({ ...rsa().jwk, n: rsa().jwk.n })],
 		["an RSA key shorter than 2048 bits", () =>
 			generateKeyPairSync("rsa", { modulusLength: 1024 }).privateKey.export({ format: "jwk" })],
 	])("refuses %s", (_label, make) => {
