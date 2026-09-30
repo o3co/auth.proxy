@@ -78,11 +78,11 @@ describe("createUpstreamProxy", () => {
 		expect(stage).toBe(proxyMock.mock.results[0]?.value);
 	});
 
-	it("targets upstream.baseURL and sets exactly limit (= http.bodyLimitSize) and proxyReqOptDecorator", () => {
+	it("targets upstream.baseURL and sets exactly limit (= http.bodyLimitSize in bytes) and proxyReqOptDecorator", () => {
 		expect(proxyMock).toHaveBeenCalledWith("http://upstream.test:65531", expect.anything());
 		const options = builtOptions();
 		expect(Object.keys(options).sort()).toEqual(["limit", "proxyReqOptDecorator"]);
-		expect(options.limit).toBe("7331kb");
+		expect(options.limit).toBe(7331 * 1024);
 		expect(options.proxyReqOptDecorator).toEqual(expect.any(Function));
 	});
 

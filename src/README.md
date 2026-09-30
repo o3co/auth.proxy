@@ -18,8 +18,8 @@ The whole proxy process. Wire behaviour is in the [root README](../README.md); e
 
 No README of its own; this is its description.
 
-- **Role:** route assembly that is not a mode — the liveness probe, which `app.mts` mounts, and the upstream proxy stage, the last middleware of both mode routers.
-- **Owns:** the `/_healthcheck` path and its answer; building the upstream proxy from `upstream.baseURL` and `http.bodyLimitSize`.
+- **Role:** route assembly that is not a mode — the liveness probe, which `app.mts` mounts, and the stages both mode routers share: the body limit ahead of the mode, the upstream proxy stage after it, and the error handler that ends the router.
+- **Owns:** the `/_healthcheck` path and its answer; `http.bodyLimitSize` as the one byte count the body limit, the upstream proxy and the error handler enforce; building the upstream proxy from `upstream.baseURL`; the `413` and the `{ "code", "message" }` answer for whatever reaches the end of a mode router, and the `<mode>.body_too_large` and `<mode>.request_failed` events.
 - **Does not own:** what reaches upstream — each mode decides that on `req.headers` before the stage; the mode routers themselves (`modes/*/router.mts`).
 - **Why separate:** both are assembly with no decision in them (#95 F18).
 

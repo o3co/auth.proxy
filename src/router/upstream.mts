@@ -22,6 +22,7 @@
 
 import type { RequestHandler } from "express";
 import proxy from "express-http-proxy";
+import { bodyLimitBytes } from "./body-limit.mjs";
 
 /** The two config fields the stage reads. `AppConfig` satisfies it structurally. */
 export interface UpstreamStageConfig {
@@ -30,9 +31,12 @@ export interface UpstreamStageConfig {
 }
 
 /**
- * The upstream proxy stage — the last middleware of either mode's router. It
- * is assembly (built from `upstream.baseURL` and `http.bodyLimitSize`), not a
- * mode's decision, so both routers mount this one function.
+ * The upstream proxy stage — the last stage of either mode's router before
+ * its error handler. It is assembly (built from `upstream.baseURL` and
+ * `http.bodyLimitSize`, in bytes), not a mode's decision, so both routers
+ * mount this one function. It reads the request body against that limit; a
+ * body over it that declared no length is refused here, as an error the
+ * router's error handler answers.
  *
  * What the decorator does. When `req.headers.authorization` is present as this
  * stage runs — empty included, as the injection paths read presence — it sets
@@ -61,7 +65,7 @@ export interface UpstreamStageConfig {
  */
 export const createUpstreamProxy = (config: UpstreamStageConfig): RequestHandler =>
 	proxy(config.upstream.baseURL, {
-		limit: config.http.bodyLimitSize,
+		limit: bodyLimitBytes(config),
 		proxyReqOptDecorator: async (proxyReqOpts, srcReq) => {
 			// Presence, as the injection paths read it: an empty
 			// `Authorization:` is re-set in canonical casing too.

@@ -31,7 +31,7 @@ const appWith = (limitBytes: number, logger: Logger, reached: { count: number })
 			req.resume();
 			req.on("end", () => res.status(200).json({ ok: true }));
 		})
-		.use(createErrorHandler({ logger, mode: "validation" }));
+		.use(createErrorHandler({ limitBytes, logger, mode: "validation" }));
 
 describe("createBodyLimitGuard", () => {
 	it("answers 413 in the refusal shape to a declared length over the limit, before the next stage", async () => {
@@ -85,7 +85,7 @@ describe("createErrorHandler", () => {
 				req.headers["x-request-id"] = "rid-2";
 				next(err);
 			})
-			.use(createErrorHandler({ logger, mode: "injection" }));
+			.use(createErrorHandler({ limitBytes: 1024, logger, mode: "injection" }));
 
 	// What the upstream stage's body reader raises past the limit on a body
 	// with no declared length: an http-errors 413.
@@ -164,7 +164,7 @@ describe("createErrorHandler", () => {
 				res.status(200).setHeader("content-type", "text/plain");
 				Readable.from(["partial"]).on("end", () => next(err)).pipe(res, { end: false });
 			})
-			.use(createErrorHandler({ logger, mode: "validation" }));
+			.use(createErrorHandler({ limitBytes: 1024, logger, mode: "validation" }));
 
 		await request(app)
 			.get("/x")

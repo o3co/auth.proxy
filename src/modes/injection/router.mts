@@ -16,7 +16,8 @@
 
 /**
  * The injection-mode router: request id, the `incoming request` line, the
- * injection middleware, then the shared upstream stage.
+ * shared body limit, the injection middleware, the shared upstream stage,
+ * then the shared error handler.
  *
  * `createRouter` builds the session path's cache, flight table and grant
  * client and — with the exchange on — the exchange's context, client, cache
@@ -31,6 +32,8 @@ import { createRequestIdMiddleware } from "../../express/requestId.mjs";
 import type { Logger } from "../../logger.mjs";
 import defaultLogger from "../../logger.mjs";
 import type { ClientAuthentication } from "../../oauth/client-authentication.mjs";
+import { bodyLimitBytes, createBodyLimitGuard } from "../../router/body-limit.mjs";
+import { createErrorHandler } from "../../router/error-handler.mjs";
 import { createUpstreamProxy } from "../../router/upstream.mjs";
 import { createSingleFlight } from "../../single-flight.mjs";
 import { decideInjection, type InjectionDeps } from "./decision.mjs";
@@ -195,6 +198,7 @@ export const createRouter = ({
 		throw new Error("deps.exchange supplied while auth.injection.exchange.enabled is false");
 	}
 
+	const limitBytes = bodyLimitBytes(config);
 	const router = express.Router();
 	const logger = overrides.logger ?? defaultLogger;
 	const exchange = cfg.exchange.enabled
@@ -224,8 +228,10 @@ export const createRouter = ({
 			);
 			next();
 		})
+		.use(createBodyLimitGuard({ limitBytes, logger, mode: "injection" }))
 		.use(injectionMiddleware(deps, exchange))
-		.use(createUpstreamProxy(config));
+		.use(createUpstreamProxy(config))
+		.use(createErrorHandler({ limitBytes, logger, mode: "injection" }));
 
 	return router;
 };

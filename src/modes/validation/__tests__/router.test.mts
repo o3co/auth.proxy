@@ -8,9 +8,9 @@ import express from "express";
 import request from "supertest";
 import { afterEach, beforeEach, describe, expect, it, vi } from "vitest";
 import type { AppConfig } from "../../../../config/application.schema.mjs";
+import { postChunked } from "../../../__tests__/post-chunked.mjs";
 import type { Logger } from "../../../logger.mjs";
 import logger from "../../../logger.mjs";
-import { postChunked } from "../../../__tests__/post-chunked.mjs";
 import { createRouter } from "../router.mjs";
 
 const makeConfig = (
