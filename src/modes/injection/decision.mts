@@ -51,10 +51,11 @@ type InjectionConfig = Extract<AppConfig["auth"], { mode: "injection" }>;
  * is a different question about the same cookie value.
  *
  * How the client authenticates is keyed too, by what names it without
- * revealing it — the method, the issuer and the key's RFC 7638 thumbprint — so
- * a router that could not obtain a token itself (public where the provider
- * wants a key, or holding another key) is not served one another router
- * obtained.
+ * revealing it — the method, the issuer, and the key's RFC 7638 thumbprint,
+ * `kid` and `alg`, since the same material under another `kid` or `alg` is
+ * another credential to the provider — so a router that could not obtain a
+ * token itself (public where the provider wants a key, or holding another key
+ * or another `kid`) is not served one another router obtained.
  *
  * Hashed as a JSON array rather than joined, so no field's text can shift into
  * its neighbour's, and the cookie value never leaves the digest. The cache
@@ -90,6 +91,8 @@ export const sessionCacheKey = (
 				keyed ? "private_key_jwt" : "none",
 				keyed ? (providerIssuer ?? null) : null,
 				keyed ? clientKey.thumbprint : null,
+				keyed ? clientKey.kid : null,
+				keyed ? clientKey.alg : null,
 				sessionCookieValue,
 			]),
 		)
