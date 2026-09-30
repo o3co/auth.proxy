@@ -145,11 +145,12 @@ export const createIntrospectionClient = ({
 				// reported honestly, as on the token clients: a followed same-origin
 				// redirect re-sends this request's `Authorization` — the inbound
 				// token, or the proxy's Basic header — to a path nothing configured,
-				// and a 307/308 re-sends the body with it. Cross-origin,
-				// `fetch` drops the `Authorization` header, but a 307/308 still
-				// re-sends the body, which is `token=<the caller's token>`, and the
-				// provider's 401 would read as the caller's token being bad. A 3xx
-				// comes back as the non-2xx it is, and the decision reports it.
+				// and a 307/308 re-sends the body with it. Cross-origin, `fetch`
+				// drops the `Authorization` header, but a 307/308 still re-sends the
+				// body, which is `token=<the caller's token>`, and a 401 from there
+				// would read as the caller's token being bad (or, with
+				// `auth.validation.client` set, as the proxy's credentials refused).
+				// A 3xx comes back as the non-2xx it is, and the decision reports it.
 				redirect: "manual",
 				signal: AbortSignal.timeout(timeoutMs),
 			};

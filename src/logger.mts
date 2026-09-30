@@ -70,9 +70,11 @@ const MAX_CAUSE_DEPTH = 5;
  * and the end of a line are taken as the end of the authority.
  *
  * Known limits: a `/` inside a raw password cannot be told from the start of a
- * path, and the part after it is not redacted; a URL written with one slash
- * after its scheme (`scheme:/user:pass@host`) is not matched at all. The schema
- * refuses a configured introspection URL with userinfo, so no
+ * path and ends the match, so the userinfo is not redacted — none of it unless
+ * an `@` comes before that `/`; and a URL without `//` after its scheme
+ * (`scheme:/user:pass@host`, `scheme:user:pass@host`, or with backslashes),
+ * which `fetch` still reads as carrying credentials, is not matched at all. The
+ * schema refuses a configured introspection URL with userinfo, so no
  * credential-bearing URL of the proxy's own reaches `fetch`; the redaction is
  * for any other raw URL that reaches a message.
  *

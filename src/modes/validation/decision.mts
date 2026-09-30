@@ -216,9 +216,10 @@ export const decideValidation = async (
 			return reject(502, "Provider Configuration Error", null);
 		}
 		// A redirecting introspection endpoint is the same kind of thing: the
-		// deployment's configuration, under the same event, as on the injection
-		// path. The client asks fetch not to follow, so the 3xx arrives with its
-		// own status.
+		// deployment's configuration, under the same
+		// `validation.provider_config_error` event; the injection path also
+		// answers a redirect as `provider_config_error`. The client asks fetch not
+		// to follow, so the 3xx arrives with its own status.
 		if (e instanceof IntrospectHttpError && e.status >= 300 && e.status < 400) {
 			logger.error(
 				{ requestId, event: "validation.provider_config_error", error: e },
