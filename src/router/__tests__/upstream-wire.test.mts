@@ -111,6 +111,29 @@ describe("createUpstreamProxy on the wire", () => {
 			expect(res.status).toBe(200);
 			expect(bodies.map((body) => body.length)).toEqual([0]);
 			expect(rawPairs(received[0], "transfer-encoding")).toEqual([]);
+			expect(rawPairs(received[0], "content-length").map(([, value]) => value)).toEqual(["0"]);
+		});
+
+		// `Trailer` announces fields of the chunked framing the stage has taken
+		// off; left on a request framed by Content-Length, Node refuses to send it.
+		it("reaches the upstream without the Trailer it announced", async () => {
+			const res = await postChunked(app, "/upload", { Trailer: "X-Sum" }, [Buffer.from("summed")]);
+
+			expect(res.status).toBe(200);
+			expect(bodies.map((body) => body.toString("utf8"))).toEqual(["summed"]);
+			expect(rawPairs(received[0], "trailer")).toEqual([]);
+		});
+
+		// Node removes the chunked framing and hands on the rest still coded;
+		// the stage cannot say how, so it refuses rather than forward the coded
+		// bytes as if they were the body.
+		it("is refused 501, and nothing reaches the upstream, when it carries another transfer coding", async () => {
+			const res = await postChunked(app, "/upload", { "Transfer-Encoding": "gzip, chunked" }, [
+				Buffer.from("not really gzip"),
+			]);
+
+			expect(res.status).toBe(501);
+			expect(received).toEqual([]);
 		});
 	});
 

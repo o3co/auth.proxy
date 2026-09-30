@@ -106,12 +106,26 @@ describe("createUpstreamProxy", () => {
 		// The library reads the whole body and then frames what it sends by a
 		// Content-Length it sets itself; a Transfer-Encoding left beside it
 		// would frame the one message twice.
-		it("drops the inbound Transfer-Encoding, and changes nothing else", async () => {
-			const chunked = { ...inbound, "transfer-encoding": "chunked" };
+		it("drops the inbound Transfer-Encoding and Trailer, and changes nothing else", async () => {
+			const chunked = { ...inbound, "transfer-encoding": "chunked", trailer: "X-Sum" };
 			const result = await decorate(chunked);
-			const { "transfer-encoding": _te, ...rest } = libraryHeaders(chunked);
+			const { "transfer-encoding": _te, trailer: _trailer, ...rest } = libraryHeaders(chunked);
 			expect(result.headers).toEqual({ ...rest, Authorization: "Bearer inbound-7f3a" });
 		});
+
+		it.each([["CHUNKED"], [" chunked "]])("reads %j as chunked", async (coding) => {
+			const result = await decorate({ ...inbound, "transfer-encoding": coding });
+			expect(result.headers["transfer-encoding"]).toBeUndefined();
+		});
+
+		it.each([["gzip, chunked"], ["deflate"], ["chunked, gzip"]])(
+			"refuses the transfer coding %j with a 501 the router's error handler answers",
+			async (coding) => {
+				await expect(decorate({ ...inbound, "transfer-encoding": coding })).rejects.toMatchObject({
+					status: 501,
+				});
+			},
+		);
 	});
 
 	describe("proxyReqOptDecorator is otherwise a casing-only no-op on what the library already copied", () => {
