@@ -53,4 +53,20 @@ describe("validation's stage refusals", () => {
 		);
 		expect(refusals.body(refusal)).toEqual({ code: 500, message: "Internal Server Error" });
 	});
+
+	it("logs an unavailable upstream at error as validation.upstream_unavailable, and answers its reason phrase", () => {
+		const logger = makeLogger();
+		const error = Object.assign(new Error("connect ECONNREFUSED"), { code: "ECONNREFUSED" });
+		const refusal = { reason: "upstream_unavailable", status: 502, error } as const;
+		const refusals = stageRefusals(logger);
+
+		refusals.log("rid-4", refusal);
+
+		expect(logger.error).toHaveBeenCalledWith(
+			{ requestId: "rid-4", event: "validation.upstream_unavailable", error },
+			"upstream unavailable",
+		);
+		expect(refusals.body(refusal)).toEqual({ code: 502, message: "Bad Gateway" });
+		expect(refusals.body({ ...refusal, status: 504 })).toEqual({ code: 504, message: "Gateway Timeout" });
+	});
 });

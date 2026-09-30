@@ -18,7 +18,7 @@
 import type { IncomingHttpHeaders } from "node:http";
 import proxy from "express-http-proxy";
 import { beforeEach, describe, expect, it, vi } from "vitest";
-import { createUpstreamProxy, type UpstreamStageConfig } from "../upstream.mjs";
+import { createUpstreamProxy, type UpstreamStageConfig, UpstreamUnavailableError } from "../upstream.mjs";
 
 vi.mock("express-http-proxy", () => ({
 	default: vi.fn(() => (_req: unknown, _res: unknown, next: () => void) => next()),
@@ -82,7 +82,7 @@ describe("createUpstreamProxy", () => {
 	it("targets upstream.baseURL and sets exactly limit (= http.bodyLimitSize in bytes) and proxyReqOptDecorator", () => {
 		expect(proxyMock).toHaveBeenCalledWith("http://upstream.test:65531", expect.anything());
 		const options = builtOptions();
-		expect(Object.keys(options).sort()).toEqual(["limit", "proxyReqOptDecorator"]);
+		expect(Object.keys(options).sort()).toEqual(["limit", "proxyErrorHandler", "proxyReqOptDecorator"]);
 		expect(options.limit).toBe(7331 * 1024);
 		expect(options.proxyReqOptDecorator).toEqual(expect.any(Function));
 	});
@@ -101,6 +101,67 @@ describe("createUpstreamProxy", () => {
 		proxyMock.mockClear();
 		createUpstreamProxy({ ...config, http: { bodyLimitSize: "1000000pb" } });
 		expect(builtOptions().limit).toBe(1_000_000 * 1024 ** 5);
+	});
+
+	// What the library rejects with, handed on: a failure of the connection to
+	// the upstream becomes an UpstreamUnavailableError, and anything else — a
+	// body refused, a coding refused — goes on as it came.
+	describe("proxyErrorHandler", () => {
+		const handedFrom = (err: unknown, res: object) => {
+			const handler = builtOptions().proxyErrorHandler as (e: unknown, res: unknown, next: (e?: unknown) => void) => void;
+			const outcome: { called: boolean; passed?: unknown } = { called: false };
+			handler(err, res, (e) => {
+				outcome.called = true;
+				outcome.passed = e;
+			});
+			return outcome;
+		};
+		const handed = (err: unknown): unknown => handedFrom(err, { destroyed: false }).passed;
+		const systemError = (code: string, syscall?: string) =>
+			Object.assign(new Error(`${syscall ?? ""} ${code}`), { code, ...(syscall ? { syscall } : {}) });
+
+		it.each([
+			["a refused connection", 502, systemError("ECONNREFUSED", "connect")],
+			["an unknown host", 502, systemError("ENOTFOUND", "getaddrinfo")],
+			["a reset", 502, systemError("ECONNRESET", "read")],
+			["a hang-up", 502, systemError("ECONNRESET")],
+			["an answer that is not HTTP", 502, systemError("HPE_INVALID_CONSTANT")],
+			["a host that is down", 502, systemError("EHOSTDOWN", "connect")],
+			["a network that is down", 502, systemError("ENETDOWN", "connect")],
+			["an expired upstream certificate", 502, systemError("CERT_HAS_EXPIRED")],
+			["a certificate for another name", 502, systemError("ERR_TLS_CERT_ALTNAME_INVALID")],
+			["a self-signed upstream certificate", 502, systemError("DEPTH_ZERO_SELF_SIGNED_CERT")],
+			["a TLS handshake that failed", 502, systemError("EPROTO")],
+			["a connect timeout", 504, systemError("ETIMEDOUT", "connect")],
+		])("hands on %s as UpstreamUnavailableError %d, the cause kept", (_label, status, err) => {
+			const passed = handed(err);
+			expect(passed).toBeInstanceOf(UpstreamUnavailableError);
+			expect(passed).toMatchObject({ status, cause: err });
+		});
+
+		// The caller hung up while the upstream had not answered: the library
+		// aborts its own request, which fails as a hang-up. Nothing can be
+		// answered, and the upstream did not fail, so nothing is handed on.
+		it("hands nothing on once the caller has closed its connection", () => {
+			const outcome = handedFrom(systemError("ECONNRESET"), { destroyed: true });
+			expect(outcome.called).toBe(false);
+		});
+
+		// The body reader's refusal of a body the caller cut short carries its
+		// own status, and arrives after the caller's socket is gone.
+		it("hands on a refusal with a status of its own though the caller has closed its connection", () => {
+			const aborted = Object.assign(new Error("request aborted"), { status: 400, code: "ECONNABORTED" });
+			expect(handedFrom(aborted, { destroyed: true })).toEqual({ called: true, passed: aborted });
+		});
+
+		it.each([
+			["a body over the limit", Object.assign(new Error("request entity too large"), { status: 413 })],
+			["a body that ended early", Object.assign(new Error("request aborted"), { status: 400, code: "ECONNABORTED" })],
+			["a refused coding", Object.assign(new Error("transfer coding not supported"), { status: 501 })],
+			["an error of no known kind", new Error("something else")],
+		])("hands on %s as it came", (_label, err) => {
+			expect(handed(err)).toBe(err);
+		});
 	});
 
 	describe("proxyReqOptDecorator on what the library already copied", () => {

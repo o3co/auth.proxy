@@ -34,6 +34,14 @@ export interface RecordingUpstream {
 	close(): Promise<void>;
 }
 
+/**
+ * A path the upstream answers by resetting the connection instead: recorded
+ * like any other request, then the socket is destroyed with a reset. How a
+ * composition test reaches an upstream that fails mid-exchange while the log
+ * barrier, which the upstream answers, still works.
+ */
+export const RESET_PATH = "/__upstream_resets";
+
 /** The body the upstream answers `path` with. */
 export const upstreamBody = (path: string): { upstream: "reached"; path: string } => ({
 	upstream: "reached",
@@ -65,6 +73,10 @@ export const startRecordingUpstream = async (): Promise<RecordingUpstream> => {
 		req.on("data", (chunk: Buffer) => chunks.push(chunk));
 		req.on("end", () => {
 			recorded.body = Buffer.concat(chunks);
+			if (path.endsWith(RESET_PATH)) {
+				req.socket.resetAndDestroy();
+				return;
+			}
 			res.writeHead(200, { "Content-Type": "application/json" });
 			res.end(JSON.stringify(upstreamBody(path)));
 		});

@@ -3,7 +3,7 @@
 
 import { once } from "node:events";
 import { createServer, request as httpRequest, type IncomingHttpHeaders, type Server } from "node:http";
-import { type AddressInfo, connect } from "node:net";
+import { type AddressInfo, connect, createServer as createNetServer } from "node:net";
 import express from "express";
 import request from "supertest";
 import { afterEach, beforeEach, describe, expect, it, vi } from "vitest";
@@ -495,10 +495,9 @@ describe("validation router", () => {
 		});
 	});
 
-	// Whatever no stage answered reaches the router's error handler and is
-	// refused in this mode's shape: an upstream that refuses the connection
-	// has no status of its own, so it is a 500.
-	it("refuses an unreachable upstream 500 in the refusal shape", async () => {
+	// An upstream that could not be reached is the upstream failing: 502, in
+	// this mode's refusal shape.
+	it("refuses an unreachable upstream 502 Bad Gateway in the refusal shape", async () => {
 		vi.stubGlobal("fetch", vi.fn(async () => Response.json({ active: true })));
 		const closed = createServer();
 		closed.listen(0, "127.0.0.1");
@@ -511,7 +510,100 @@ describe("validation router", () => {
 			.get("/protected")
 			.set("Authorization", "Bearer t");
 
-		expect(res.status).toBe(500);
-		expect(res.body).toEqual({ code: 500, message: "Internal Server Error" });
+		expect(res.status).toBe(502);
+		expect(res.body).toEqual({ code: 502, message: "Bad Gateway" });
+	});
+
+	// A reset reaches the router's error handler through the stage's
+	// proxyErrorHandler, not the library's default handler.
+	it("refuses an upstream that resets the connection 502 Bad Gateway in the refusal shape", async () => {
+		vi.stubGlobal("fetch", vi.fn(async () => Response.json({ active: true })));
+		const resetting = createNetServer((socket) => socket.on("data", () => socket.resetAndDestroy()));
+		resetting.listen(0, "127.0.0.1");
+		await once(resetting, "listening");
+		try {
+			const resettingPort = (resetting.address() as AddressInfo).port;
+
+			const res = await request(express().use(createRouter({ config: makeConfig(resettingPort) })))
+				.get("/protected")
+				.set("Authorization", "Bearer t");
+
+			expect(res.status).toBe(502);
+			expect(res.body).toEqual({ code: 502, message: "Bad Gateway" });
+		} finally {
+			resetting.close();
+		}
+	});
+
+	// A caller that hangs up before a slow upstream answers makes the library
+	// abort its own request; that is the caller leaving, not the upstream
+	// failing, so nothing is logged as an unavailable upstream.
+	it("logs no unavailable upstream when the caller leaves before a slow upstream answers", async () => {
+		vi.stubGlobal("fetch", vi.fn(async () => Response.json({ active: true })));
+		let slowReached = 0;
+		const slow = createServer((_req, res) => {
+			slowReached++;
+			setTimeout(() => res.end("late"), 400);
+		});
+		slow.listen(0, "127.0.0.1");
+		await once(slow, "listening");
+		const logged = { info: vi.fn(), warn: vi.fn(), error: vi.fn(), debug: vi.fn() };
+		const front = express()
+			.use(createRouter({ config: makeConfig((slow.address() as AddressInfo).port), deps: { logger: logged } }))
+			.listen(0, "127.0.0.1");
+		await once(front, "listening");
+		try {
+			const caller = httpRequest({
+				host: "127.0.0.1",
+				port: (front.address() as AddressInfo).port,
+				path: "/protected",
+				headers: { Authorization: "Bearer t" },
+			});
+			caller.on("error", () => {});
+			caller.end();
+			await new Promise((resolve) => setTimeout(resolve, 100));
+			caller.destroy();
+			await new Promise((resolve) => setTimeout(resolve, 500));
+
+			// The request reached the upstream, so the library's own abort ran.
+			expect(slowReached).toBe(1);
+			const events = logged.error.mock.calls.map(([fields]) => (fields as { event?: string }).event);
+			expect(events).not.toContain("validation.upstream_unavailable");
+		} finally {
+			front.closeAllConnections();
+			front.close();
+			slow.closeAllConnections();
+			slow.close();
+		}
+	});
+
+	// A caller that leaves partway through its body is the body reader's
+	// 400, which carries its own status: still logged, at info, as the
+	// request failing, though no one is left to answer.
+	it("logs a caller that leaves partway through its body as request_failed at info", async () => {
+		vi.stubGlobal("fetch", vi.fn(async () => Response.json({ active: true })));
+		const logged = { info: vi.fn(), warn: vi.fn(), error: vi.fn(), debug: vi.fn() };
+		const front = express()
+			.use(createRouter({ config: makeConfig(upstreamPort), deps: { logger: logged } }))
+			.listen(0, "127.0.0.1");
+		await once(front, "listening");
+		try {
+			const socket = connect((front.address() as AddressInfo).port, "127.0.0.1");
+			socket.on("error", () => {});
+			socket.write(
+				"POST /protected HTTP/1.1\r\nHost: t\r\nAuthorization: Bearer t\r\nContent-Length: 1000\r\n\r\n",
+			);
+			socket.write(Buffer.alloc(100, "x"));
+			await new Promise((resolve) => setTimeout(resolve, 100));
+			socket.destroy();
+			await new Promise((resolve) => setTimeout(resolve, 300));
+
+			const events = logged.info.mock.calls.map(([fields]) => (fields as { event?: string }).event);
+			expect(events).toContain("validation.request_failed");
+			expect(upstreamCalls).toBe(0);
+		} finally {
+			front.closeAllConnections();
+			front.close();
+		}
 	});
 });

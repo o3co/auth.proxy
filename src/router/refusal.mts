@@ -16,6 +16,12 @@ import type { Request, Response } from "express";
 export type StageRefusal =
 	/** The body is over `http.bodyLimitSize`: declared up front, or found while reading it. */
 	| { reason: "body_too_large"; status: 413; limitBytes: number; contentLength?: number }
+	/**
+	 * Before its answer started, the upstream could not be reached or dropped
+	 * the exchange: `502`, or `504` when it timed out. `error` is what the
+	 * connection threw.
+	 */
+	| { reason: "upstream_unavailable"; status: 502 | 504; error: unknown }
 	/** Anything else that reached the end of the router unanswered. */
 	| { reason: "request_failed"; status: number; error: unknown };
 

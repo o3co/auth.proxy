@@ -22,6 +22,7 @@ import { expectContinue } from "../../__tests__/expect-continue.mjs";
 import { continueWithinLimit, createBodyLimitGuard } from "../body-limit.mjs";
 import { createErrorHandler } from "../error-handler.mjs";
 import type { ModeRefusals, StageRefusal } from "../refusal.mjs";
+import { UpstreamUnavailableError } from "../upstream.mjs";
 
 /** A mode that records what it was told and answers with what it was told. */
 const recordingMode = () => {
@@ -117,6 +118,17 @@ describe("createErrorHandler", () => {
 		expect(res.body).toEqual({ reason: "body_too_large", status: 413 });
 		expect(res.headers["content-type"]).toMatch(/^application\/json/);
 		expect(logged).toEqual([["rid-2", { reason: "body_too_large", status: 413, limitBytes: 1024 }]]);
+	});
+
+	it("refuses an unavailable upstream with its status, carrying what the connection threw", async () => {
+		const { logged, refusals } = recordingMode();
+		const cause = Object.assign(new Error("connect ECONNREFUSED"), { code: "ECONNREFUSED" });
+
+		const res = await request(failingApp(new UpstreamUnavailableError(502, cause), refusals)).get("/x");
+
+		expect(res.status).toBe(502);
+		expect(res.body).toEqual({ reason: "upstream_unavailable", status: 502 });
+		expect(logged).toEqual([["rid-2", { reason: "upstream_unavailable", status: 502, error: cause }]]);
 	});
 
 	it("refuses another 4xx with its own status", async () => {
