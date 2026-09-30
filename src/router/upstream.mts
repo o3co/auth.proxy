@@ -65,7 +65,9 @@ export interface UpstreamStageConfig {
  */
 export const createUpstreamProxy = (config: UpstreamStageConfig): RequestHandler =>
 	proxy(config.upstream.baseURL, {
-		limit: bodyLimitBytes(config),
+		// As a string: the library resolves `limit || "1mb"`, so a numeric 0
+		// would become its default, while the body reader reads "0" as 0.
+		limit: String(bodyLimitBytes(config)),
 		proxyReqOptDecorator: async (proxyReqOpts, srcReq) => {
 			// Presence, as the injection paths read it: an empty
 			// `Authorization:` is re-set in canonical casing too.
