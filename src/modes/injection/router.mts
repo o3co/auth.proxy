@@ -25,6 +25,7 @@
  * derived from config, never supplied.
  */
 
+import { STATUS_CODES } from "node:http";
 import type { NextFunction, Request, Response } from "express";
 import express from "express";
 import type { AppConfig } from "../../../config/application.schema.mjs";
@@ -34,6 +35,7 @@ import defaultLogger from "../../logger.mjs";
 import type { ClientAuthentication } from "../../oauth/client-authentication.mjs";
 import { bodyLimitBytes, createBodyLimitGuard } from "../../router/body-limit.mjs";
 import { createErrorHandler } from "../../router/error-handler.mjs";
+import type { ModeRefusals } from "../../router/refusal.mjs";
 import { createUpstreamProxy } from "../../router/upstream.mjs";
 import { createSingleFlight } from "../../single-flight.mjs";
 import { decideInjection, type InjectionDeps } from "./decision.mjs";
@@ -181,6 +183,43 @@ const buildExchangeDeps = (
 	logger,
 });
 
+/**
+ * The shared stages' refusals in this mode's vocabulary: the
+ * `{ "error", "error_description" }` body every injection refusal has, with
+ * the stage's reason as the `error` code, and `injection.*` events with the
+ * error as a string under `error`, as every injection failure line has it. A
+ * body over the limit is the caller's to fix, as is any other `4xx`, so both
+ * are logged at info; anything else is the proxy or its upstream failing, at
+ * error.
+ */
+const stageRefusals = (logger: Logger): ModeRefusals => ({
+	log: (requestId, refusal) => {
+		if (refusal.reason === "body_too_large") {
+			const { limitBytes, contentLength } = refusal;
+			logger.info(
+				{ requestId, event: "injection.body_too_large", limitBytes, contentLength },
+				"request body over the limit",
+			);
+			return;
+		}
+		const { error } = refusal;
+		const line = {
+			requestId,
+			event: "injection.request_failed",
+			error: error instanceof Error ? error.message : String(error),
+		};
+		if (refusal.status < 500) logger.info(line, "request failed");
+		else logger.error(line, "request failed");
+	},
+	body: (refusal) =>
+		refusal.reason === "body_too_large"
+			? { error: "body_too_large", error_description: "request body over the limit" }
+			: {
+					error: "request_failed",
+					error_description: STATUS_CODES[refusal.status] ?? "request failed",
+				},
+});
+
 export const createRouter = ({
 	config,
 	deps: overrides = {},
@@ -201,6 +240,7 @@ export const createRouter = ({
 	const limitBytes = bodyLimitBytes(config);
 	const router = express.Router();
 	const logger = overrides.logger ?? defaultLogger;
+	const refusals = stageRefusals(logger);
 	const exchange = cfg.exchange.enabled
 		? buildExchangeDeps(cfg, cfg.exchange, overrides.exchange ?? {}, logger)
 		: null;
@@ -228,10 +268,10 @@ export const createRouter = ({
 			);
 			next();
 		})
-		.use(createBodyLimitGuard({ limitBytes, logger, mode: "injection" }))
+		.use(createBodyLimitGuard({ limitBytes, refusals }))
 		.use(injectionMiddleware(deps, exchange))
 		.use(createUpstreamProxy(config))
-		.use(createErrorHandler({ limitBytes, logger, mode: "injection" }));
+		.use(createErrorHandler({ limitBytes, refusals }));
 
 	return router;
 };

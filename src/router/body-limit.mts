@@ -2,8 +2,8 @@
 // SPDX-License-Identifier: Apache-2.0
 
 /**
- * The body limit ahead of a mode, `createBodyLimitGuard`, and the refusal it
- * shares with the error handler that ends a mode router.
+ * The body limit ahead of a mode, `createBodyLimitGuard`, and the byte count
+ * every stage enforces, `bodyLimitBytes`.
  *
  * `http.bodyLimitSize` is enforced where the body is read: in the upstream
  * stage, after the mode has introspected a token or minted one. A request
@@ -11,13 +11,13 @@
  * refuses it before the mode runs, and an oversized request spends none of
  * the provider's budget. A request that does not declare its length — a
  * chunked body — can only be measured by reading it, which the upstream
- * stage does; its refusal reaches `createErrorHandler` and is answered the
+ * stage does; its refusal reaches `createErrorHandler` and is refused the
  * same way.
  */
 
-import type { RequestHandler, Response } from "express";
+import type { RequestHandler } from "express";
 import { parseByteSize } from "../byte-size.mjs";
-import type { Logger } from "../logger.mjs";
+import { type ModeRefusals, refuse } from "./refusal.mjs";
 
 /**
  * `http.bodyLimitSize` in bytes: the one number the guard, the upstream
@@ -35,47 +35,27 @@ export const bodyLimitBytes = (config: { http: { bodyLimitSize: string } }): num
 	return bytes;
 };
 
-/** The mode a router serves, which prefixes the events it logs. */
-export type RouterMode = "validation" | "injection";
-
-/**
- * Answers `413` in the refusal shape both modes use, and logs it at info: an
- * oversized body is the caller's to fix, not the proxy failing.
- */
-export const refuseBodyTooLarge = (
-	res: Response,
-	logger: Logger,
-	fields: { requestId: unknown; mode: RouterMode; limitBytes: number; contentLength?: number },
-): void => {
-	const { requestId, mode, ...sizes } = fields;
-	logger.info(
-		{ requestId, event: `${mode}.body_too_large`, ...sizes },
-		"request body over the limit",
-	);
-	res.status(413).json({ code: 413, message: "Payload Too Large" });
-};
-
 /**
  * Refuses a request whose declared `Content-Length` is over `limitBytes`
  * before anything after it runs. Node has already refused a request whose
- * `Content-Length` is not a number, so the header is either absent or a
- * length. A request without one passes: the upstream stage measures it.
+ * `Content-Length` is not a length, or that carries it with
+ * `Transfer-Encoding`, so the header is either absent or a length. A request
+ * without one passes: the upstream stage measures it. Node drains the unread
+ * body once the refusal is sent, so a keep-alive connection goes on.
  */
 export const createBodyLimitGuard = ({
 	limitBytes,
-	logger,
-	mode,
+	refusals,
 }: {
 	limitBytes: number;
-	logger: Logger;
-	mode: RouterMode;
+	refusals: ModeRefusals;
 }): RequestHandler => {
 	return (req, res, next) => {
 		const declared = req.headers["content-length"];
 		if (declared !== undefined && Number(declared) > limitBytes) {
-			refuseBodyTooLarge(res, logger, {
-				requestId: req.headers["x-request-id"],
-				mode,
+			refuse(req, res, refusals, {
+				reason: "body_too_large",
+				status: 413,
 				limitBytes,
 				contentLength: Number(declared),
 			});

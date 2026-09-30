@@ -302,16 +302,16 @@ Two things that make it worse:
 
 ### Request body limit
 
-`HTTP_BODY_LIMIT_SIZE` (default `10mb`) bounds the request body in both modes. It is a number, optionally followed by `b`, `kb`, `mb`, `gb`, `tb` or `pb` in any case, with 1kb = 1024 bytes and any fraction of a byte dropped; any other value fails at boot.
+`HTTP_BODY_LIMIT_SIZE` (default `10mb`) bounds the request body in both modes. It is a number, optionally signed `+` and followed by `b`, `kb`, `mb`, `gb`, `tb` or `pb` in any case, with 1kb = 1024 bytes and any fraction of a byte dropped; any other value fails at boot.
 
-A request whose `Content-Length` is over the limit is refused before the mode does anything: its token is not introspected and no token is minted for it, so it spends none of the provider's budget. A request that declares no length — a chunked body — can only be measured by reading it. That happens when the request goes upstream, after the mode has checked or minted its token, and nothing reaches the upstream. Both are answered `413` with `{ "code": 413, "message": "Payload Too Large" }`.
+A request whose `Content-Length` is over the limit is refused before the mode does anything: its token is not introspected and no token is minted for it, so it spends none of the provider's budget. A request that declares no length — a chunked body — can only be measured by reading it. That happens when the request goes upstream, after the mode has checked or minted its token, and nothing reaches the upstream. Both are answered `413`, in the mode's refusal shape: `{ "code": 413, "message": "Payload Too Large" }` in validation mode, `{ "error": "body_too_large", "error_description": "request body over the limit" }` in injection mode. The rest of the body is read and discarded, so a keep-alive connection goes on to its next request.
 
-Whatever else reaches the end of a mode's router unanswered gets the same `{ "code", "message" }` shape. That includes a body that ended early, an upstream that refused the connection, and anything a mode's middleware threw. The status is the error's own `4xx` or `5xx`, and `500` otherwise, so an unreachable upstream is `500 Internal Server Error`. Each is logged with the request id as `requestId`:
+Whatever else reaches the end of a mode's router unanswered is refused in the same shape: `{ "code", "message" }` with the status's reason phrase in validation mode, `{ "error": "request_failed", "error_description" }` in injection mode. That includes a body that ended early, an upstream that refused the connection, and anything a mode's middleware threw. The status is the error's own `4xx` or `5xx`, and `500` otherwise, so an unreachable upstream is a `500`. A failure after the upstream's answer has started cannot change its status; it is logged, and the connection closed. Each is logged with the request id as `requestId`:
 
 | Event | Level | When |
 | --- | --- | --- |
 | `validation.body_too_large`, `injection.body_too_large` | info | A body over the limit (`413`). The line carries `limitBytes`, and `contentLength` when the request declared one. |
-| `validation.request_failed`, `injection.request_failed` | info for a `4xx`, error otherwise | Anything else no stage answered, with the error under `error`. |
+| `validation.request_failed`, `injection.request_failed` | info for a `4xx`, error otherwise | Anything else no stage answered, with the error under `error`: the `Error` itself in validation mode, its message in injection mode, as each mode logs its other failures. |
 
 ### Client authentication with a private key (`private_key_jwt`)
 

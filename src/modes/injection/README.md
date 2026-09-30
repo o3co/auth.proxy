@@ -15,7 +15,8 @@ Injection mode turns a session cookie into the outbound `Authorization: Bearer` 
 - what is logged about each request on this path.
 
 **Does not own:**
-- the upstream proxy stage ([`src/router`](../../router/upstream.mts)) and the request id ([`src/express`](../../express/README.md));
+- the stages it shares with the other mode ([`src/router`](../../router/refusal.mts)): the body limit ahead of the injection middleware, the upstream proxy stage and the error handler. The router says their refusals in this mode's vocabulary — the events below, the `{ "error", "error_description" }` body — but what is refused, and with which status, is theirs;
+- the request id ([`src/express`](../../express/README.md));
 - the coalescing primitive ([`single-flight.mts`](../../single-flight.mts)) and the bounded body read ([`response-body.mts`](../../response-body.mts)), which sit at `src/` root because both modes use them;
 - configuration defaults ([`config/`](../../../config/README.md));
 - verifying the inbound assertion, which is the provider's job. This side reads the assertion unverified, and uses its claims only to refuse early or to shorten a cache entry.
@@ -67,7 +68,7 @@ Injection mode turns a session cookie into the outbound `Authorization: Bearer` 
 
 ## Log events
 
-Every line about a request carries `requestId` and one of these `event`s, at the level shown. The router writes `injection.incoming_request` (info) for every request, and then the decisions write the rest, in the order they happen. No line carries a credential (invariant 3). A failure line's `error` is a string. On the exchange path, a failure line also carries `providerError`: the provider's `error`, if it passed `sanitizeErrorCode`, and otherwise `null`.
+Every line about a request carries `requestId` and one of these `event`s, at the level shown. The router writes `injection.incoming_request` (info) for every request, and then the decisions write the rest, in the order they happen; a refusal by a stage the modes share is written last. No line carries a credential (invariant 3). A failure line's `error` is a string. On the exchange path, a failure line also carries `providerError`: the provider's `error`, if it passed `sanitizeErrorCode`, and otherwise `null`.
 
 Session path ([`decideInjection`](decision.mts)):
 
@@ -84,6 +85,13 @@ Session path ([`decideInjection`](decision.mts)):
 | `injection.session_unauthorized` | info | `session_unauthorized`, answered `401 session_required`. | `error` |
 | `injection.provider_config_error`, `injection.provider_invalid_response`, `injection.provider_unavailable` | error | The code of the same name. A code the union does not declare is logged as `provider_unavailable`. | `error` |
 | `injection.unexpected_error` | error | A throw that is not a `SessionGrantError`. | `error` |
+
+Shared stages ([`router.mts`](router.mts), saying what [`src/router`](../../router/refusal.mts) refuses):
+
+| Event | Level | When | Fields |
+| --- | --- | --- | --- |
+| `injection.body_too_large` | info | A body over `http.bodyLimitSize`: `413 body_too_large`. | `limitBytes`; `contentLength` when the request declared one |
+| `injection.request_failed` | info for a `4xx`, error otherwise | Anything else no stage answered — a body that ended early, an upstream that refused the connection: `request_failed` with the error's own status, or `500`. | `error` |
 
 Exchange path ([`decideExchange`](exchange.mts)). An exchanged token replaces `Authorization` by design, so this path writes no `authorization_override`:
 
@@ -105,7 +113,7 @@ Pinned by [`decision.test.mts`](__tests__/decision.test.mts), [`exchange-decisio
 
 ## Dependencies
 
-- **Within `src/`:** [`router/upstream.mts`](../../router/upstream.mts), `express/requestId.mts`, [`oauth/client-authentication.mts`](../../oauth/client-authentication.mts) (the exchange's client authentication, and the session grant's when it holds a key; the key's type from `oauth/private-key-jwt.mts`), and the root modules `single-flight.mts`, `response-body.mts` and `logger.mts`. Only the router takes the logger singleton; the decisions see just the `Logger` type.
+- **Within `src/`:** [`router/upstream.mts`](../../router/upstream.mts), `router/body-limit.mts`, `router/error-handler.mts` and the `ModeRefusals` contract in `router/refusal.mts`, `express/requestId.mts`, [`oauth/client-authentication.mts`](../../oauth/client-authentication.mts) (the exchange's client authentication, and the session grant's when it holds a key; the key's type from `oauth/private-key-jwt.mts`), and the root modules `single-flight.mts`, `response-body.mts` and `logger.mts`. Only the router takes the logger singleton; the decisions see just the `Logger` type.
 - **Outside `src/`:** `config/application.schema.mts`, as types only.
 - **Packages:** `express` and `node:crypto`.
 - **Never imported:** `src/modes/validation`, which in turn never imports this directory. This mode does not use `express/bearer.mts`, because the exchange parses `Authorization` with its own grammar.

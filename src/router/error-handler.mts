@@ -8,55 +8,61 @@
  * failures — a body over the limit that declared no length, a body that
  * ended early, an upstream that refused the connection — and anything a
  * mode's middleware threw. Without it, express answers these with its HTML
- * page and logs nothing. With it, each is answered in the refusal shape both
- * modes use, `{ "code", "message" }`, and logged with the request id.
+ * page, and prints the stack to stderr outside the logger. With it, each is
+ * a `StageRefusal` the mode logs and answers in its own vocabulary.
  *
- * The status is the error's own when it carries a `4xx` or `5xx` (`status`
- * or `statusCode`, as express reads it), and `500` otherwise. A `413` is the
- * body limit, answered and logged exactly as `createBodyLimitGuard` answers
- * it. Any other error is `<mode>.request_failed`: at info for a `4xx`, which
- * is about the request, and at error otherwise.
+ * The status is read as express reads it: the error's `status` when it is a
+ * `4xx` or `5xx`, then its `statusCode`, and `500` otherwise. A `413` is the
+ * body limit, refused exactly as `createBodyLimitGuard` refuses it; anything
+ * else is `request_failed`.
  */
 
-import { STATUS_CODES } from "node:http";
 import type { ErrorRequestHandler } from "express";
-import type { Logger } from "../logger.mjs";
-import { type RouterMode, refuseBodyTooLarge } from "./body-limit.mjs";
+import { type ModeRefusals, refuse } from "./refusal.mjs";
+
+const isErrorStatus = (value: unknown): value is number =>
+	typeof value === "number" && Number.isInteger(value) && value >= 400 && value <= 599;
 
 /** The error's own `4xx` / `5xx` status, or `500`. */
 const statusOf = (err: unknown): number => {
 	if (typeof err === "object" && err !== null) {
 		const { status, statusCode } = err as { status?: unknown; statusCode?: unknown };
-		const own = typeof status === "number" ? status : statusCode;
-		if (typeof own === "number" && Number.isInteger(own) && own >= 400 && own <= 599) return own;
+		if (isErrorStatus(status)) return status;
+		if (isErrorStatus(statusCode)) return statusCode;
 	}
 	return 500;
 };
 
 export const createErrorHandler = ({
 	limitBytes,
-	logger,
-	mode,
+	refusals,
 }: {
 	limitBytes: number;
-	logger: Logger;
-	mode: RouterMode;
+	refusals: ModeRefusals;
 }): ErrorRequestHandler => {
-	return (err, req, res, next) => {
-		const requestId = req.headers["x-request-id"];
+	return (err, req, res, _next) => {
 		const status = statusOf(err);
-		if (status === 413 && !res.headersSent) {
-			refuseBodyTooLarge(res, logger, { requestId, mode, limitBytes });
-			return;
-		}
-		const log = status < 500 ? logger.info : logger.error;
-		log.call(logger, { requestId, event: `${mode}.request_failed`, error: err }, "request failed");
-		// Once the answer has started its status is spent: express closes the
-		// connection instead.
+		// Once the answer has started its status is spent: the failure is
+		// logged, and the connection closed, which is all express would do
+		// with it besides printing the stack.
 		if (res.headersSent) {
-			next(err);
+			refusals.log(req.headers["x-request-id"], { reason: "request_failed", status, error: err });
+			req.socket.destroy();
 			return;
 		}
-		res.status(status).json({ code: status, message: STATUS_CODES[status] ?? "Error" });
+		// The body reader stops reading the body when it gives up on it. What
+		// is left is drained, as Node drains a body nothing read, so a
+		// keep-alive connection reaches its next request.
+		if (!req.complete) {
+			req.resume();
+		}
+		refuse(
+			req,
+			res,
+			refusals,
+			status === 413
+				? { reason: "body_too_large", status, limitBytes }
+				: { reason: "request_failed", status, error: err },
+		);
 	};
 };

@@ -23,13 +23,16 @@
  * table of its own (`buildIntrospector`), or takes one from `deps.introspect`.
  */
 
+import { STATUS_CODES } from "node:http";
 import type { NextFunction, Request, Response } from "express";
 import express from "express";
 import type { AppConfig } from "../../../config/application.schema.mjs";
 import { createRequestIdMiddleware } from "../../express/requestId.mjs";
+import type { Logger } from "../../logger.mjs";
 import defaultLogger from "../../logger.mjs";
 import { bodyLimitBytes, createBodyLimitGuard } from "../../router/body-limit.mjs";
 import { createErrorHandler } from "../../router/error-handler.mjs";
+import type { ModeRefusals } from "../../router/refusal.mjs";
 import { createUpstreamProxy } from "../../router/upstream.mjs";
 import { createSingleFlight } from "../../single-flight.mjs";
 import {
@@ -88,6 +91,30 @@ const validationMiddleware =
 			}
 		}
 	};
+
+/**
+ * The shared stages' refusals in this mode's vocabulary: the
+ * `{ "code", "message" }` body every validation refusal has, and
+ * `validation.*` events with the `Error` itself under `error`. A body over
+ * the limit is the caller's to fix, as is any other `4xx`, so both are logged
+ * at info; anything else is the proxy or its upstream failing, at error.
+ */
+const stageRefusals = (logger: Logger): ModeRefusals => ({
+	log: (requestId, refusal) => {
+		if (refusal.reason === "body_too_large") {
+			const { limitBytes, contentLength } = refusal;
+			logger.info(
+				{ requestId, event: "validation.body_too_large", limitBytes, contentLength },
+				"request body over the limit",
+			);
+			return;
+		}
+		const line = { requestId, event: "validation.request_failed", error: refusal.error };
+		if (refusal.status < 500) logger.info(line, "request failed");
+		else logger.error(line, "request failed");
+	},
+	body: (refusal) => ({ code: refusal.status, message: STATUS_CODES[refusal.status] ?? "Error" }),
+});
 
 /**
  * How the proxy authenticates to introspection: its secret, its key with the
@@ -149,6 +176,7 @@ export const createRouter = ({
 	const limitBytes = bodyLimitBytes(config);
 	const router = express.Router();
 	const logger = overrides.logger ?? defaultLogger;
+	const refusals = stageRefusals(logger);
 	const deps: ValidationDeps = {
 		introspect: overrides.introspect ?? buildIntrospector(validation),
 		logger,
@@ -168,10 +196,10 @@ export const createRouter = ({
 			);
 			return next();
 		})
-		.use(createBodyLimitGuard({ limitBytes, logger, mode: "validation" }))
+		.use(createBodyLimitGuard({ limitBytes, refusals }))
 		.use(validationMiddleware(deps, { realm: validation.realm }))
 		.use(createUpstreamProxy(config))
-		.use(createErrorHandler({ limitBytes, logger, mode: "validation" }));
+		.use(createErrorHandler({ limitBytes, refusals }));
 
 	return router;
 };

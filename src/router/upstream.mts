@@ -63,11 +63,17 @@ export interface UpstreamStageConfig {
  * that matches the name case-sensitively would miss it. The casing on the
  * wire is pinned by `__tests__/upstream-wire.test.mts`.
  */
+/**
+ * The byte count in the form the library keeps. It resolves `limit || "1mb"`,
+ * so zero goes as `"0"`, which its body reader reads as 0; every other count
+ * goes as the number, since a large one's string is exponent notation, which
+ * the reader would read as 1.
+ */
+const upstreamLimit = (bytes: number): number | string => (bytes === 0 ? "0" : bytes);
+
 export const createUpstreamProxy = (config: UpstreamStageConfig): RequestHandler =>
 	proxy(config.upstream.baseURL, {
-		// As a string: the library resolves `limit || "1mb"`, so a numeric 0
-		// would become its default, while the body reader reads "0" as 0.
-		limit: String(bodyLimitBytes(config)),
+		limit: upstreamLimit(bodyLimitBytes(config)),
 		proxyReqOptDecorator: async (proxyReqOpts, srcReq) => {
 			// Presence, as the injection paths read it: an empty
 			// `Authorization:` is re-set in canonical casing too.
