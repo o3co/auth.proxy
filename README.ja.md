@@ -22,7 +22,7 @@
 **担うもの:**
 
 - リクエストごとの判定 — 転送・拒否・注入 — と、拒否応答のワイヤー上の形（バリデーションモードの RFC 6750 `WWW-Authenticate` チャレンジを含む）
-- プロバイダーへの呼び出し: `POST /oauth/introspect`、セッショングラントと jwt-bearer 交換のための `POST /oauth/token`、およびプロキシ自身のクライアント認証（[`client_secret_basic`](#イントロスペクションのクライアント識別)）
+- プロバイダーへの呼び出し: `POST /oauth/introspect`、セッショングラントと jwt-bearer 交換のための `POST /oauth/token`、およびプロキシ自身のクライアント認証（[`client_secret_basic`](#イントロスペクションのクライアント識別) または [`private_key_jwt`](#秘密鍵によるクライアント認証private_key_jwt)）
 - インスタンス単位・インメモリのプロバイダー応答キャッシュと、並行ミスを集約する single-flight
 - 自身の設定スキーマ、ロギング、グレースフルシャットダウン
 
@@ -87,9 +87,9 @@ JWT ローカル検証との比較:
 
 #### イントロスペクションのクライアント識別
 
-`CLIENT_ID` / `CLIENT_SECRET` は任意項目だが、設定するかしないかで「プロバイダーがどのトークンを `active` と答えるか」が変わる。
+`CLIENT_ID` と `CLIENT_SECRET` または `CLIENT_KEY` は任意項目だが、設定するかしないかで「プロバイダーがどのトークンを `active` と答えるか」が変わる。
 
-**クライアント認証あり（両方設定）。** プロキシは HTTP Basic で `POST /oauth/introspect` に認証する。このときプロバイダーは、イントロスペクション対象トークンの audience を**呼び出し元クライアントが扱えるもの — 自身の `client_id` と `allowedAudiences` — に固定する**（auth.provider v0.12.0 以降。それより前のリリースは `client_id` だけに固定していた）。`aud` がそのどちらも指していないトークンは `active: false` で返る。エラーも診断情報も出ない — ワイヤー上では audience 不一致と偽造・期限切れトークンが区別できないため、実際には完全に有効なトークンに対してプロキシが `401` を返す。
+**クライアント認証あり（`CLIENT_ID` と、`CLIENT_SECRET` または `CLIENT_KEY`）。** プロキシは自身のクライアントとして `POST /oauth/introspect` に認証する — HTTP Basic で、または鍵を持つ場合はクライアントアサーションで（[秘密鍵によるクライアント認証](#秘密鍵によるクライアント認証private_key_jwt)を参照）。このときプロバイダーは、イントロスペクション対象トークンの audience を**呼び出し元クライアントが扱えるもの — 自身の `client_id` と `allowedAudiences` — に固定する**（auth.provider v0.12.0 以降。それより前のリリースは `client_id` だけに固定していた）。`aud` がそのどちらも指していないトークンは `active: false` で返る。エラーも診断情報も出ない — ワイヤー上では audience 不一致と偽造・期限切れトークンが区別できないため、実際には完全に有効なトークンに対してプロキシが `401` を返す。
 
 したがって、プロキシが名乗るクライアントは、検証対象トークンの audience と紐付いている必要がある。方法は 2 つ:
 
@@ -98,13 +98,13 @@ JWT ローカル検証との比較:
 
 `https://api.example.com/orders` の前段に置いたプロキシが、その URI でもなく `allowedAudiences` にそれを登録してもいない `client_id` で認証している場合、RFC 8707 `resource` audience 付きで発行されたトークンにはすべて `401` を返す — resource indicator を使っている環境では、それは受け取る全リクエストを意味する。
 
-**プロバイダーの `401` が意味するもの。** RFC 7662 §2.1 ではイントロスペクション要求は認証され、§2.3 は無効なクレデンシャルに `401` で答えるので、プロバイダーの `401` は、その要求が載せていたクレデンシャルに対する答えである。クライアント資格情報が無い場合、そのクレデンシャルは受信トークン*そのもの*であり、`401` は呼び出し元についての答え — `401 Invalid Token` — になる。資格情報がある場合、クレデンシャルはプロキシ自身の Basic ヘッダーであり、`401` が拒否したのは*プロキシ*で、呼び出し元のトークンは検査すらされていない。これは `502 Provider Configuration Error` とし、呼び出し元の `validation.token_unauthorized`（info）ではなく `validation.provider_config_error`（`introspect refused the proxy's client credentials`）として error でログする。直すのはオペレーターだからである。インジェクション経路も同じ状況を `provider_config_error` 502 として報告する — 交換は当初から、セッショングラントは #95 F47 以降。したがって設定を誤ったデプロイは、クライアントやゲートウェイが `401` よりも積極的に再試行するステータスを返し、それが[プロバイダーのレート制限](#プロバイダーのレート制限)で述べるインスタンス単位のイントロスペクション予算を消費する。直すべきは資格情報であって、再試行ポリシーではない。
+**プロバイダーの `401` が意味するもの。** RFC 7662 §2.1 ではイントロスペクション要求は認証され、§2.3 は無効なクレデンシャルに `401` で答えるので、プロバイダーの `401` は、その要求が載せていたクレデンシャルに対する答えである。クライアント資格情報が無い場合、そのクレデンシャルは受信トークン*そのもの*であり、`401` は呼び出し元についての答え — `401 Invalid Token` — になる。資格情報がある場合、クレデンシャルはプロキシ自身のもの — Basic ヘッダーまたはクライアントアサーション — であり、`401` が拒否したのは*プロキシ*で、呼び出し元のトークンは検査すらされていない。これは `502 Provider Configuration Error` とし、呼び出し元の `validation.token_unauthorized`（info）ではなく `validation.provider_config_error`（`introspect refused the proxy's client credentials`）として error でログする。直すのはオペレーターだからである。インジェクション経路も同じ状況を `provider_config_error` 502 として報告する — 交換は当初から、セッショングラントは #95 F47 以降。したがって設定を誤ったデプロイは、クライアントやゲートウェイが `401` よりも積極的に再試行するステータスを返し、それが[プロバイダーのレート制限](#プロバイダーのレート制限)で述べるインスタンス単位のイントロスペクション予算を消費する。直すべきは資格情報であって、再試行ポリシーではない。
 
-**クライアント認証なし（両方未設定）。** プロキシは受信トークン自体をイントロスペクションの資格情報として提示する。`buildAuthHeader` が `Authorization: Bearer <token>` を出し、ボディにも同じトークンを載せる（プロバイダーは両者の一致を要求する）。この経路では呼び出し元クライアントが特定されないため、**audience の固定は適用されず**、どの audience 向けのトークンでもトークン自体の妥当性だけで判定される。
+**クライアント認証なし（すべて未設定）。** プロキシは受信トークン自体をイントロスペクションの資格情報として提示する。`buildAuthHeader` が `Authorization: Bearer <token>` を出し、ボディにも同じトークンを載せる（プロバイダーは両者の一致を要求する）。この経路では呼び出し元クライアントが特定されないため、**audience の固定は適用されず**、どの audience 向けのトークンでもトークン自体の妥当性だけで判定される。
 
 引き換えに失うもの:
 
-- **プロバイダーが `aud` を検査しなくなる。** プロバイダーはその欠落を記録した上でクレームを返す。プロキシ側も `aud` を見ていないので、*別の*リソースサーバー向けに発行されたトークンがここを通ってしまう。アップストリームサービスが自分で `aud` を検査しないなら、これは confused deputy の穴になる — `CLIENT_ID` / `CLIENT_SECRET` を設定して audience を登録するか、アップストリームで `aud` を検査すること。
+- **プロバイダーが `aud` を検査しなくなる。** プロバイダーはその欠落を記録した上でクレームを返す。プロキシ側も `aud` を見ていないので、*別の*リソースサーバー向けに発行されたトークンがここを通ってしまう。アップストリームサービスが自分で `aud` を検査しないなら、これは confused deputy の穴になる — クライアント認証を設定して audience を登録するか、アップストリームで `aud` を検査すること。
 - **プロバイダーの監査ログにクライアント識別が残らない。**
 - 署名・issuer・トークン種別・有効期限・失効 denylist は引き続き検査されるので、失効済み／偽造トークンは変わらず `active: false` になる。
 
@@ -202,6 +202,8 @@ Content-Type: application/x-www-form-urlencoded
 grant_type=urn:ietf:params:oauth:grant-type:jwt-bearer&assertion=<JWT>[&scope=…][&audience=…][&resource=…]
 ```
 
+シークレットの代わりにクライアント鍵を使う場合、`Authorization` ヘッダーは付かず、ボディに `client_id`・`client_assertion_type`・`client_assertion` も載る。
+
 これは [RFC 8693](https://www.rfc-editor.org/rfc/rfc8693.html) のトークン交換（`subject_token` / `subject_token_type` を伴う `grant_type=urn:ietf:params:oauth:grant-type:token-exchange`）ではなく、両者は互換ではない。プロバイダーが受け付けるのは、登録された発行者のプロファイルを満たすアサーション — プロバイダー自身を指す audience を含む — だけである。外部 IdP が無関係な API 向けに発行した JWT アクセストークンは、発行者が登録済みだというだけでは有効なアサーションにならない。一般の外部アクセストークンを交換するには、別途定義されたプロバイダーの検証・交換契約（RFC 8693）が必要であり、この経路が行うことではない。委任（delegation）も対象外である。jwt-bearer グラントは `act` クレームを発行せず、転送ヘッダーがその代わりになることもない。
 
 **サポートするプロファイル。** アサーションの発行者についてプロバイダーのレジストリが認めるもの — 通常の RFC 7523 アサーションと、Identity Assertion JWT Authorization Grant（ID-JAG）プロファイル。プロキシは `assertion` をそのまま提出し、どのプロファイルが適用されるかはレジストリのエントリが決める。ID-JAG については、プロバイダーが次の 2 つの規則を強制し、プロキシの動作はそれを前提に組まれている:
@@ -210,7 +212,7 @@ grant_type=urn:ietf:params:oauth:grant-type:jwt-bearer&assertion=<JWT>[&scope=�
 - **一回限りの使用。** 各 `jti` は一度しか受け付けられない。プロキシが自らアサーションを再提出することはない。リトライせず、失敗をキャッシュせず、同一の並行リクエストは 1 回の提出を共有する。成功結果はキャッシュエントリが失効するまで再利用される。その後 — あるいはキャッシュを別に持つ別のプロキシインスタンスで — 同じ ID-JAG を提示すると、プロバイダーがリプレイとして拒否し（`401 credential_rejected`）、クライアントは新しいアサーションを取得する必要がある。
 - **キャッシュ期間中はリプレイ検査されない。** プロバイダーの一回限りの検査はアサーションの提出時に行われ、キャッシュヒットは何も提出しない。キャッシュ寿命の間は、同じアサーションを提示した者 — クライアント自身でも、それを入手した第三者でも — にキャッシュ済みトークンが渡る。その期間、アサーションはベアラークレデンシャルとして扱うこと。期間の上限は `tokenCache.ttlSeconds` である。
 
-**クライアント認証。** 交換を有効にした場合、`clientId` と `clientSecret` は両方必須で、どちらかが欠けると起動に失敗する — `client_id` だけではクライアント認証にならない。プロキシは `client_secret_basic` で認証し、エンコードは[イントロスペクションのクライアント識別](#イントロスペクションのクライアント識別)で説明した RFC 6749 §2.3.1 のものを使う。プロバイダーには、`allowedGrantTypes` に `urn:ietf:params:oauth:grant-type:jwt-bearer` を含むコンフィデンシャルクライアントとして登録し、`allowedClients` を持つ発行者エントリにはすべてそのクライアントを列挙すること。要求する `scope`・`audience`・`resource` はデプロイ設定で固定され、設定したときだけ送られる。それらに何が許されるかはプロバイダーが強制し、どれを読むかもプロバイダーが決める（auth.provider の jwt-bearer グラントが読むのは `scope` と、`oauth.resourceIndicator.enabled` のときの `resource`）。
+**クライアント認証。** 交換を有効にした場合、`clientId` と、`clientSecret` と `clientKey` のちょうど一方が必須で、それ以外は起動に失敗する — `client_id` だけではクライアント認証にならない。シークレットの場合プロキシは `client_secret_basic` で認証し、エンコードは[イントロスペクションのクライアント識別](#イントロスペクションのクライアント識別)で説明した RFC 6749 §2.3.1 のものを使う。鍵の場合は `private_key_jwt` で認証する（[秘密鍵によるクライアント認証](#秘密鍵によるクライアント認証private_key_jwt)を参照）。プロバイダーには、`allowedGrantTypes` に `urn:ietf:params:oauth:grant-type:jwt-bearer` を含むコンフィデンシャルクライアントとして登録し、`allowedClients` を持つ発行者エントリにはすべてそのクライアントを列挙すること。要求する `scope`・`audience`・`resource` はデプロイ設定で固定され、設定したときだけ送られる。それらに何が許されるかはプロバイダーが強制し、どれを読むかもプロバイダーが決める（auth.provider の jwt-bearer グラントが読むのは `scope` と、`oauth.resourceIndicator.enabled` のときの `resource`）。
 
 **リクエストの形。** 交換を有効にした場合:
 
@@ -279,6 +281,47 @@ grant_type=urn:ietf:params:oauth:grant-type:jwt-bearer&assertion=<JWT>[&scope=�
 - **`tokenCache.ttlSeconds` / `INTROSPECT_CACHE_TTL_SEC` を下げるとミスが増える。** TTL が短いほど、同じトラフィックが同じ 60/60 秒バケットを多く消費する。失効への効果はインジェクションとバリデーションで異なる — [アクセストークンの寿命と失効](#アクセストークンの寿命と失効)を参照。
 - **スケールアウトすると、各インスタンスが自前のバケットと自前のコールドキャッシュを持つ。** そのためロールアウトは `インスタンス数 × アクティブセッション数` のプロバイダー呼び出しを、まさにバケットが最速で消費される瞬間に発生させる。複数インスタンスが 1 つの NAT やイグレスゲートウェイの背後にある場合は、逆に同一送信元 IP として 1 バケットを共有することになる。
 
+### 秘密鍵によるクライアント認証（`private_key_jwt`）
+
+プロキシがクライアントとしてプロバイダーに認証する箇所 — バリデーションモードのイントロスペクション、交換、セッショングラント — ではどこでも、共有シークレットの代わりに秘密鍵を持てる（[RFC 7523 §2.2](https://www.rfc-editor.org/rfc/rfc7523.html#section-2.2)）。
+
+| 呼び出し | 鍵 | 代わりのシークレット | どちらも無い場合 |
+| --- | --- | --- | --- |
+| イントロスペクション | `CLIENT_KEY` | `CLIENT_SECRET` | 受信トークンがクレデンシャルになる |
+| セッショングラント | `INJECTION_CLIENT_KEY` | — | パブリッククライアント: `client_id` のみ |
+| 交換 | `INJECTION_EXCHANGE_CLIENT_KEY` | `INJECTION_EXCHANGE_CLIENT_SECRET` | 起動時に拒否 |
+
+同じクライアントに鍵とシークレットの両方を設定すると起動時に拒否される。鍵の場合、呼び出しのたびに新しいクライアントアサーションを署名し、`client_id` とともにフォームボディで送り、`Authorization` ヘッダーは付けない — プロバイダーは 2 通りの方法で認証するリクエストを拒否するためである:
+
+```http
+POST /oauth/token
+Content-Type: application/x-www-form-urlencoded
+
+grant_type=…&client_id=<クライアント ID>&client_assertion_type=urn:ietf:params:oauth:client-assertion-type:jwt-bearer&client_assertion=<JWT>
+```
+
+アサーションの `iss` と `sub` はクライアント ID、唯一の `aud` はプロバイダーの issuer 識別子で、ランダムな `jti` と、`iat` の 60 秒後の `exp` を持つ。プロバイダーは各 `jti` を一度しか受け付けず、プロキシが `jti` を再利用することはない。
+
+**プロバイダーの issuer。** 鍵を使う場合、`VALIDATION_PROVIDER_ISSUER` または `INJECTION_PROVIDER_ISSUER` が必須になる。プロバイダーに設定されているとおりの issuer 識別子（クエリもフラグメントも持たない http(s) URL）を指定する。`INTROSPECT_URL` や `INJECTION_PROVIDER_ORIGIN` からは導出しない — プロキシがプロバイダーに到達する URL と、プロバイダーが名乗る issuer は異なりうるからである。audience には、RFC 7523 が許すトークンエンドポイント URL ではなく、`private_key_jwt` で推奨されているとおり issuer だけを使う。
+
+**鍵。** 秘密鍵の JWK を、環境変数では JSON テキストとして（`application.conf` では HOCON オブジェクトとしても）与える。使えるのは Ed25519 鍵（`EdDSA`）、EC P-256・P-384・P-521 鍵（`ES256`・`ES384`・`ES512`）、2048 ビット以上の RSA 鍵（JWK の `alg` が `RS384`・`RS512`・`PS*` を指定しない限り `RS256`）。JWK に `kid` があれば、すべてのアサーションのヘッダーに載り、プロバイダーが対応する公開鍵を選ぶ。それ以外 — 公開鍵、共通鍵、鍵に合わないアルゴリズム — はキー名を示して起動時に失敗し、鍵そのものは出力しない。プロキシは鍵もアサーションもログに書かない。
+
+たとえば Node で Ed25519 鍵を生成し、登録する公開鍵も得るには:
+
+```sh
+node -e 'const { generateKeyPairSync } = require("node:crypto");
+const { privateKey, publicKey } = generateKeyPairSync("ed25519");
+const kid = "proxy-2026-09";
+console.log("CLIENT_KEY=" + JSON.stringify({ ...privateKey.export({ format: "jwk" }), kid }));
+console.log("public JWK: " + JSON.stringify({ ...publicKey.export({ format: "jwk" }), kid }));'
+```
+
+**プロバイダー側では**（auth.provider の oauth パッケージ README の「Client authentication: `private_key_jwt`」）、クライアントを `tokenEndpointAuthMethod: "private_key_jwt"`、`clientSecret` なしで登録し、公開鍵を `jwks` としてインラインで、またはプロバイダーが取得する `jwksUri` で与える。プロバイダーは各 `jti` をリプレイ seen-set に記録するので、`private_key_jwt` を受け付けるにはコンポジションがそれを組み込んでいる必要がある。鍵で認証するセッショングラントのクライアントはコンフィデンシャルクライアントであり、そのように登録すること。
+
+**鍵のローテーション。** プロキシが署名に使う鍵は常に 1 本で、ローテーションは鍵を検証する側で行う。新しい公開鍵をクライアントの `jwks` または `jwksUri` に古いものと並べて公開し、プロキシの鍵を（新しい `kid` とともに）切り替え、古い鍵で署名するインスタンスが無くなったら古い公開鍵を外す。プロバイダーは `kid` で鍵を選ぶので、ロールアウト途中のインスタンスも動き続ける。
+
+**時計。** アサーションは `iat` から 60 秒有効で、プロバイダーはさらに自身の時計の許容誤差（既定 30 秒）を認める。時計が十分に遅れている・進んでいるプロキシのアサーションは拒否される。そのときバリデーションは `502 Provider Configuration Error`、インジェクションは `502 provider_config_error` を返す — 拒否されたクライアント認証すべてと同じである。
+
 ## セットアップ
 
 ```bash
@@ -318,9 +361,11 @@ make docker       # ランタイムイメージのビルド
 
 | 環境変数 | 説明 |
 | --- | --- |
-| `CLIENT_ID` | イントロスペクション認証のクライアント ID（任意。`CLIENT_SECRET` とペアで設定する）。 |
-| `CLIENT_SECRET` | イントロスペクション認証のクライアントシークレット（任意。`CLIENT_ID` とペアで設定する）。 |
-| `INTROSPECT_URL` | イントロスペクションエンドポイント URL。userinfo を含まない絶対 `http(s)` URL であること。それ以外はキー名を示して起動時に失敗する — プロキシは URL ではなく `CLIENT_ID` / `CLIENT_SECRET` で認証する。 |
+| `CLIENT_ID` | イントロスペクション認証のクライアント ID（任意。`CLIENT_SECRET` と `CLIENT_KEY` のちょうど一方とともに設定する）。 |
+| `CLIENT_SECRET` | イントロスペクション認証のクライアントシークレット（`client_secret_basic`。任意、`CLIENT_ID` とともに）。 |
+| `CLIENT_KEY` | イントロスペクション認証の秘密鍵 JWK（`private_key_jwt`。任意、`CLIENT_ID` と `VALIDATION_PROVIDER_ISSUER` とともに）。[秘密鍵によるクライアント認証](#秘密鍵によるクライアント認証private_key_jwt)を参照。 |
+| `VALIDATION_PROVIDER_ISSUER` | プロバイダーの issuer 識別子。クライアントアサーションの audience。`CLIENT_KEY` を設定する場合は**必須**。 |
+| `INTROSPECT_URL` | イントロスペクションエンドポイント URL。userinfo を含まない絶対 `http(s)` URL であること。それ以外はキー名を示して起動時に失敗する — プロキシは URL ではなく自身のクライアント資格情報で認証する。 |
 | `VALIDATION_REALM` | `WWW-Authenticate` の RFC 6750 `realm`（任意。印字可能 ASCII で 256 文字以内、`"`・`\`・前後の空白を含まない）。未設定なら、別の認証方式を使ったリクエストにはチャレンジを返さない。 |
 | `INTROSPECT_CACHE_TTL_SEC` | キャッシュ TTL（秒、デフォルト: 30）。 |
 | `INTROSPECT_CACHE_MAX_ENTRIES` | キャッシュ最大エントリ数（デフォルト: 10000）。 |
@@ -332,6 +377,8 @@ make docker       # ランタイムイメージのビルド
 | --- | --- |
 | `INJECTION_PROVIDER_ORIGIN` | プロバイダーオリジン — `scheme://host[:port]`、パス／クエリ／フラグメント／userinfo 不可、http または https のみ（デフォルト: `http://localhost:3000`）。 |
 | `INJECTION_CLIENT_ID` | **必須。** OAuth `client_id`。 |
+| `INJECTION_CLIENT_KEY` | セッショングラントの秘密鍵 JWK（`private_key_jwt`。任意）。未設定ならセッショングラントはパブリッククライアント。 |
+| `INJECTION_PROVIDER_ISSUER` | プロバイダーの issuer 識別子。クライアントアサーションの audience。`INJECTION_CLIENT_KEY` または `INJECTION_EXCHANGE_CLIENT_KEY` を設定する場合は**必須**。 |
 | `INJECTION_SCOPE` | **必須。** OAuth `scope` 文字列（スペース区切り）。 |
 | `INJECTION_SESSION_COOKIE_NAME` | セッションクッキー名（デフォルト: `connect.sid`）。RFC 6265 `cookie-name`（RFC 9110 token）であること — 空白・`=`・その他のセパレータは起動時に失敗する。 |
 | `INJECTION_STRIP_INBOUND_AUTHORIZATION` | `"true"` / `"false"`（デフォルト: `false`）。プロキシがトークンを発行しなかったリクエストの受信 `Authorization` ヘッダーを削除する。それ以外の値は起動時に失敗する。[受信 Authorization ヘッダー](#受信-authorization-ヘッダー)を参照。 |
@@ -341,7 +388,8 @@ make docker       # ランタイムイメージのビルド
 | `INJECTION_TIMEOUT_MS` | プロバイダー HTTP タイムアウト（デフォルト: 5000）。セッショングラントと交換の両方に適用。 |
 | `INJECTION_EXCHANGE_ENABLED` | `"true"` / `"false"`（デフォルト: `false`）。受信 `Authorization: Bearer <JWT>` をプロバイダーで交換する（RFC 7523 jwt-bearer）。それ以外の値は起動時に失敗する。[外部クレデンシャル交換](#外部クレデンシャル交換authinjectionexchange)を参照。 |
 | `INJECTION_EXCHANGE_CLIENT_ID` | 交換でプロキシが名乗る `client_id`。交換を有効にした場合は**必須**。 |
-| `INJECTION_EXCHANGE_CLIENT_SECRET` | そのクライアントシークレット（`client_secret_basic`）。交換を有効にした場合は**必須**。 |
+| `INJECTION_EXCHANGE_CLIENT_SECRET` | そのクライアントシークレット（`client_secret_basic`）。交換を有効にした場合、これと `INJECTION_EXCHANGE_CLIENT_KEY` のちょうど一方が**必須**。 |
+| `INJECTION_EXCHANGE_CLIENT_KEY` | シークレットの代わりの秘密鍵 JWK（`private_key_jwt`）。`INJECTION_PROVIDER_ISSUER` が必要。 |
 | `INJECTION_EXCHANGE_SCOPE` | 交換で送る `scope`（スペース区切り、任意）。 |
 | `INJECTION_EXCHANGE_AUDIENCE` | 交換で送る `audience`（任意）。 |
 | `INJECTION_EXCHANGE_RESOURCE` | 交換で送る RFC 8707 `resource`（任意）。 |

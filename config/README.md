@@ -1,6 +1,6 @@
 # `config`
 
-Last updated: 2026-09-24
+Last updated: 2026-09-30
 
 The proxy's configuration contract: [`application.conf`](application.conf) is the shipped HOCON with an environment override per key, and [`application.schema.mts`](application.schema.mts) is the Zod schema that validates the parsed file and produces the [`AppConfig`](application.schema.mts) the code reads. The environment variables themselves are listed in the root README under [Configuration](../README.md#configuration). The boundary review behind this file is [#95](https://github.com/o3co/auth.proxy/issues/95).
 
@@ -16,7 +16,7 @@ The proxy's configuration contract: [`application.conf`](application.conf) is th
 
 ## Dependencies
 
-`zod` only. Imported by `src/app.mts` (the one value import: parse and validate) and, as types only, by the mode selection and the mode code. Nothing under `src/express`, `src/oauth` or `src/router` imports it.
+`zod`, and [`src/oauth/private-key-jwt.mts`](../src/oauth/private-key-jwt.mts) to read a client key once, at boot, so a key the proxy cannot sign with is refused naming its key. Imported by `src/app.mts` (the one value import: parse and validate) and, as types only, by the mode selection and the mode code. Nothing under `src/express`, `src/oauth` or `src/router` imports it.
 
 ## Invariants
 

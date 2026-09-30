@@ -22,7 +22,7 @@ One deployment runs one of two modes:
 **Owns:**
 
 - the per-request decision — forward, refuse, or inject — and the wire shape of its refusals (including the RFC 6750 `WWW-Authenticate` challenge in validation mode);
-- its calls to the provider: `POST /oauth/introspect`, and `POST /oauth/token` for the session grant and the jwt-bearer exchange, with its own client authentication ([`client_secret_basic`](#introspection-client-identity));
+- its calls to the provider: `POST /oauth/introspect`, and `POST /oauth/token` for the session grant and the jwt-bearer exchange, with its own client authentication — [`client_secret_basic`](#introspection-client-identity) or [`private_key_jwt`](#client-authentication-with-a-private-key-private_key_jwt);
 - per-instance, in-memory caches of provider answers, and the single-flight that coalesces concurrent misses;
 - its configuration schema, logging and graceful shutdown.
 
@@ -92,9 +92,9 @@ TTL; a malformed `exp` is treated as a provider response error. TTL zero disable
 
 #### Introspection client identity
 
-`CLIENT_ID` / `CLIENT_SECRET` are optional, and the choice between setting them and leaving them unset changes which tokens the provider will call `active`.
+`CLIENT_ID` with `CLIENT_SECRET` or `CLIENT_KEY` is optional, and the choice between setting them and leaving them unset changes which tokens the provider will call `active`.
 
-**With client authentication (both set).** The proxy authenticates to `POST /oauth/introspect` with HTTP Basic, and the provider then pins the introspected token's audience to **what the calling client may address** — its own `client_id` and its `allowedAudiences` (auth.provider v0.12.0 and later; earlier releases pinned it to the `client_id` alone): a token whose `aud` names neither comes back `active: false`. There is no error and no diagnostic — on the wire an audience mismatch is indistinguishable from a forged or expired token, so the proxy answers `401` for tokens that are in fact perfectly valid.
+**With client authentication (`CLIENT_ID`, and `CLIENT_SECRET` or `CLIENT_KEY`).** The proxy authenticates to `POST /oauth/introspect` as its own client — with HTTP Basic, or with a client assertion when it holds a key (see [Client authentication with a private key](#client-authentication-with-a-private-key-private_key_jwt)) — and the provider then pins the introspected token's audience to **what the calling client may address** — its own `client_id` and its `allowedAudiences` (auth.provider v0.12.0 and later; earlier releases pinned it to the `client_id` alone): a token whose `aud` names neither comes back `active: false`. There is no error and no diagnostic — on the wire an audience mismatch is indistinguishable from a forged or expired token, so the proxy answers `401` for tokens that are in fact perfectly valid.
 
 The client the proxy authenticates as must therefore be associated with the audience of the tokens it validates. Either:
 
@@ -103,13 +103,13 @@ The client the proxy authenticates as must therefore be associated with the audi
 
 A proxy fronting `https://api.example.com/orders` that authenticates as a `client_id` which is neither that URI nor lists it in `allowedAudiences` answers `401` to every request whose token was minted with an RFC 8707 `resource` audience — which, wherever resource indicators are in use, is every request it sees.
 
-**What a provider `401` means.** RFC 7662 §2.1 has the introspection request authenticated, and §2.3 answers an invalid credential with `401`, so the provider's `401` answers whichever credential it carried. Without client credentials the inbound token *is* that credential and the `401` is about the caller: `401 Invalid Token`. With them the credential is the proxy's own Basic header, the `401` refused the *proxy*, and the caller's token was never examined — that is `502 Provider Configuration Error`, logged at error as `validation.provider_config_error` (`introspect refused the proxy's client credentials`) rather than at info as the caller's `validation.token_unauthorized`, because it is the operator's to fix. The injection path reports the same situation as `provider_config_error` 502 — the exchange always has, and the session grant since #95 F47. A misconfigured deployment therefore answers a status that clients and gateways retry more readily than `401`, which spends the same per-instance introspection budget described under [Provider rate limiting](#provider-rate-limiting); the fix is the credential, not the retry policy.
+**What a provider `401` means.** RFC 7662 §2.1 has the introspection request authenticated, and §2.3 answers an invalid credential with `401`, so the provider's `401` answers whichever credential it carried. Without client credentials the inbound token *is* that credential and the `401` is about the caller: `401 Invalid Token`. With them the credential is the proxy's own — its Basic header or its client assertion — the `401` refused the *proxy*, and the caller's token was never examined — that is `502 Provider Configuration Error`, logged at error as `validation.provider_config_error` (`introspect refused the proxy's client credentials`) rather than at info as the caller's `validation.token_unauthorized`, because it is the operator's to fix. The injection path reports the same situation as `provider_config_error` 502 — the exchange always has, and the session grant since #95 F47. A misconfigured deployment therefore answers a status that clients and gateways retry more readily than `401`, which spends the same per-instance introspection budget described under [Provider rate limiting](#provider-rate-limiting); the fix is the credential, not the retry policy.
 
-**Without client authentication (both unset).** The proxy presents the inbound token itself as the introspection credential — `buildAuthHeader` emits `Authorization: Bearer <token>` with the same token in the body, which the provider requires to match. On that path the calling client is never identified, so **the audience pin does not apply** and a token for any audience is introspected on its own merits.
+**Without client authentication (all unset).** The proxy presents the inbound token itself as the introspection credential — `buildAuthHeader` emits `Authorization: Bearer <token>` with the same token in the body, which the provider requires to match. On that path the calling client is never identified, so **the audience pin does not apply** and a token for any audience is introspected on its own merits.
 
 What that trades away:
 
-- **The provider stops checking `aud` for you.** It records the gap and returns the claims. The proxy does not check `aud` either, so a token minted for a *different* resource server validates here. Unless the upstream service checks `aud` itself, that is a confused-deputy gap — set `CLIENT_ID` / `CLIENT_SECRET` and register the audience, or check `aud` upstream.
+- **The provider stops checking `aud` for you.** It records the gap and returns the claims. The proxy does not check `aud` either, so a token minted for a *different* resource server validates here. Unless the upstream service checks `aud` itself, that is a confused-deputy gap — set client authentication and register the audience, or check `aud` upstream.
 - **No client identity in the provider's audit trail** for these calls.
 - Signature, issuer, token type, expiry and the revocation denylist are still checked, so a revoked or forged token is still `active: false`.
 
@@ -220,6 +220,8 @@ Content-Type: application/x-www-form-urlencoded
 grant_type=urn:ietf:params:oauth:grant-type:jwt-bearer&assertion=<JWT>[&scope=…][&audience=…][&resource=…]
 ```
 
+With a client key instead of a secret, there is no `Authorization` header, and the body also carries `client_id`, `client_assertion_type` and `client_assertion`.
+
 It is not [RFC 8693](https://www.rfc-editor.org/rfc/rfc8693.html) token exchange (`grant_type=urn:ietf:params:oauth:grant-type:token-exchange` with `subject_token` / `subject_token_type`), and the two are not interchangeable. The provider accepts only assertions that satisfy the registered issuer's profile, including an audience naming the provider itself: a JWT access token an external IdP issued for some unrelated API is not a valid assertion merely because its issuer is registered. Exchanging general external access tokens needs a separately defined provider validation and exchange contract (RFC 8693) and is not what this path does. Delegation is out of scope as well: the jwt-bearer grant issues no `act` claim, and no forwarding header stands in for one.
 
 **Supported profiles.** Whatever the provider's registry admits for the assertion's issuer — plain RFC 7523 assertions, and the Identity Assertion JWT Authorization Grant (ID-JAG) profile. The proxy submits the `assertion` unchanged; the registry entry decides which profile applies. For ID-JAG the provider enforces two rules the proxy's behaviour is built around:
@@ -228,7 +230,7 @@ It is not [RFC 8693](https://www.rfc-editor.org/rfc/rfc8693.html) token exchange
 - **One-time use.** Each `jti` is accepted once. The proxy never resubmits an assertion on its own: it does not retry, it does not cache failures, and concurrent identical requests share one submission. A successful result is reused from the cache until the cache entry expires. After that — or at another proxy instance, whose cache is its own — the same ID-JAG is a replay the provider refuses (`401 credential_rejected`), and the client must obtain a fresh assertion.
 - **The cache window is not replay-checked.** The provider's one-time check runs when an assertion is submitted, and a cache hit submits nothing. Within the cache lifetime, whoever presents the same assertion — the client, or anyone who obtained it — is served the cached token. Treat the assertion as a bearer credential for that window; `tokenCache.ttlSeconds` bounds it.
 
-**Client authentication.** When the exchange is enabled, `clientId` and `clientSecret` are both required and boot fails without either: a `client_id` alone is not client authentication. The proxy authenticates with `client_secret_basic`, using the RFC 6749 §2.3.1 encoding described under [Introspection client identity](#introspection-client-identity). Register it at the provider as a confidential client whose `allowedGrantTypes` names `urn:ietf:params:oauth:grant-type:jwt-bearer`, and list it in `allowedClients` of every issuer entry that names such a list. The requested `scope`, `audience` and `resource` are fixed by deployment configuration and sent only when set; the provider enforces what they may be, and decides which of them it reads (auth.provider's jwt-bearer grant reads `scope`, and `resource` under `oauth.resourceIndicator.enabled`).
+**Client authentication.** When the exchange is enabled, `clientId` and exactly one of `clientSecret` and `clientKey` are required, and boot fails otherwise: a `client_id` alone is not client authentication. With a secret the proxy authenticates with `client_secret_basic`, using the RFC 6749 §2.3.1 encoding described under [Introspection client identity](#introspection-client-identity); with a key, with `private_key_jwt` (see [Client authentication with a private key](#client-authentication-with-a-private-key-private_key_jwt)). Register it at the provider as a confidential client whose `allowedGrantTypes` names `urn:ietf:params:oauth:grant-type:jwt-bearer`, and list it in `allowedClients` of every issuer entry that names such a list. The requested `scope`, `audience` and `resource` are fixed by deployment configuration and sent only when set; the provider enforces what they may be, and decides which of them it reads (auth.provider's jwt-bearer grant reads `scope`, and `resource` under `oauth.resourceIndicator.enabled`).
 
 **Request shape.** With the exchange enabled:
 
@@ -297,6 +299,47 @@ Two things that make it worse:
 - **Lowering `tokenCache.ttlSeconds` / `INTROSPECT_CACHE_TTL_SEC` multiplies the misses.** The shorter the TTL, the more of the same 60/60s bucket the same traffic spends. Their effects on revocation differ between injection and validation — see [Revocation and the access-token lifetime](#revocation-and-the-access-token-lifetime).
 - **Scaling out gives each instance its own bucket and its own cold cache.** A rollout therefore costs `instance count × active sessions` provider calls at exactly the moment the buckets are being spent fastest. If several instances sit behind one NAT or egress gateway they present a single source IP and share one bucket instead.
 
+### Client authentication with a private key (`private_key_jwt`)
+
+Wherever the proxy authenticates to the provider as a client, it can hold a private key instead of a shared secret ([RFC 7523 §2.2](https://www.rfc-editor.org/rfc/rfc7523.html#section-2.2)): introspection in validation mode, the exchange, and the session grant.
+
+| Call | Key | Secret, the alternative | Neither |
+| --- | --- | --- | --- |
+| Introspection | `CLIENT_KEY` | `CLIENT_SECRET` | the inbound token is the credential |
+| Session grant | `INJECTION_CLIENT_KEY` | — | a public client: `client_id` alone |
+| Exchange | `INJECTION_EXCHANGE_CLIENT_KEY` | `INJECTION_EXCHANGE_CLIENT_SECRET` | refused at boot |
+
+A key and a secret for the same client are refused at boot. With a key, every call signs a new client assertion and sends it in the form body with the `client_id`, and no `Authorization` header — the provider refuses a request that authenticates two ways:
+
+```http
+POST /oauth/token
+Content-Type: application/x-www-form-urlencoded
+
+grant_type=…&client_id=<client id>&client_assertion_type=urn:ietf:params:oauth:client-assertion-type:jwt-bearer&client_assertion=<JWT>
+```
+
+The assertion's `iss` and `sub` are the client id, its only `aud` is the provider's issuer identifier, and it carries a random `jti` and an `exp` 60 seconds after its `iat`. The provider accepts each `jti` once, and the proxy never reuses one.
+
+**The provider's issuer.** `VALIDATION_PROVIDER_ISSUER` or `INJECTION_PROVIDER_ISSUER` is required with a key: the provider's issuer identifier, exactly as the provider is configured with it (an http(s) URL with no query or fragment). It is not derived from `INTROSPECT_URL` or `INJECTION_PROVIDER_ORIGIN`, since the URL the proxy reaches the provider at can differ from the issuer the provider names itself by. The issuer alone is the audience, as recommended for `private_key_jwt`, rather than the token endpoint URL RFC 7523 also allows.
+
+**The key.** A private JWK, as JSON text in the environment variable (or a HOCON object in `application.conf`): an Ed25519 key (`EdDSA`), an EC P-256, P-384 or P-521 key (`ES256`, `ES384`, `ES512`), or an RSA key of 2048 bits or more (`RS256` unless the JWK's `alg` names `RS384`, `RS512` or a `PS*`). Its `kid`, when present, goes in every assertion's header, so the provider picks the matching public key. Anything else — a public key, a symmetric key, an algorithm that does not fit the key — stops the process at boot, naming the key and never printing it. The proxy logs neither the key nor an assertion.
+
+For example, an Ed25519 key generated with Node and the public half to register:
+
+```sh
+node -e 'const { generateKeyPairSync } = require("node:crypto");
+const { privateKey, publicKey } = generateKeyPairSync("ed25519");
+const kid = "proxy-2026-09";
+console.log("CLIENT_KEY=" + JSON.stringify({ ...privateKey.export({ format: "jwk" }), kid }));
+console.log("public JWK: " + JSON.stringify({ ...publicKey.export({ format: "jwk" }), kid }));'
+```
+
+**At the provider** (auth.provider: the oauth package's README, "Client authentication: `private_key_jwt`"), register the client with `tokenEndpointAuthMethod: "private_key_jwt"`, no `clientSecret`, and its public key — inline as `jwks`, or at a `jwksUri` the provider fetches. The provider records each `jti` in its replay seen-set, which a composition must wire for `private_key_jwt` to be accepted at all. A session-grant client that authenticates with a key is a confidential client: register it as one.
+
+**Rotating the key.** The proxy signs with one key at a time; rotation happens where keys are verified. Publish the new public key beside the old one in the client's `jwks` or `jwksUri`, switch the proxy's key (with a new `kid`), and remove the old public key once no instance signs with it. Instances mid-rollout keep working, since the provider picks the key by `kid`.
+
+**Clocks.** An assertion is valid from its `iat` for 60 seconds, and the provider allows its clock tolerance (30 seconds by default) on top. A proxy whose clock runs far enough behind or ahead has its assertions refused: validation answers `502 Provider Configuration Error`, and injection `502 provider_config_error`, as for any refused client authentication.
+
 ## Setup
 
 ```bash
@@ -336,9 +379,11 @@ Validation mode:
 
 | Environment Variable | Description |
 | --- | --- |
-| `CLIENT_ID` | Client ID for introspection auth (optional; must be set together with `CLIENT_SECRET`). |
-| `CLIENT_SECRET` | Client secret for introspection auth (optional; must be set together with `CLIENT_ID`). |
-| `INTROSPECT_URL` | Introspection endpoint URL: absolute `http(s)`, without userinfo. Anything else is refused at boot, naming the key — the proxy authenticates with `CLIENT_ID` / `CLIENT_SECRET`, never with the URL. |
+| `CLIENT_ID` | Client ID for introspection auth (optional; set with exactly one of `CLIENT_SECRET` and `CLIENT_KEY`). |
+| `CLIENT_SECRET` | Client secret for introspection auth (`client_secret_basic`; optional, with `CLIENT_ID`). |
+| `CLIENT_KEY` | Private JWK for introspection auth (`private_key_jwt`; optional, with `CLIENT_ID` and `VALIDATION_PROVIDER_ISSUER`). See [Client authentication with a private key](#client-authentication-with-a-private-key-private_key_jwt). |
+| `VALIDATION_PROVIDER_ISSUER` | The provider's issuer identifier, the client assertion's audience. **Required** with `CLIENT_KEY`. |
+| `INTROSPECT_URL` | Introspection endpoint URL: absolute `http(s)`, without userinfo. Anything else is refused at boot, naming the key — the proxy authenticates with its client credentials, never with the URL. |
 | `VALIDATION_REALM` | RFC 6750 `realm` for `WWW-Authenticate` (optional; at most 256 printable ASCII characters, without `"`, `\` or surrounding spaces). Unset, a request using another auth scheme gets no challenge. |
 | `INTROSPECT_CACHE_TTL_SEC` | Cache TTL in seconds (default: 30). |
 | `INTROSPECT_CACHE_MAX_ENTRIES` | Cache max entries (default: 10000). |
@@ -350,6 +395,8 @@ Injection mode:
 | --- | --- |
 | `INJECTION_PROVIDER_ORIGIN` | Provider origin — `scheme://host[:port]`, no path/query/fragment, no userinfo, http or https only (default: `http://localhost:3000`). |
 | `INJECTION_CLIENT_ID` | **Required.** OAuth `client_id`. |
+| `INJECTION_CLIENT_KEY` | Private JWK for the session grant (`private_key_jwt`; optional). Unset, the session grant is a public client. |
+| `INJECTION_PROVIDER_ISSUER` | The provider's issuer identifier, the client assertion's audience. **Required** with `INJECTION_CLIENT_KEY` or `INJECTION_EXCHANGE_CLIENT_KEY`. |
 | `INJECTION_SCOPE` | **Required.** OAuth `scope` string (space-separated). |
 | `INJECTION_SESSION_COOKIE_NAME` | Session cookie name (default: `connect.sid`). Must be an RFC 6265 `cookie-name` (RFC 9110 token) — whitespace, `=` or other separators fail at startup. |
 | `INJECTION_STRIP_INBOUND_AUTHORIZATION` | `"true"` / `"false"` (default: `false`). Drop an inbound `Authorization` header on a request the proxy did not mint a token for. Any other value fails at startup. See [Inbound Authorization headers](#inbound-authorization-headers). |
@@ -359,7 +406,8 @@ Injection mode:
 | `INJECTION_TIMEOUT_MS` | Provider HTTP timeout (default: 5000), for session grants and exchanges. |
 | `INJECTION_EXCHANGE_ENABLED` | `"true"` / `"false"` (default: `false`). Exchange an inbound `Authorization: Bearer <JWT>` at the provider (RFC 7523 jwt-bearer). Any other value fails at startup. See [External credential exchange](#external-credential-exchange-authinjectionexchange). |
 | `INJECTION_EXCHANGE_CLIENT_ID` | `client_id` the proxy authenticates as for the exchange. **Required** when the exchange is enabled. |
-| `INJECTION_EXCHANGE_CLIENT_SECRET` | Its client secret (`client_secret_basic`). **Required** when the exchange is enabled. |
+| `INJECTION_EXCHANGE_CLIENT_SECRET` | Its client secret (`client_secret_basic`). When the exchange is enabled, exactly one of this and `INJECTION_EXCHANGE_CLIENT_KEY` is **required**. |
+| `INJECTION_EXCHANGE_CLIENT_KEY` | Its private JWK (`private_key_jwt`), instead of the secret; needs `INJECTION_PROVIDER_ISSUER`. |
 | `INJECTION_EXCHANGE_SCOPE` | `scope` sent with the exchange (space-separated; optional). |
 | `INJECTION_EXCHANGE_AUDIENCE` | `audience` sent with the exchange (optional). |
 | `INJECTION_EXCHANGE_RESOURCE` | RFC 8707 `resource` sent with the exchange (optional). |

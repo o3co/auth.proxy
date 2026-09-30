@@ -1,6 +1,6 @@
 # `src`
 
-Last updated: 2026-09-24
+Last updated: 2026-09-30
 
 The whole proxy process. Wire behaviour is in the [root README](../README.md); each directory that owns a contract has its own README. The boundary review behind this file is [#95](https://github.com/o3co/auth.proxy/issues/95).
 
@@ -10,7 +10,7 @@ The whole proxy process. Wire behaviour is in the [root README](../README.md); e
 
 **Owns:** assembling the server and the order it mounts things in; the process lifecycle (listen, drain, exit); the logger and what an error looks like in a log line; the modules both modes share.
 
-**Does not own:** any mode's decision, provider client or cache (`modes/*`, each with its own README); header grammar (`express/`); the client-authentication encoding (`oauth/`); configuration defaults and validation (`config/`).
+**Does not own:** any mode's decision, provider client or cache (`modes/*`, each with its own README); header grammar (`express/`); client authentication at the provider (`oauth/`); configuration defaults and validation (`config/`).
 
 **Why separate.** The root holds only what is assembly or shared by both modes. A mode may import the root's shared modules but never the other mode, so a module both modes need lives here rather than in either mode (#95 F6, F39).
 
@@ -40,7 +40,7 @@ Code both modes need sits outside `modes/`, because neither mode may import the 
 
 - `modes/*` may import the `src/` root's shared modules, `express/`, `oauth/`, `router/upstream.mts` and `config/`. Neither mode imports the other.
 - Nothing under `express/`, `oauth/`, `router/` or `config/` imports a mode, and the root's shared modules import no mode. In production code, only `app-internal.mts` imports a mode, to select its router.
-- `express/` and `oauth/` import nothing else in `src/`.
+- `express/` and `oauth/` import nothing else in `src/`. `config/` imports `oauth/private-key-jwt.mts`, to read a client key at boot.
 - The test support in `__tests__/` that is not itself a test is imported by tests only, never by production code: the fake provider ([`fake-provider.mts`](__tests__/fake-provider.mts)), a local `node:http` server the provider clients reach through the real `fetch`, and the controlled provider timeout beside it (#143); and, for the composition tests, the entry point run in a child process ([`app-process.mts`](__tests__/app-process.mts), with the preload [`child-preload.mts`](__tests__/child-preload.mts)) and a recording upstream ([`recording-upstream.mts`](__tests__/recording-upstream.mts)) (#144).
 
 ## Invariants
