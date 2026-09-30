@@ -308,6 +308,8 @@ A request whose `Content-Length` is over the limit is refused before the mode do
 
 A body within the limit is read whole before it goes upstream, and is sent with a `Content-Length` whether it arrived with one or chunked; the inbound `Transfer-Encoding`, and a `Trailer` announcing fields of it, are not sent on. A request with a transfer coding other than `chunked` is refused `501`, since its body would reach the upstream still coded.
 
+A request that sends `Expect: 100-continue` — curl does, for a large upload — is told `100 Continue` only when its declared length is within the limit. An oversized one is refused `413` on its headers, before the client sends the body. The expectation is not forwarded: the proxy has the whole body before it goes upstream.
+
 Whatever else reaches the end of a mode's router unanswered is refused in the same shape: `{ "code", "message" }` with the status's reason phrase in validation mode, `{ "error": "request_failed", "error_description" }` in injection mode. That includes a body that ended early, an upstream that refused the connection, and anything a mode's middleware threw. The status is the error's own `4xx` or `5xx`, and `500` otherwise, so an unreachable upstream is a `500`. A failure after the upstream's answer has started cannot change its status; it is logged, and the connection closed. Each is logged with the request id as `requestId`:
 
 | Event | Level | When |
