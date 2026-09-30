@@ -637,7 +637,6 @@ describe("the app in validation mode, with HTTP_BODY_LIMIT_SIZE=1kb", () => {
 	});
 });
 
-
 // An upstream that fails mid-exchange is the upstream failing, not the proxy:
 // 502, in the mode's refusal shape, logged under its own event.
 describe("the app in validation mode, in front of an upstream that resets the connection", () => {

@@ -62,7 +62,7 @@ Injection mode turns a session cookie into the outbound `Authorization: Bearer` 
      - `credential_rejected` (401), for an issuer outside `allowedIssuers`.
    - **Refusals by the stages the modes share** ([`src/router`](../../router/refusal.mts)), said in this mode's shape by [`stage-refusals.mts`](stage-refusals.mts):
      - `body_too_large` (413), a body over `http.bodyLimitSize` — before any provider call when the request declares its length, after the token is minted when it does not;
-     - `upstream_unavailable`, `502` — or `504` when connecting timed out — for an upstream that could not be reached or dropped the exchange;
+     - `upstream_unavailable`, `502` — or `504` when it timed out — for an upstream that could not be reached or dropped the exchange before its answer started;
      - `request_failed`, with the error's own `4xx` / `5xx` status or `500`, for whatever else no stage answered.
    - **A provider `401`** on the session path is `401 session_required`, unless its `error` is `invalid_client`: that means the proxy's own `clientId` was refused, and it is answered `502 provider_config_error` (#95 F47). On the exchange, a provider `401` is always `502 provider_config_error`.
    - **Everything else.** A timeout or a network error before the response arrives, or an unclassified throw, is `502 provider_unavailable`. A failure while reading a `200`'s body — a timeout or a dropped connection mid-body — is `502 provider_invalid_response`.
@@ -95,7 +95,7 @@ Shared stages ([`stage-refusals.mts`](stage-refusals.mts), saying what [`src/rou
 | Event | Level | When | Fields |
 | --- | --- | --- | --- |
 | `injection.body_too_large` | info | A body over `http.bodyLimitSize`: `413 body_too_large`. | `limitBytes`; `contentLength` when the request declared one |
-| `injection.upstream_unavailable` | error | The upstream could not be reached, dropped the exchange or timed out: `upstream_unavailable`, `502` or `504`. | `error` |
+| `injection.upstream_unavailable` | error | Before its answer started, the upstream could not be reached, dropped the exchange or timed out: `upstream_unavailable`, `502` or `504`. | `error` |
 | `injection.request_failed` | info for a `4xx`, error otherwise | Anything else no stage answered — a body that ended early: `request_failed` with the error's own status, or `500`. | `error` |
 
 Exchange path ([`decideExchange`](exchange.mts)). An exchanged token replaces `Authorization` by design, so this path writes no `authorization_override`:

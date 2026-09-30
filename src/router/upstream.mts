@@ -25,11 +25,11 @@ import proxy from "express-http-proxy";
 import { bodyLimitBytes } from "./body-limit.mjs";
 
 /**
- * The upstream failing rather than the request: it could not be reached, or it
- * dropped the exchange or answered something that is not HTTP (`502`), or
- * connecting to it timed out (`504`, RFC 9110 §15.6.5). `cause` is what the
- * connection threw. The router's error handler answers it as the
- * `upstream_unavailable` refusal.
+ * The upstream failing rather than the request, before its answer started: it
+ * could not be reached, its TLS handshake failed, or it dropped the exchange
+ * or answered something that is not HTTP (`502`), or it timed out (`504`,
+ * RFC 9110 §15.6.5). `cause` is what the connection threw. The router's error
+ * handler answers it as the `upstream_unavailable` refusal.
  */
 export class UpstreamUnavailableError extends Error {
 	constructor(
@@ -51,25 +51,43 @@ const CONNECTION_FAILURES = new Set([
 	"ENOTFOUND",
 	"EAI_AGAIN",
 	"EHOSTUNREACH",
+	"EHOSTDOWN",
 	"ENETUNREACH",
+	"ENETDOWN",
+	"EPROTO",
 ]);
-const CONNECT_TIMEOUTS = new Set(["ETIMEDOUT"]);
+/**
+ * An `https` upstream whose certificate or handshake Node refused: OpenSSL's
+ * verify codes (`CERT_HAS_EXPIRED`, `DEPTH_ZERO_SELF_SIGNED_CERT`, …) and
+ * Node's own TLS codes (`ERR_TLS_CERT_ALTNAME_INVALID`, …).
+ */
+const TLS_FAILURE =
+	/^(ERR_TLS_|ERR_SSL_|CERT_|UNABLE_TO_|DEPTH_ZERO_SELF_SIGNED_CERT$|SELF_SIGNED_CERT_IN_CHAIN$)/;
+/**
+ * The connection timing out, on connect or on an established connection. The
+ * library's own `timeout` option, which this stage does not set, would fail as
+ * a hang-up, not as one of these.
+ */
+const TIMEOUTS = new Set(["ETIMEDOUT"]);
 
 /**
  * What the library rejects with, handed on to the router: a failure of the
  * connection to the upstream as an `UpstreamUnavailableError`, anything else
- * as it came. Everything the library does fails through here — the body read,
- * which carries its own status (a body over the limit, one that ended early),
- * and the decorator's refusal of a transfer coding — so only an error with no
- * status of its own and the code of a connection failure is the upstream's.
+ * as it came. Everything the library does before the upstream's answer starts
+ * fails through here — the body read, which carries its own status (a body
+ * over the limit, one that ended early), and the decorator's refusal of a
+ * transfer coding — so only an error with no status of its own and the code
+ * of a connection failure is the upstream's.
  */
 const toUpstreamFailure = (err: unknown): unknown => {
 	if (typeof err !== "object" || err === null) return err;
 	const { status, statusCode, code } = err as { status?: unknown; statusCode?: unknown; code?: unknown };
 	if (status !== undefined || statusCode !== undefined || typeof code !== "string") return err;
-	if (CONNECT_TIMEOUTS.has(code)) return new UpstreamUnavailableError(504, err);
+	if (TIMEOUTS.has(code)) return new UpstreamUnavailableError(504, err);
 	// `HPE_*`: Node's HTTP parser could not read what the upstream sent.
-	if (CONNECTION_FAILURES.has(code) || code.startsWith("HPE_")) return new UpstreamUnavailableError(502, err);
+	if (CONNECTION_FAILURES.has(code) || TLS_FAILURE.test(code) || code.startsWith("HPE_")) {
+		return new UpstreamUnavailableError(502, err);
+	}
 	return err;
 };
 
@@ -95,10 +113,15 @@ const upstreamLimit = (bytes: number): number | string => (bytes === 0 ? "0" : b
  * body over it that declared no length is refused here, as an error the
  * router's error handler answers.
  *
- * Every failure the library meets goes to the router's error handler, through
- * `proxyErrorHandler`: the library's own handler answers a reset itself, as a
- * bodyless `504` nothing logs, and hands everything else on untouched.
- * `toUpstreamFailure` names the upstream's failures on the way.
+ * Every failure the library meets before the upstream's answer starts goes to
+ * the router's error handler, through `proxyErrorHandler`, which replaces the
+ * library's default handler — that one would answer a reset itself, as a
+ * bodyless `504` nothing logs. `toUpstreamFailure` names the upstream's
+ * failures on the way. A caller that has already closed its connection is
+ * handed nothing: the library aborts its own upstream request when the caller
+ * leaves, which fails as a hang-up, and there is no one to answer and no
+ * upstream failure to report. Once the upstream's answer starts it is streamed
+ * to the caller as it arrives, and a failure after that point is not seen here.
  *
  * What the decorator does. When `req.headers.authorization` is present as this
  * stage runs — empty included, as the injection paths read presence — it sets
@@ -147,7 +170,8 @@ const upstreamLimit = (bytes: number): number | string => (bytes === 0 ? "0" : b
 export const createUpstreamProxy = (config: UpstreamStageConfig): RequestHandler =>
 	proxy(config.upstream.baseURL, {
 		limit: upstreamLimit(bodyLimitBytes(config)),
-		proxyErrorHandler: (err, _res, next) => {
+		proxyErrorHandler: (err, res, next) => {
+			if (res.destroyed) return;
 			next(toUpstreamFailure(err));
 		},
 		proxyReqOptDecorator: async (proxyReqOpts, srcReq) => {
