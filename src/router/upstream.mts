@@ -50,15 +50,22 @@ const upstreamLimit = (bytes: number): number | string => (bytes === 0 ? "0" : b
  * stage runs — empty included, as the injection paths read presence — it sets
  * `Authorization`, in canonical casing, to that value: the minted token after
  * an `inject`, the inbound header otherwise. It also re-sets `x-request-id` to
- * the value it already has. And it drops the inbound `Transfer-Encoding`: the
- * stage reads the whole body before sending it on, and the library then
- * frames the outbound request by a `Content-Length` it sets itself. The
- * inbound `Transfer-Encoding` described how the caller's message was framed,
- * not this one, and left beside a `Content-Length` it frames the one message
- * twice, which RFC 9112 §6.3 makes an error a conforming upstream refuses.
+ * the value it already has.
  *
- * What it does not do: choose what is forwarded. What reaches upstream is
- * decided before this stage, on `req.headers`. express-http-proxy copies every
+ * It also reframes the body. The stage reads the whole body before sending it
+ * on, and the library frames the outbound request by a `Content-Length` it
+ * sets itself, so the decorator drops the inbound `Transfer-Encoding` and the
+ * `Trailer` that announces fields of it: they described how the caller's
+ * message was framed, not this one. RFC 9112 §6.2 forbids a sender to put a
+ * `Content-Length` beside a `Transfer-Encoding`, and a strict upstream — Node's
+ * parser, for one — refuses the pair. Only `chunked` is taken off: Node
+ * removes the chunked framing and hands on whatever other coding is left
+ * still applied, which the stage cannot undo or describe, so a request with
+ * any other transfer coding is refused `501` (RFC 9112 §6.1) rather than
+ * forwarded as if its coded bytes were the body.
+ *
+ * What it does not do: choose which fields are forwarded, beyond that
+ * framing. Every other choice is made before this stage, on `req.headers`. express-http-proxy copies every
  * inbound header except `connection` and `host` onto the outbound request and
  * sets `connection: close` before any decorator runs (`reqHeaders` in
  * `express-http-proxy/lib/requestOptions.js`). Node lower-cases every inbound
@@ -70,7 +77,7 @@ const upstreamLimit = (bytes: number): number | string => (bytes === 0 ? "0" : b
  * by deleting the header from `req.headers`, in the `forward_stripped` case of
  * `injectionMiddleware` (`src/modes/injection/router.mts`), rather than here.
  *
- * Why it is kept: header-name casing. HTTP header names are case-insensitive
+ * Why it is kept: the framing above, and header-name casing. HTTP header names are case-insensitive
  * (RFC 9110 §5.1), so a conforming upstream sees no difference; without the
  * decorator an upstream would receive `authorization` in lower case, and one
  * that matches the name case-sensitively would miss it. The casing on the
@@ -88,8 +95,14 @@ export const createUpstreamProxy = (config: UpstreamStageConfig): RequestHandler
 			if (srcReq?.headers?.["x-request-id"]) {
 				proxyReqOpts.headers["x-request-id"] = srcReq.headers["x-request-id"];
 			}
-			// The library copied it from `req.headers`, so the name is lower case.
+			// The body's inbound framing: see the doc comment. The library copied
+			// the fields from `req.headers`, so the names are lower case.
+			const coding = srcReq?.headers?.["transfer-encoding"];
+			if (coding !== undefined && coding.trim().toLowerCase() !== "chunked") {
+				throw Object.assign(new Error(`transfer coding not supported: ${coding}`), { status: 501 });
+			}
 			delete proxyReqOpts.headers["transfer-encoding"];
+			delete proxyReqOpts.headers.trailer;
 			return proxyReqOpts;
 		},
 	});

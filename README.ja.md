@@ -287,7 +287,7 @@ grant_type=urn:ietf:params:oauth:grant-type:jwt-bearer&assertion=<JWT>[&scope=�
 
 `Content-Length` が上限を超えるリクエストは、モードが何かをする前に拒否する。トークンのイントロスペクションもトークンの発行もしないので、プロバイダーの予算を消費しない。長さを宣言しないリクエスト（chunked のボディ）は、読んでみるまで大きさがわからない。読むのはリクエストを上流へ送るときで、モードがトークンを確認または発行した後になる。上流には何も届かない。どちらも `413` を、そのモードの拒否の形で返す。バリデーションモードでは `{ "code": 413, "message": "Payload Too Large" }`、インジェクションモードでは `{ "error": "body_too_large", "error_description": "request body over the limit" }` である。ボディの残りは読んで捨てるので、keep-alive の接続は次のリクエストへ進める。
 
-上限内のボディは上流へ送る前に全体を読み、`Content-Length` を付けて送る。受け取ったときに `Content-Length` があっても chunked でも同じで、受信した `Transfer-Encoding` は送らない。
+上限内のボディは上流へ送る前に全体を読み、`Content-Length` を付けて送る。受け取ったときに `Content-Length` があっても chunked でも同じで、受信した `Transfer-Encoding` と、そのフィールドを予告する `Trailer` は送らない。`chunked` 以外の転送コーディングを持つリクエストは、ボディがコーディングされたまま上流に届いてしまうため `501` で拒否する。
 
 ほかに、モードのルーターの最後まで応答されずに届いたものも、同じ形で拒否する。バリデーションモードではステータスの reason phrase を入れた `{ "code", "message" }`、インジェクションモードでは `{ "error": "request_failed", "error_description" }` である。途中で終わったボディ、接続を拒否した上流、モードのミドルウェアが投げたものがこれにあたる。ステータスはそのエラー自身の `4xx` または `5xx`、それ以外は `500` なので、到達できない上流は `500` になる。上流の応答が始まった後の失敗はステータスを変えられないので、ログして接続を閉じる。いずれもリクエスト ID を `requestId` としてログする:
 
