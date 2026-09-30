@@ -50,7 +50,12 @@ const upstreamLimit = (bytes: number): number | string => (bytes === 0 ? "0" : b
  * stage runs — empty included, as the injection paths read presence — it sets
  * `Authorization`, in canonical casing, to that value: the minted token after
  * an `inject`, the inbound header otherwise. It also re-sets `x-request-id` to
- * the value it already has.
+ * the value it already has. And it drops the inbound `Transfer-Encoding`: the
+ * stage reads the whole body before sending it on, and the library then
+ * frames the outbound request by a `Content-Length` it sets itself. The
+ * inbound `Transfer-Encoding` described how the caller's message was framed,
+ * not this one, and left beside a `Content-Length` it frames the one message
+ * twice, which RFC 9112 §6.3 makes an error a conforming upstream refuses.
  *
  * What it does not do: choose what is forwarded. What reaches upstream is
  * decided before this stage, on `req.headers`. express-http-proxy copies every
@@ -71,7 +76,6 @@ const upstreamLimit = (bytes: number): number | string => (bytes === 0 ? "0" : b
  * that matches the name case-sensitively would miss it. The casing on the
  * wire is pinned by `__tests__/upstream-wire.test.mts`.
  */
-
 export const createUpstreamProxy = (config: UpstreamStageConfig): RequestHandler =>
 	proxy(config.upstream.baseURL, {
 		limit: upstreamLimit(bodyLimitBytes(config)),
@@ -84,6 +88,8 @@ export const createUpstreamProxy = (config: UpstreamStageConfig): RequestHandler
 			if (srcReq?.headers?.["x-request-id"]) {
 				proxyReqOpts.headers["x-request-id"] = srcReq.headers["x-request-id"];
 			}
+			// The library copied it from `req.headers`, so the name is lower case.
+			delete proxyReqOpts.headers["transfer-encoding"];
 			return proxyReqOpts;
 		},
 	});
