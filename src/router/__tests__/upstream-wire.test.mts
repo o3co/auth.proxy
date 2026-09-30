@@ -6,8 +6,8 @@
  *
  * `upstream.test.mts` pins the options the stage hands to the library; this
  * file pins what the reasons for keeping the decorator rest on: how the body
- * is framed on the way to a real upstream, and the header name bytes it
- * receives. Node lower-cases every inbound name in
+ * is framed on the way to a real upstream, which fields reach it, and the
+ * header name bytes it receives. Node lower-cases every inbound name in
  * `req.headers`, and the library copies `req.headers` onto the outbound
  * request, so without the decorator an upstream would read `authorization`.
  * The names are read from `rawHeaders`, because `req.headers` lower-cases them
@@ -172,5 +172,39 @@ describe("createUpstreamProxy on the wire", () => {
 			front.closeAllConnections();
 			front.close();
 		}
+	});
+
+	// The fields for the connection to this proxy stay on it; the credential
+	// for this hop is not handed to the next one.
+	it("sends none of the hop-by-hop fields or Proxy-Authorization upstream", async () => {
+		const res = await request(app)
+			.get("/resource")
+			.set("Connection", "close, X-Hop")
+			.set("X-Hop", "1")
+			.set("TE", "trailers")
+			.set("Proxy-Authorization", "Basic cHJveHk6cHc=")
+			.set("authorization", "Bearer inbound-7f3a");
+
+		expect(res.status).toBe(200);
+		for (const name of ["x-hop", "te", "proxy-authorization"]) {
+			expect(rawPairs(received[0], name)).toEqual([]);
+		}
+		expect(rawPairs(received[0], "authorization")).toEqual([["Authorization", "Bearer inbound-7f3a"]]);
+	});
+
+	// Naming the proxy's own fields in Connection takes none of them away: the
+	// upstream still gets the forwarded Authorization and request id, and a
+	// connection the library closes after the one request.
+	it("sends Authorization, the request id and Connection: close though the inbound Connection names them", async () => {
+		const res = await request(app)
+			.get("/resource")
+			.set("Connection", "Authorization, X-Request-Id, Connection")
+			.set("authorization", "Bearer inbound-7f3a")
+			.set("x-request-id", "rid-2c9e");
+
+		expect(res.status).toBe(200);
+		expect(rawPairs(received[0], "authorization")).toEqual([["Authorization", "Bearer inbound-7f3a"]]);
+		expect(rawPairs(received[0], "x-request-id")).toEqual([["x-request-id", "rid-2c9e"]]);
+		expect(rawPairs(received[0], "connection").map(([, value]) => value.toLowerCase())).toEqual(["close"]);
 	});
 });

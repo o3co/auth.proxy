@@ -301,6 +301,10 @@ grant_type=urn:ietf:params:oauth:grant-type:jwt-bearer&assertion=<JWT>[&scope=�
 | `validation.upstream_unavailable`、`injection.upstream_unavailable` | error | 上流が応答を始める前に、到達できない、やり取りの途中で切れた、またはタイムアウトした（`502` / `504`）。接続が投げたエラーを `error` に入れる。 |
 | `validation.request_failed`、`injection.request_failed` | `4xx` なら info、それ以外は error | どの段階も応答しなかったその他のもの。エラーは `error` に入れる。各モードがほかの失敗をログするのと同じく、バリデーションモードでは `Error` そのもの、インジェクションモードではそのメッセージである。 |
 
+### プロキシまでのホップにとどまるフィールド
+
+呼び出し元からプロキシまでの接続に属するフィールドは上流へ送らない（RFC 9110 §7.6.1）。受信した `Connection` が挙げるフィールド、`Keep-Alive`、`TE`、`Upgrade`、`Proxy-Connection` がこれにあたる。`Proxy-Authorization` も送らない。これはプロキシが使わない、このホップ用の資格情報である（§11.7.2）。`Connection` に `Authorization`、`x-request-id`、`Connection` 自体を挙げても、それらは消えない。上流が受け取る値を決めるのはプロキシである。`Authorization` は、バリデーションモードでは受信したトークン、インジェクションモードでは発行したトークンか、モードがそのまま残したものになる（[受信 Authorization ヘッダー](#受信-authorization-ヘッダー)を参照）。`x-request-id` はプロキシのリクエスト ID、`Connection` は 1 リクエストで閉じる接続である。
+
 ### 秘密鍵によるクライアント認証（`private_key_jwt`）
 
 プロキシがクライアントとしてプロバイダーに認証する箇所 — バリデーションモードのイントロスペクション、交換、セッショングラント — ではどこでも、共有シークレットの代わりに秘密鍵を持てる（[RFC 7523 §2.2](https://www.rfc-editor.org/rfc/rfc7523.html#section-2.2)）。

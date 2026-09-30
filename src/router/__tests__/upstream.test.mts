@@ -12,8 +12,8 @@
  * `connection` and `host` onto the outbound request (lowercase names, as Node
  * parses them) and set `connection: close` (`reqHeaders` in
  * `lib/requestOptions.js`). These tests pin the delta the decorator makes on
- * top of that: the body's inbound framing dropped, and otherwise a
- * casing-only no-op on the wire.
+ * top of that: the body's inbound framing and the connection's own fields
+ * dropped, and otherwise a casing-only no-op on the wire.
  */
 import type { IncomingHttpHeaders } from "node:http";
 import proxy from "express-http-proxy";
@@ -173,6 +173,33 @@ describe("createUpstreamProxy", () => {
 			const result = await decorate(chunked);
 			const { "transfer-encoding": _te, trailer: _trailer, ...rest } = libraryHeaders(chunked);
 			expect(result.headers).toEqual({ ...rest, Authorization: "Bearer inbound-7f3a" });
+		});
+
+		// RFC 9110 §7.6.1: the fields the inbound Connection names, and the
+		// hop-by-hop fields, are for the connection to this proxy. So is
+		// Proxy-Authorization (§11.7.2), a credential for this hop the proxy
+		// does not use.
+		it("drops the fields the inbound Connection names and the hop-by-hop fields, and changes nothing else", async () => {
+			const hopByHop = {
+				connection: "close, X-Hop",
+				"x-hop": "1",
+				"keep-alive": "timeout=5",
+				te: "trailers",
+				upgrade: "h2c",
+				"proxy-connection": "keep-alive",
+				"proxy-authorization": "Basic cHJveHk6cHc=",
+			};
+			const result = await decorate({ ...inbound, ...hopByHop });
+			expect(result.headers).toEqual({ ...libraryHeaders(inbound), Authorization: "Bearer inbound-7f3a" });
+		});
+
+		// The fields the proxy decides are not the caller's to remove by naming
+		// them in Connection: what reaches the upstream as Authorization,
+		// x-request-id and Connection stays the proxy's choice.
+		it("keeps Authorization, x-request-id and the library's Connection though the inbound Connection names them", async () => {
+			const result = await decorate({ ...inbound, connection: "Authorization, X-Request-Id, Connection" });
+			expect(result.headers).toEqual({ ...libraryHeaders(inbound), Authorization: "Bearer inbound-7f3a" });
+			expect(result.headers).toMatchObject({ connection: "close" });
 		});
 
 		it.each([["CHUNKED"], [" chunked "]])("reads %j as chunked", async (coding) => {
