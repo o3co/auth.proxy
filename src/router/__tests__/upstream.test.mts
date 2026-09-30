@@ -176,8 +176,9 @@ describe("createUpstreamProxy", () => {
 		});
 
 		// RFC 9110 §7.6.1: the fields the inbound Connection names, and the
-		// hop-by-hop fields, were for the connection to this proxy. So was
-		// Proxy-Authorization, a credential for this hop the proxy does not use.
+		// hop-by-hop fields, are for the connection to this proxy. So is
+		// Proxy-Authorization (§11.7.2), a credential for this hop the proxy
+		// does not use.
 		it("drops the fields the inbound Connection names and the hop-by-hop fields, and changes nothing else", async () => {
 			const hopByHop = {
 				connection: "close, X-Hop",
@@ -195,9 +196,10 @@ describe("createUpstreamProxy", () => {
 		// The fields the proxy decides are not the caller's to remove by naming
 		// them in Connection: what reaches the upstream as Authorization and
 		// x-request-id stays the proxy's choice.
-		it("keeps Authorization and x-request-id though the inbound Connection names them", async () => {
-			const result = await decorate({ ...inbound, connection: "Authorization, X-Request-Id" });
+		it("keeps Authorization, x-request-id and the library's Connection though the inbound Connection names them", async () => {
+			const result = await decorate({ ...inbound, connection: "Authorization, X-Request-Id, Connection" });
 			expect(result.headers).toEqual({ ...libraryHeaders(inbound), Authorization: "Bearer inbound-7f3a" });
+			expect(result.headers).toMatchObject({ connection: "close" });
 		});
 
 		it.each([["CHUNKED"], [" chunked "]])("reads %j as chunked", async (coding) => {

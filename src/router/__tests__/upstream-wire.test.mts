@@ -191,4 +191,20 @@ describe("createUpstreamProxy on the wire", () => {
 		}
 		expect(rawPairs(received[0], "authorization")).toEqual([["Authorization", "Bearer inbound-7f3a"]]);
 	});
+
+	// Naming the proxy's own fields in Connection takes none of them away: the
+	// upstream still gets the forwarded Authorization and request id, and a
+	// connection the library closes after the one request.
+	it("sends Authorization, the request id and Connection: close though the inbound Connection names them", async () => {
+		const res = await request(app)
+			.get("/resource")
+			.set("Connection", "Authorization, X-Request-Id, Connection")
+			.set("authorization", "Bearer inbound-7f3a")
+			.set("x-request-id", "rid-2c9e");
+
+		expect(res.status).toBe(200);
+		expect(rawPairs(received[0], "authorization")).toEqual([["Authorization", "Bearer inbound-7f3a"]]);
+		expect(rawPairs(received[0], "x-request-id")).toEqual([["x-request-id", "rid-2c9e"]]);
+		expect(rawPairs(received[0], "connection").map(([, value]) => value.toLowerCase())).toEqual(["close"]);
+	});
 });
