@@ -165,29 +165,44 @@ const clientKey = (key: string) =>
 			}
 		});
 
+/** Hosts on which the provider accepts an `http:` issuer. */
+const LOOPBACK_HOSTNAMES = new Set(["localhost", "127.0.0.1", "[::1]"]);
+
+/**
+ * Whether `value` is an issuer identifier the provider can have: what
+ * auth.provider's `checkCanonicalIssuer` accepts — an absolute `https:` URL (a
+ * path allowed), or `http:` on a loopback host, with no query, fragment or
+ * userinfo — written in printable ASCII with no backslash. The value is sent as
+ * written, since the provider compares it as a string, so a form the URL
+ * parser would clean up (surrounding space, a tab, a backslash, a fullwidth
+ * letter) could never equal the provider's.
+ */
+const isIssuerIdentifier = (value: string): boolean => {
+	if (!/^[\x21-\x7E]+$/.test(value) || value.includes("\\")) return false;
+	if (!URL.canParse(value)) return false;
+	const parsed = new URL(value);
+	return (
+		parsed.hostname !== "" &&
+		(parsed.protocol === "https:" ||
+			(parsed.protocol === "http:" && LOOPBACK_HOSTNAMES.has(parsed.hostname))) &&
+		parsed.username === "" &&
+		parsed.password === "" &&
+		parsed.search === "" &&
+		parsed.hash === "" &&
+		!value.includes("?") &&
+		!value.includes("#")
+	);
+};
+
 /**
  * The provider's issuer identifier, the only audience of a client assertion
- * (RFC 7523 section 3). RFC 8414 section 2 makes it an https URL with no query
- * or fragment; http is accepted too, for a provider on a development host. It
- * is used exactly as written, since the provider compares it as a string, and
- * it may differ from the URL the proxy reaches the provider at.
+ * (RFC 7523 section 3), as the provider's discovery document names it. It may
+ * differ from the URL the proxy reaches the provider at.
  */
 const providerIssuer = (key: string) =>
-	optionalString().refine(
-		(value) => {
-			if (value === null) return true;
-			if (!URL.canParse(value)) return false;
-			const parsed = new URL(value);
-			return (
-				(parsed.protocol === "https:" || parsed.protocol === "http:") &&
-				parsed.search === "" &&
-				parsed.hash === "" &&
-				!value.includes("?") &&
-				!value.includes("#")
-			);
-		},
-		{ message: `${key} must be the provider's issuer identifier: an http(s) URL with no query or fragment` },
-	);
+	optionalString().refine((value) => value === null || isIssuerIdentifier(value), {
+		message: `${key} must be the provider's issuer identifier as its discovery document names it: https (http only on a loopback host), with no query, fragment, userinfo or whitespace`,
+	});
 
 const EXCHANGE_KEY = "auth.injection.exchange";
 
@@ -353,12 +368,22 @@ export const AppConfigSchema = z.object({
 					timeoutMs: z.coerce.number().int().positive().default(5000),
 				}),
 			}).superRefine((validation, ctx) => {
-				if (validation.client.clientKey !== null && validation.providerIssuer === null) {
+				const keyed = validation.client.clientKey !== null;
+				if (keyed && validation.providerIssuer === null) {
 					ctx.addIssue({
 						code: "custom",
 						path: ["providerIssuer"],
 						message:
 							"auth.validation.providerIssuer is required with auth.validation.client.clientKey: it is the client assertion's audience",
+					});
+				}
+				// An issuer no key uses is a key that did not arrive.
+				if (!keyed && validation.providerIssuer !== null) {
+					ctx.addIssue({
+						code: "custom",
+						path: ["providerIssuer"],
+						message:
+							"auth.validation.providerIssuer is set but no client key uses it: set auth.validation.client.clientKey, or unset the issuer",
 					});
 				}
 			}),
@@ -442,6 +467,16 @@ export const AppConfigSchema = z.object({
 						path: ["providerIssuer"],
 						message:
 							"auth.injection.providerIssuer is required with auth.injection.clientKey or auth.injection.exchange.clientKey: it is the client assertion's audience",
+					});
+				}
+				// An issuer no key uses is a key that did not arrive: the session
+				// grant would stay a public client without a word.
+				if (!keyed && injection.providerIssuer !== null) {
+					ctx.addIssue({
+						code: "custom",
+						path: ["providerIssuer"],
+						message:
+							"auth.injection.providerIssuer is set but no client key uses it: set auth.injection.clientKey or auth.injection.exchange.clientKey, or unset the issuer",
 					});
 				}
 			}),

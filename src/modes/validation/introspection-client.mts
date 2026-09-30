@@ -26,7 +26,7 @@ import {
 	type ClientAuthentication,
 	type ClientKeyCredentials,
 } from "../../oauth/client-authentication.mjs";
-import { type ClientCredentials, clientSecretBasic } from "../../oauth/client-secret-basic.mjs";
+import type { ClientCredentials } from "../../oauth/client-secret-basic.mjs";
 import { discardBody, readBoundedJsonObject } from "../../response-body.mjs";
 
 export type { ClientAuthentication, ClientCredentials, ClientKeyCredentials };
@@ -81,15 +81,13 @@ export class IntrospectHttpError extends Error {
 }
 
 /**
- * The `Authorization` header an introspection request carries when the
- * credential is a header: the proxy's Basic header with a client secret
- * configured, and the inbound token otherwise, which is then both the subject
- * of the call and the credential for it — see "Introspection client identity"
- * in the root README for what that costs. With a client key the credential is
- * a client assertion in the body, and no header is sent.
+ * The `Authorization` header an introspection request carries without client
+ * credentials: the inbound token, which is then both the subject of the call
+ * and the credential for it — see "Introspection client identity" in the root
+ * README for what that costs. With client credentials the header, or the body,
+ * comes from `authenticateClient`.
  */
-export const buildAuthHeader = (credentials: ClientCredentials | null, token: string): string =>
-	credentials !== null ? clientSecretBasic(credentials) : `Bearer ${token}`;
+export const buildAuthHeader = (token: string): string => `Bearer ${token}`;
 
 /**
  * The provider's introspection endpoint, as the one call this proxy makes to
@@ -141,7 +139,7 @@ export const createIntrospectionClient = ({
 				"Content-Type": "application/x-www-form-urlencoded",
 				"x-request-id": requestId,
 			};
-			const authorization = client !== null ? client.authorization : buildAuthHeader(null, token);
+			const authorization = client !== null ? client.authorization : buildAuthHeader(token);
 			if (authorization !== null) headers.Authorization = authorization;
 			const init: RequestInit = {
 				method: "POST",

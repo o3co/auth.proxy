@@ -50,13 +50,17 @@ type InjectionConfig = Extract<AppConfig["auth"], { mode: "injection" }>;
  * serve two routers, and a different provider, client, scope or cookie name
  * is a different question about the same cookie value.
  *
+ * How the client authenticates is keyed too, by what names it without
+ * revealing it — the method, the issuer and the key's RFC 7638 thumbprint — so
+ * a router that could not obtain a token itself (public where the provider
+ * wants a key, or holding another key) is not served one another router
+ * obtained.
+ *
  * Hashed as a JSON array rather than joined, so no field's text can shift into
  * its neighbour's, and the cookie value never leaves the digest. The cache
  * policy is not in it (`ttlSeconds` bounds how long an entry lives, not which
- * token comes back), nor how the client authenticates (`clientKey` and
- * `providerIssuer`: the same client gets the same token whichever way it
- * proves itself), and neither is the grant client, which cannot be hashed: a
- * caller sharing one cache between routers must match those.
+ * token comes back), and neither is the grant client, which cannot be hashed: a
+ * caller sharing one cache between routers must match those two.
  *
  * The parameter is the client's own config minus `timeoutMs`, and the rest
  * element below is what makes that a guarantee rather than a convention: a
@@ -67,15 +71,9 @@ export const sessionCacheKey = (
 	cfg: Omit<SessionGrantClientConfig, "timeoutMs">,
 	sessionCookieValue: string,
 ): string => {
-	const {
-		providerOrigin,
-		clientId,
-		scope,
-		sessionCookieName,
-		clientKey: _clientKey,
-		providerIssuer: _providerIssuer,
-		..._unkeyed
-	} = cfg;
+	const { providerOrigin, clientId, scope, sessionCookieName, clientKey, providerIssuer, ..._unkeyed } =
+		cfg;
+	const keyed = clientKey !== undefined && clientKey !== null;
 	// Empty by construction today; a new field makes it non-empty and this
 	// assignment stops compiling.
 	const _everythingIsKeyed: Record<string, never> = _unkeyed;
@@ -89,6 +87,9 @@ export const sessionCacheKey = (
 				clientId,
 				scope,
 				sessionCookieName,
+				keyed ? "private_key_jwt" : "none",
+				keyed ? (providerIssuer ?? null) : null,
+				keyed ? clientKey.thumbprint : null,
 				sessionCookieValue,
 			]),
 		)
