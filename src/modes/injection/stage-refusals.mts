@@ -6,17 +6,6 @@ import type { Logger } from "../../logger.mjs";
 import type { ModeRefusals, StageRefusal } from "../../router/refusal.mjs";
 
 /**
- * The shared stages' refusals in this mode's vocabulary: the
- * `{ "error", "error_description" }` body every injection refusal has, with
- * the stage's reason as the `error` code, and `injection.*` events with the
- * error as a string under `error`, as every injection failure line has it. A
- * body over the limit is the caller's to fix, as is any other `4xx`, so both
- * are logged at info. An upstream that could not be reached or dropped the
- * exchange before its answer started is `upstream_unavailable`, logged at
- * error under its own event; any other `5xx` is logged at error too — the
- * proxy failing, or a request it cannot forward (`501`).
- */
-/**
  * The error as the string injection logs: its message, or — for an error
  * whose message is empty, as Node's aggregate of failed connection attempts
  * is — its code, then its name.
@@ -34,6 +23,18 @@ const ERROR_CODES: Record<StageRefusal["reason"], string> = {
 	request_failed: "request_failed",
 };
 
+/**
+ * The shared stages' refusals in this mode's vocabulary: the
+ * `{ "error", "error_description" }` body every injection refusal has, each
+ * reason mapped to its `error` code through `ERROR_CODES`, and `injection.*`
+ * events with the error as a string under `error`, as every injection
+ * failure line has it. A
+ * body over the limit is the caller's to fix, as is any other `4xx`, so both
+ * are logged at info. An upstream that could not be reached or dropped the
+ * exchange before its answer started is `upstream_unavailable`, logged at
+ * error under its own event; any other `5xx` is logged at error too — the
+ * proxy failing, or a request it cannot forward (`501`).
+ */
 export const stageRefusals = (logger: Logger): ModeRefusals => ({
 	log: (requestId, refusal) => {
 		if (refusal.reason === "body_too_large") {

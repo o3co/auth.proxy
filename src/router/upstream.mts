@@ -70,6 +70,13 @@ const TLS_FAILURE =
  */
 const TIMEOUTS = new Set(["ETIMEDOUT"]);
 
+/** Whether `err` says its own status, as the body reader's and the decorator's refusals do. */
+const hasOwnStatus = (err: unknown): boolean => {
+	if (typeof err !== "object" || err === null) return false;
+	const { status, statusCode } = err as { status?: unknown; statusCode?: unknown };
+	return status !== undefined || statusCode !== undefined;
+};
+
 /**
  * What the library rejects with, handed on to the router: a failure of the
  * connection to the upstream as an `UpstreamUnavailableError`, anything else
@@ -80,9 +87,9 @@ const TIMEOUTS = new Set(["ETIMEDOUT"]);
  * of a connection failure is the upstream's.
  */
 const toUpstreamFailure = (err: unknown): unknown => {
-	if (typeof err !== "object" || err === null) return err;
-	const { status, statusCode, code } = err as { status?: unknown; statusCode?: unknown; code?: unknown };
-	if (status !== undefined || statusCode !== undefined || typeof code !== "string") return err;
+	if (typeof err !== "object" || err === null || hasOwnStatus(err)) return err;
+	const { code } = err as { code?: unknown };
+	if (typeof code !== "string") return err;
 	if (TIMEOUTS.has(code)) return new UpstreamUnavailableError(504, err);
 	// `HPE_*`: Node's HTTP parser could not read what the upstream sent.
 	if (CONNECTION_FAILURES.has(code) || TLS_FAILURE.test(code) || code.startsWith("HPE_")) {
@@ -117,10 +124,12 @@ const upstreamLimit = (bytes: number): number | string => (bytes === 0 ? "0" : b
  * the router's error handler, through `proxyErrorHandler`, which replaces the
  * library's default handler — that one would answer a reset itself, as a
  * bodyless `504` nothing logs. `toUpstreamFailure` names the upstream's
- * failures on the way. A caller that has already closed its connection is
- * handed nothing: the library aborts its own upstream request when the caller
- * leaves, which fails as a hang-up, and there is no one to answer and no
- * upstream failure to report. Once the upstream's answer starts it is streamed
+ * failures on the way. When the caller has already closed its connection, a
+ * failure with no status of its own is handed nothing: the library aborts its
+ * own upstream request when the caller leaves, which fails as a hang-up, and
+ * there is no one to answer and no upstream failure to report. A refusal that
+ * says its status — the body reader's, of a body the caller cut short — is
+ * handed on, and logged, though no one is left to read the answer. Once the upstream's answer starts it is streamed
  * to the caller as it arrives, and a failure after that point is not seen here.
  *
  * What the decorator does. When `req.headers.authorization` is present as this
@@ -171,7 +180,7 @@ export const createUpstreamProxy = (config: UpstreamStageConfig): RequestHandler
 	proxy(config.upstream.baseURL, {
 		limit: upstreamLimit(bodyLimitBytes(config)),
 		proxyErrorHandler: (err, res, next) => {
-			if (res.destroyed) return;
+			if (res.destroyed && !hasOwnStatus(err)) return;
 			next(toUpstreamFailure(err));
 		},
 		proxyReqOptDecorator: async (proxyReqOpts, srcReq) => {
