@@ -5,8 +5,9 @@
  * The upstream stage on the wire, through the real express-http-proxy.
  *
  * `upstream.test.mts` pins the options the stage hands to the library; this
- * file pins what the reason for keeping the decorator rests on: the header
- * name bytes an upstream receives. Node lower-cases every inbound name in
+ * file pins what the reasons for keeping the decorator rest on: how the body
+ * is framed on the way to a real upstream, and the header name bytes it
+ * receives. Node lower-cases every inbound name in
  * `req.headers`, and the library copies `req.headers` onto the outbound
  * request, so without the decorator an upstream would read `authorization`.
  * The names are read from `rawHeaders`, because `req.headers` lower-cases them
@@ -36,9 +37,9 @@ describe("createUpstreamProxy on the wire", () => {
 	beforeEach(async () => {
 		received = [];
 		bodies = [];
-		// A plain node:http server: it refuses a request framed by both
-		// Transfer-Encoding and Content-Length (RFC 9112 §6.3), as a conforming
-		// upstream does, before this handler runs.
+		// A plain node:http server: its parser refuses a request framed by both
+		// Transfer-Encoding and Content-Length, as a strict upstream does, before
+		// this handler runs.
 		upstream = createServer((req, res) => {
 			received.push([...req.rawHeaders]);
 			const parts: Buffer[] = [];
@@ -128,7 +129,7 @@ describe("createUpstreamProxy on the wire", () => {
 		// the stage cannot say how, so it refuses rather than forward the coded
 		// bytes as if they were the body.
 		it("is refused 501, and nothing reaches the upstream, when it carries another transfer coding", async () => {
-			const res = await postChunked(app, "/upload", { "Transfer-Encoding": "gzip, chunked" }, [
+			const res = await postChunked(app, "/upload", { "transfer-encoding": "gzip, chunked" }, [
 				Buffer.from("not really gzip"),
 			]);
 

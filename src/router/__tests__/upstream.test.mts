@@ -12,7 +12,8 @@
  * `connection` and `host` onto the outbound request (lowercase names, as Node
  * parses them) and set `connection: close` (`reqHeaders` in
  * `lib/requestOptions.js`). These tests pin the delta the decorator makes on
- * top of that — a casing-only no-op on the wire.
+ * top of that: the body's inbound framing dropped, and otherwise a
+ * casing-only no-op on the wire.
  */
 import type { IncomingHttpHeaders } from "node:http";
 import proxy from "express-http-proxy";
@@ -115,7 +116,7 @@ describe("createUpstreamProxy", () => {
 
 		it.each([["CHUNKED"], [" chunked "]])("reads %j as chunked", async (coding) => {
 			const result = await decorate({ ...inbound, "transfer-encoding": coding });
-			expect(result.headers["transfer-encoding"]).toBeUndefined();
+			expect(result.headers).not.toHaveProperty("transfer-encoding");
 		});
 
 		it.each([["gzip, chunked"], ["deflate"], ["chunked, gzip"]])(
