@@ -78,6 +78,8 @@ describe("parseClientKey", () => {
 		["a symmetric algorithm", () => ({ ...rsa().jwk, alg: "HS256" })],
 		["an empty kid", () => ({ ...ed25519().jwk, kid: "" })],
 		["key material that does not form a key", () => ({ ...ed25519().jwk, x: "AAAA" })],
+		["an RSA key shorter than 2048 bits", () =>
+			generateKeyPairSync("rsa", { modulusLength: 1024 }).privateKey.export({ format: "jwk" })],
 	])("refuses %s", (_label, make) => {
 		expect(() => parseClientKey(make())).toThrow(ClientKeyError);
 	});
