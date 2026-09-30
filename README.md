@@ -320,6 +320,10 @@ Whatever else reaches the end of a mode's router unanswered is refused in the sa
 | `validation.upstream_unavailable`, `injection.upstream_unavailable` | error | Before its answer started, the upstream could not be reached, dropped the exchange or timed out (`502` / `504`), with what the connection threw under `error`. |
 | `validation.request_failed`, `injection.request_failed` | info for a `4xx`, error otherwise | Anything else no stage answered, with the error under `error`: the `Error` itself in validation mode, its message in injection mode, as each mode logs its other failures. |
 
+### Fields that stay on the hop to the proxy
+
+The fields that belong to the caller's connection to the proxy are not sent upstream (RFC 9110 §7.6.1): those the inbound `Connection` names, `Keep-Alive`, `TE`, `Upgrade` and `Proxy-Connection`. Neither is `Proxy-Authorization`, a credential for this hop the proxy does not use. Naming `Authorization` or `x-request-id` in `Connection` does not remove them: what the upstream receives for those is the proxy's to decide — the inbound token in validation mode, the minted one in injection mode.
+
 ### Client authentication with a private key (`private_key_jwt`)
 
 Wherever the proxy authenticates to the provider as a client, it can hold a private key instead of a shared secret ([RFC 7523 §2.2](https://www.rfc-editor.org/rfc/rfc7523.html#section-2.2)): introspection in validation mode, the exchange, and the session grant.
