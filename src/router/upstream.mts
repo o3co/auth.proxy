@@ -31,6 +31,14 @@ export interface UpstreamStageConfig {
 }
 
 /**
+ * The byte count in the form the library keeps. It resolves `limit || "1mb"`,
+ * so zero goes as `"0"`, which its body reader reads as 0; every other count
+ * goes as the number, since a large one's string is exponent notation, which
+ * the reader would read as 1.
+ */
+const upstreamLimit = (bytes: number): number | string => (bytes === 0 ? "0" : bytes);
+
+/**
  * The upstream proxy stage — the last stage of either mode's router before
  * its error handler. It is assembly (built from `upstream.baseURL` and
  * `http.bodyLimitSize`, in bytes), not a mode's decision, so both routers
@@ -63,13 +71,6 @@ export interface UpstreamStageConfig {
  * that matches the name case-sensitively would miss it. The casing on the
  * wire is pinned by `__tests__/upstream-wire.test.mts`.
  */
-/**
- * The byte count in the form the library keeps. It resolves `limit || "1mb"`,
- * so zero goes as `"0"`, which its body reader reads as 0; every other count
- * goes as the number, since a large one's string is exponent notation, which
- * the reader would read as 1.
- */
-const upstreamLimit = (bytes: number): number | string => (bytes === 0 ? "0" : bytes);
 
 export const createUpstreamProxy = (config: UpstreamStageConfig): RequestHandler =>
 	proxy(config.upstream.baseURL, {

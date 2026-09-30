@@ -372,7 +372,7 @@ make docker       # ランタイムイメージのビルド
 | `HTTP_PORT` | HTTP リッスンポート（デフォルト: 80）。 |
 | `HTTP_HOSTNAME` | HTTP リッスンホスト名（デフォルト: 0.0.0.0）。 |
 | `HTTP_PATH_PREFIX` | プロキシルートのパスプレフィックス（デフォルト: /）。 |
-| `HTTP_BODY_LIMIT_SIZE` | リクエストボディサイズ上限（デフォルト: 10mb）。数値に単位 `b`・`kb`・`mb`・`gb`・`tb`・`pb` を付けてもよい（1kb = 1024 バイト）。それ以外ではプロキシは起動しない。[リクエストボディの上限](#リクエストボディの上限)を参照。 |
+| `HTTP_BODY_LIMIT_SIZE` | リクエストボディサイズ上限（デフォルト: 10mb）。数値（`+` の符号を付けてもよい）に単位 `b`・`kb`・`mb`・`gb`・`tb`・`pb` を付けてもよい（1kb = 1024 バイト）。それ以外ではプロキシは起動しない。[リクエストボディの上限](#リクエストボディの上限)を参照。 |
 | `UPSTREAM_BASEURL` | アップストリームサービスのベース URL。 |
 | `CORS_ORIGIN_PATTERN` | CORS オリジン正規表現パターン（任意）。 |
 | `LOG_LEVEL` | pino のログレベル — `trace`・`debug`・`info`・`warn`・`error`・`fatal`・`silent`（デフォルト: `info`）。HOCON 設定を経由せず、ロガー生成時に環境変数から直接読む。出力は stdout への NDJSON。どちらのモードでも、リクエストに関する行 — `incoming request` と各判定 — はリクエスト ID を `requestId` に、`injection.*` または `validation.*` という名前の `event` を持つ。 |

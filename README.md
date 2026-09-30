@@ -391,7 +391,7 @@ Shared environment variables:
 | `HTTP_PORT` | HTTP listen port (default: 80). |
 | `HTTP_HOSTNAME` | HTTP listen hostname (default: 0.0.0.0). |
 | `HTTP_PATH_PREFIX` | Path prefix for proxy routes (default: /). |
-| `HTTP_BODY_LIMIT_SIZE` | Request body size limit (default: 10mb). A number with an optional unit — `b`, `kb`, `mb`, `gb`, `tb`, `pb`; 1kb = 1024 bytes — or the proxy does not start. See [Request body limit](#request-body-limit). |
+| `HTTP_BODY_LIMIT_SIZE` | Request body size limit (default: 10mb). A number, optionally signed `+`, with an optional unit — `b`, `kb`, `mb`, `gb`, `tb`, `pb`; 1kb = 1024 bytes — or the proxy does not start. See [Request body limit](#request-body-limit). |
 | `UPSTREAM_BASEURL` | Upstream service base URL. |
 | `CORS_ORIGIN_PATTERN` | CORS origin regex pattern (optional). |
 | `LOG_LEVEL` | pino log level — `trace`, `debug`, `info`, `warn`, `error`, `fatal` or `silent` (default: `info`). Read directly from the environment when the logger is created, not through the HOCON config. Output is NDJSON on stdout. In both modes, every line about a request — `incoming request` and each decision — carries the request id as `requestId` and an `event` named `injection.*` or `validation.*`. |

@@ -17,7 +17,7 @@ In validation mode, an inbound `Authorization: Bearer <token>` is checked agains
 - the coalescing of concurrent misses.
 
 **Does not own:**
-- the stages it shares with the other mode ([`src/router`](../../router/refusal.mts)): the body limit ahead of the validation middleware, the upstream proxy stage and the error handler. The router says their refusals in this mode's vocabulary — `validation.body_too_large` and `validation.request_failed`, the `{ "code", "message" }` body — but what is refused, and with which status, is theirs;
+- the stages it shares with the other mode ([`src/router`](../../router/refusal.mts)): the body limit ahead of the validation middleware, the upstream proxy stage and the error handler. [`stage-refusals.mts`](stage-refusals.mts) says their refusals in this mode's vocabulary — `validation.body_too_large` and `validation.request_failed`, the `{ "code", "message" }` body — but what is refused, and with which status, is theirs;
 - the request id and the Bearer grammar ([`src/express`](../../express/README.md));
 - the coalescing primitive ([`single-flight.mts`](../../single-flight.mts)) and the bounded body read ([`response-body.mts`](../../response-body.mts)), both of which sit at `src/` root because both modes use them;
 - configuration defaults ([`config/`](../../../config/README.md));
@@ -75,7 +75,7 @@ In validation mode, an inbound `Authorization: Bearer <token>` is checked agains
 
 - **Within `src/`:**
   - [`express/bearer.mts`](../../express/bearer.mts) and `express/requestId.mts`;
-  - [`router/upstream.mts`](../../router/upstream.mts), `router/body-limit.mts`, `router/error-handler.mts` and the `ModeRefusals` contract in `router/refusal.mts`;
+  - [`router/upstream.mts`](../../router/upstream.mts), `router/body-limit.mts`, `router/error-handler.mts` and the `ModeRefusals` contract in `router/refusal.mts`, which [`stage-refusals.mts`](stage-refusals.mts) implements;
   - [`oauth/client-authentication.mts`](../../oauth/client-authentication.mts), used when client credentials are configured (a secret, or a key), with the credential types of `oauth/client-secret-basic.mts`;
   - the root modules `single-flight.mts`, `response-body.mts` and `logger.mts`. Only the router takes the logger singleton; the decision sees just the `Logger` type.
 - **Outside `src/`:** `config/application.schema.mts`, for types only.
