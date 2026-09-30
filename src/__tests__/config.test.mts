@@ -794,6 +794,25 @@ auth.validation.client.clientKey = ${JSON.stringify(privateJwk())}
 	});
 });
 
+describe("proxy config — http.bodyLimitSize", () => {
+	it("defaults to 10mb", () => {
+		const config = validate(parseFile(confPath, { env: { AUTH_MODE: "validation" } }), AppConfigSchema);
+		expect(config.http.bodyLimitSize).toBe("10mb");
+	});
+
+	it.each([["1kb"], ["512"], ["1.5MB"]])("accepts HTTP_BODY_LIMIT_SIZE=%j", (size) => {
+		const raw = parseFile(confPath, { env: { AUTH_MODE: "validation", HTTP_BODY_LIMIT_SIZE: size } });
+		expect(validate(raw, AppConfigSchema).http.bodyLimitSize).toBe(size);
+	});
+
+	// The upstream stage's body reader read "10 megabytes" as 10 bytes and
+	// "ten" as no limit at all; the proxy refuses to start on either.
+	it.each([["10 megabytes"], ["ten"], [""]])("refuses HTTP_BODY_LIMIT_SIZE=%j at boot", (size) => {
+		const raw = parseFile(confPath, { env: { AUTH_MODE: "validation", HTTP_BODY_LIMIT_SIZE: size } });
+		expect(() => validate(raw, AppConfigSchema)).toThrow(/bodyLimitSize/);
+	});
+});
+
 describe("proxy config — mode selection", () => {
 	it("rejects when auth.mode is omitted (null)", () => {
 		const raw = parseFile(confPath);

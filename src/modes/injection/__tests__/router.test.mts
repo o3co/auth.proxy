@@ -9,6 +9,7 @@ import type { Logger } from "../../../logger.mjs";
 import logger from "../../../logger.mjs";
 import { createSingleFlight, type SingleFlight } from "../../../single-flight.mjs";
 import { sessionCacheKey } from "../decision.mjs";
+import { postChunked } from "../../../__tests__/post-chunked.mjs";
 import { createRouter } from "../router.mjs";
 import { createTokenCache } from "../token-cache.mjs";
 import { listenForFlight } from "./flight-joined.mjs";
@@ -796,5 +797,45 @@ describe("injection router", () => {
 			sessionCacheKey(injectionOf(config), "s1"),
 			expect.any(Function),
 		);
+	});
+
+	// `http.bodyLimitSize` is enforced before a token is minted when the
+	// request declares its length, and by the upstream stage, once the token
+	// is in hand, when it does not. Either way the answer is a 413 in the
+	// refusal shape and nothing reaches the upstream.
+	describe("the body limit", () => {
+		const limitedConfig = (): AppConfig => {
+			const config = makeConfig(upstream.baseURL);
+			return { ...config, http: { ...config.http, bodyLimitSize: "1kb" } };
+		};
+
+		it("refuses a declared length over http.bodyLimitSize 413 without minting a token", async () => {
+			fetchMock.mockResolvedValue(okGrantResponse("tok-1"));
+
+			const res = await request(mountApp(limitedConfig()))
+				.post("/any")
+				.set("Cookie", "sid=s1")
+				.set("content-type", "application/octet-stream")
+				.send(Buffer.alloc(2048));
+
+			expect(res.status).toBe(413);
+			expect(res.body).toEqual({ code: 413, message: "Payload Too Large" });
+			expect(fetchMock).not.toHaveBeenCalled();
+			expect(upstream.received).toHaveLength(0);
+		});
+
+		it("refuses a chunked body over the limit 413 in the refusal shape, once the token is in hand", async () => {
+			fetchMock.mockResolvedValue(okGrantResponse("tok-1"));
+
+			const res = await postChunked(mountApp(limitedConfig()), "/any", { Cookie: "sid=s1" }, [
+				Buffer.alloc(1024),
+				Buffer.alloc(1024),
+			]);
+
+			expect(res.status).toBe(413);
+			expect(JSON.parse(res.text)).toEqual({ code: 413, message: "Payload Too Large" });
+			expect(fetchMock).toHaveBeenCalledTimes(1);
+			expect(upstream.received).toHaveLength(0);
+		});
 	});
 });

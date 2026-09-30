@@ -10,6 +10,7 @@ import { afterEach, beforeEach, describe, expect, it, vi } from "vitest";
 import type { AppConfig } from "../../../../config/application.schema.mjs";
 import type { Logger } from "../../../logger.mjs";
 import logger from "../../../logger.mjs";
+import { postChunked } from "../../../__tests__/post-chunked.mjs";
 import { createRouter } from "../router.mjs";
 
 const makeConfig = (
@@ -375,6 +376,64 @@ describe("validation router", () => {
 				"introspect failed",
 			);
 			expect(singletonError).not.toHaveBeenCalled();
+		});
+	});
+
+	// `http.bodyLimitSize` is enforced before the token is introspected when
+	// the request declares its length, and by the upstream stage, once the
+	// token has been checked, when it does not. Either way the answer is a
+	// 413 in the refusal shape and nothing reaches the upstream.
+	describe("the body limit", () => {
+		const limitedApp = () => {
+			const config = makeConfig(upstreamPort);
+			return express().use(
+				createRouter({ config: { ...config, http: { ...config.http, bodyLimitSize: "1kb" } } }),
+			);
+		};
+
+		it("refuses a declared length over http.bodyLimitSize 413 without introspecting the token", async () => {
+			const fetchMock = vi.fn(async () => Response.json({ active: true }));
+			vi.stubGlobal("fetch", fetchMock);
+
+			const res = await request(limitedApp())
+				.post("/protected")
+				.set("Authorization", "Bearer t")
+				.set("content-type", "application/octet-stream")
+				.send(Buffer.alloc(2048));
+
+			expect(res.status).toBe(413);
+			expect(res.body).toEqual({ code: 413, message: "Payload Too Large" });
+			expect(res.headers["www-authenticate"]).toBeUndefined();
+			expect(fetchMock).not.toHaveBeenCalled();
+			expect(upstreamCalls).toBe(0);
+		});
+
+		it("refuses a chunked body over the limit 413 in the refusal shape, once the token is checked", async () => {
+			const fetchMock = vi.fn(async () => Response.json({ active: true }));
+			vi.stubGlobal("fetch", fetchMock);
+
+			const res = await postChunked(limitedApp(), "/protected", { Authorization: "Bearer t" }, [
+				Buffer.alloc(1024),
+				Buffer.alloc(1024),
+			]);
+
+			expect(res.status).toBe(413);
+			expect(JSON.parse(res.text)).toEqual({ code: 413, message: "Payload Too Large" });
+			expect(fetchMock).toHaveBeenCalledTimes(1);
+			expect(upstreamCalls).toBe(0);
+		});
+
+		it("forwards a body at the limit", async () => {
+			vi.stubGlobal("fetch", vi.fn(async () => Response.json({ active: true })));
+
+			const res = await request(limitedApp())
+				.post("/protected")
+				.set("Authorization", "Bearer t")
+				.set("content-type", "application/octet-stream")
+				.send(Buffer.alloc(1024));
+
+			expect(res.status).toBe(200);
+			expect(upstreamCalls).toBe(1);
 		});
 	});
 });
