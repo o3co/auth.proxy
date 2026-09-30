@@ -25,13 +25,14 @@ describe("parseByteSize", () => {
 		["1024", 1024],
 		["1.9", 1],
 		["0", 0],
+		["+1kb", 1024],
 	])("reads %j as %d bytes", (value, bytes) => {
 		expect(parseByteSize(value)).toBe(bytes);
 	});
 
 	// `bytes` reads "10 megabytes" as 10 (parseInt) and "abc" or "" as NaN,
 	// which `raw-body` then applies as no limit at all.
-	it.each([["10 megabytes"], ["abc"], [""], [" 10mb"], ["-1kb"], ["+1kb"], ["1e3"], ["kb"]])(
+	it.each([["10 megabytes"], ["abc"], [""], [" 10mb"], ["-1kb"], ["1e3"], ["kb"]])(
 		"refuses %j",
 		(value) => {
 			expect(parseByteSize(value)).toBeNull();

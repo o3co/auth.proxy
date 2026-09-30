@@ -3,7 +3,7 @@
 
 import { once } from "node:events";
 import { createServer, request as httpRequest, type IncomingHttpHeaders, type Server } from "node:http";
-import type { AddressInfo } from "node:net";
+import { type AddressInfo, connect } from "node:net";
 import express from "express";
 import request from "supertest";
 import { afterEach, beforeEach, describe, expect, it, vi } from "vitest";
@@ -436,6 +436,51 @@ describe("validation router", () => {
 			expect(upstreamCalls).toBe(0);
 		});
 
+		// The body reader stops reading when it refuses; the rest of the body
+		// is drained, so a keep-alive connection answers its next request.
+		it("drains a refused chunked body, so the connection answers its next request", async () => {
+			vi.stubGlobal("fetch", vi.fn(async () => Response.json({ active: true })));
+			const server = limitedApp().listen(0, "127.0.0.1");
+			await once(server, "listening");
+			try {
+				const { port } = server.address() as AddressInfo;
+				const socket = connect(port, "127.0.0.1");
+				let received = "";
+				socket.on("data", (part: Buffer) => {
+					received += part.toString("latin1");
+				});
+				const answers = () => received.match(/HTTP\/1\.1 \d{3}/g) ?? [];
+				const until = async (count: number) => {
+					for (let waited = 0; answers().length < count && waited < 3000; waited += 20) {
+						await new Promise((resolve) => setTimeout(resolve, 20));
+					}
+				};
+				const body = Buffer.alloc(200 * 1024, "x");
+				socket.write(
+					"POST /protected HTTP/1.1\r\nHost: t\r\nAuthorization: Bearer t\r\nTransfer-Encoding: chunked\r\n\r\n",
+				);
+				socket.write(`${body.length.toString(16)}\r\n`);
+				socket.write(body);
+				socket.write("\r\n0\r\n\r\n");
+				await until(1);
+				socket.write("GET /protected HTTP/1.1\r\nHost: t\r\nAuthorization: Bearer t\r\n\r\n");
+				await until(2);
+				socket.destroy();
+
+				expect(answers()).toEqual(["HTTP/1.1 413", "HTTP/1.1 200"]);
+			} finally {
+				server.closeAllConnections();
+				server.close();
+			}
+		});
+
+		it("refuses to build with an http.bodyLimitSize that is not a byte size", () => {
+			const config = makeConfig(upstreamPort);
+			expect(() =>
+				createRouter({ config: { ...config, http: { ...config.http, bodyLimitSize: "ten" } } }),
+			).toThrow(/http\.bodyLimitSize must be a byte size/);
+		});
+
 		it("forwards a body at the limit", async () => {
 			vi.stubGlobal("fetch", vi.fn(async () => Response.json({ active: true })));
 
@@ -448,5 +493,25 @@ describe("validation router", () => {
 			expect(res.status).toBe(200);
 			expect(upstreamCalls).toBe(1);
 		});
+	});
+
+	// Whatever no stage answered reaches the router's error handler and is
+	// refused in this mode's shape: an upstream that refuses the connection
+	// has no status of its own, so it is a 500.
+	it("refuses an unreachable upstream 500 in the refusal shape", async () => {
+		vi.stubGlobal("fetch", vi.fn(async () => Response.json({ active: true })));
+		const closed = createServer();
+		closed.listen(0, "127.0.0.1");
+		await once(closed, "listening");
+		const closedPort = (closed.address() as AddressInfo).port;
+		closed.close();
+		await once(closed, "close");
+
+		const res = await request(express().use(createRouter({ config: makeConfig(closedPort) })))
+			.get("/protected")
+			.set("Authorization", "Bearer t");
+
+		expect(res.status).toBe(500);
+		expect(res.body).toEqual({ code: 500, message: "Internal Server Error" });
 	});
 });

@@ -976,13 +976,13 @@ describe("the app in injection mode, with client keys", () => {
 	});
 });
 
-// `HTTP_BODY_LIMIT_SIZE` as the README's Injection mode section states it: a
+// `HTTP_BODY_LIMIT_SIZE` as the README's Request body limit section states it: a
 // request that declares a body over the limit is refused before a token is
 // minted; one that does not declare its length is refused when the body is
 // read, after the token. Both answers are the refusal shape, logged.
 describe("the app in injection mode, with HTTP_BODY_LIMIT_SIZE=1kb", () => {
 	let proxy: ProxyProcess;
-	const TOO_LARGE = { code: 413, message: "Payload Too Large" };
+	const TOO_LARGE = { error: "body_too_large", error_description: "request body over the limit" };
 	const OVER_LIMIT = line("injection.body_too_large", "info", { msg: "request body over the limit" });
 
 	beforeAll(async () => {

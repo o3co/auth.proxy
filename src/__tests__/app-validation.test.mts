@@ -499,7 +499,7 @@ describe.each(SETUPS)("the app in validation mode, $name", (setup) => {
 	});
 });
 
-// `HTTP_BODY_LIMIT_SIZE` as the README's Validation mode section states it: a
+// `HTTP_BODY_LIMIT_SIZE` as the README's Request body limit section states it: a
 // request that declares a body over the limit is refused before its token is
 // introspected; one that does not declare its length is refused when the body
 // is read, after the token. Both answers are the refusal shape, logged.

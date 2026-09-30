@@ -819,7 +819,7 @@ describe("injection router", () => {
 				.send(Buffer.alloc(2048));
 
 			expect(res.status).toBe(413);
-			expect(res.body).toEqual({ code: 413, message: "Payload Too Large" });
+			expect(res.body).toEqual({ error: "body_too_large", error_description: "request body over the limit" });
 			expect(fetchMock).not.toHaveBeenCalled();
 			expect(upstream.received).toHaveLength(0);
 		});
@@ -833,9 +833,31 @@ describe("injection router", () => {
 			]);
 
 			expect(res.status).toBe(413);
-			expect(JSON.parse(res.text)).toEqual({ code: 413, message: "Payload Too Large" });
+			expect(JSON.parse(res.text)).toEqual({
+				error: "body_too_large",
+				error_description: "request body over the limit",
+			});
 			expect(fetchMock).toHaveBeenCalledTimes(1);
 			expect(upstream.received).toHaveLength(0);
 		});
+	});
+
+	// Whatever no stage answered is refused in this mode's shape, and logged
+	// with the error as a string, as every injection failure line is.
+	it("refuses an unreachable upstream 500 in the refusal shape, logged injection.request_failed", async () => {
+		const closed = http.createServer();
+		await new Promise<void>((resolve) => closed.listen(0, "127.0.0.1", resolve));
+		const closedPort = (closed.address() as AddressInfo).port;
+		await new Promise<void>((resolve) => closed.close(() => resolve()));
+		const errorSpy = vi.spyOn(logger, "error").mockImplementation(() => {});
+
+		const res = await request(mountApp(makeConfig(`http://127.0.0.1:${closedPort}`))).get("/any");
+
+		expect(res.status).toBe(500);
+		expect(res.body).toEqual({ error: "request_failed", error_description: "Internal Server Error" });
+		expect(errorSpy).toHaveBeenCalledWith(
+			{ requestId: expect.any(String), event: "injection.request_failed", error: expect.any(String) },
+			"request failed",
+		);
 	});
 });
