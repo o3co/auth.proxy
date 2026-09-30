@@ -18,15 +18,20 @@ export interface ContinueExchange {
 	bodySent: boolean;
 }
 
-/** How long an exchange may take before it is reported as never answered. */
-const ANSWER_DEADLINE_MS = 5_000;
+/**
+ * How long the connection may stay silent before the exchange is reported as
+ * never answered. Under vitest's default 5 s test timeout, so the report, and
+ * what had arrived, is what a hang fails with.
+ */
+const ANSWER_DEADLINE_MS = 2_000;
 
 /**
  * Sends `head` (the request line and headers, `Expect: 100-continue` among
  * them) and writes `body` only once `100 Continue` arrives. Resolves once the
- * final answer is complete or the connection closes; rejects when neither
- * happens within {@link ANSWER_DEADLINE_MS}, so a server that waits for a
- * body it never invited fails the test with that, not with a test timeout.
+ * final answer is complete or the connection closes; rejects when the
+ * connection goes silent for {@link ANSWER_DEADLINE_MS} first, so a server
+ * that waits for a body it never invited fails the test with that, not with a
+ * test timeout.
  */
 export const expectContinue = (origin: string, head: string, body: Buffer): Promise<ContinueExchange> =>
 	new Promise((resolve, reject) => {
