@@ -13,6 +13,8 @@
  * `AbortSignal.timeout` ends a call or a body read on a real socket, and what
  * reaches the provider.
  */
+import { generateKeyPairSync } from "node:crypto";
+import { jwtVerify } from "jose";
 import { afterAll, afterEach, beforeAll, describe, expect, it } from "vitest";
 
 import {
@@ -22,6 +24,7 @@ import {
 	startFakeProvider,
 } from "../../../__tests__/fake-provider.mjs";
 import { controlledTimeout, timeoutAfterResponseHeaders } from "../../../__tests__/provider-timeout.mjs";
+import { CLIENT_ASSERTION_TYPE, parseClientKey } from "../../../oauth/private-key-jwt.mjs";
 import {
 	createJwtBearerClient,
 	JWT_BEARER_GRANT_TYPE,
@@ -54,8 +57,7 @@ describe("createJwtBearerClient on the wire", () => {
 			// released would be closed by this timeout instead, and the cases that
 			// pin the release at the bound would pass without it.
 			timeoutMs: 60_000,
-			clientId: "proxy-exchange",
-			clientSecret: "exchange-s3cret",
+			credentials: { clientId: "proxy-exchange", clientSecret: "exchange-s3cret" },
 			scope: "orders:read",
 			audience: "https://api.example.test",
 			resource: null,
@@ -110,6 +112,41 @@ describe("createJwtBearerClient on the wire", () => {
 				scope: "orders:read",
 				audience: "https://api.example.test",
 			});
+		});
+
+		it("with a client key, a client assertion and the client_id in the body instead of the Basic header", async () => {
+			fake.respond(PATH, json(200, { access_token: "at-1", token_type: "Bearer" }));
+			const { privateKey, publicKey } = generateKeyPairSync("ed25519");
+			const credentials = {
+				clientId: "proxy-exchange",
+				clientKey: parseClientKey({ ...privateKey.export({ format: "jwk" }), kid: "exchange-1" }),
+				audience: "https://auth.example.test",
+			};
+
+			await exchange({ credentials });
+			await exchange({ credentials });
+
+			expect(fake.requests).toHaveLength(2);
+			const bodies = fake.requests.map((req) => {
+				expect(req.headers.authorization).toBeUndefined();
+				return Object.fromEntries(new URLSearchParams(req.body.toString("utf8")));
+			});
+			for (const body of bodies) {
+				expect(body).toMatchObject({
+					grant_type: JWT_BEARER_GRANT_TYPE,
+					assertion: ASSERTION,
+					client_id: "proxy-exchange",
+					client_assertion_type: CLIENT_ASSERTION_TYPE,
+				});
+				const { protectedHeader } = await jwtVerify(body.client_assertion, publicKey, {
+					issuer: "proxy-exchange",
+					subject: "proxy-exchange",
+					audience: "https://auth.example.test",
+					algorithms: ["EdDSA"],
+				});
+				expect(protectedHeader.kid).toBe("exchange-1");
+			}
+			expect(bodies[0].client_assertion).not.toBe(bodies[1].client_assertion);
 		});
 	});
 
