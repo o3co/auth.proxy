@@ -3,7 +3,7 @@
 
 import { once } from "node:events";
 import { createServer, request as httpRequest, type IncomingHttpHeaders, type Server } from "node:http";
-import { type AddressInfo, connect } from "node:net";
+import { type AddressInfo, connect, createServer as createNetServer } from "node:net";
 import express from "express";
 import request from "supertest";
 import { afterEach, beforeEach, describe, expect, it, vi } from "vitest";
@@ -498,7 +498,7 @@ describe("validation router", () => {
 	// Whatever no stage answered reaches the router's error handler and is
 	// refused in this mode's shape: an upstream that refuses the connection
 	// has no status of its own, so it is a 500.
-	it("refuses an unreachable upstream 500 in the refusal shape", async () => {
+	it("refuses an unreachable upstream 502 Bad Gateway in the refusal shape", async () => {
 		vi.stubGlobal("fetch", vi.fn(async () => Response.json({ active: true })));
 		const closed = createServer();
 		closed.listen(0, "127.0.0.1");
@@ -511,7 +511,28 @@ describe("validation router", () => {
 			.get("/protected")
 			.set("Authorization", "Bearer t");
 
-		expect(res.status).toBe(500);
-		expect(res.body).toEqual({ code: 500, message: "Internal Server Error" });
+		expect(res.status).toBe(502);
+		expect(res.body).toEqual({ code: 502, message: "Bad Gateway" });
+	});
+
+	// A reset used to be answered by the upstream library itself, a bodyless
+	// 504 no line recorded; it reaches the router's error handler now.
+	it("refuses an upstream that resets the connection 502 Bad Gateway in the refusal shape", async () => {
+		vi.stubGlobal("fetch", vi.fn(async () => Response.json({ active: true })));
+		const resetting = createNetServer((socket) => socket.on("data", () => socket.resetAndDestroy()));
+		resetting.listen(0, "127.0.0.1");
+		await once(resetting, "listening");
+		try {
+			const resettingPort = (resetting.address() as AddressInfo).port;
+
+			const res = await request(express().use(createRouter({ config: makeConfig(resettingPort) })))
+				.get("/protected")
+				.set("Authorization", "Bearer t");
+
+			expect(res.status).toBe(502);
+			expect(res.body).toEqual({ code: 502, message: "Bad Gateway" });
+		} finally {
+			resetting.close();
+		}
 	});
 });

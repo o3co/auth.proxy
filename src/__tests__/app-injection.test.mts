@@ -37,6 +37,7 @@ import { expectContinue } from "./expect-continue.mjs";
 import { type FakeProvider, type FakeResponse, json, startFakeProvider } from "./fake-provider.mjs";
 import {
 	headerPairs,
+	RESET_PATH,
 	type RecordingUpstream,
 	startRecordingUpstream,
 	upstreamBody,
@@ -1103,5 +1104,37 @@ describe("the app in injection mode, with HTTP_BODY_LIMIT_SIZE=1kb", () => {
 
 		expect(exchange.statusLines).toEqual(["HTTP/1.1 100 Continue", "HTTP/1.1 200 OK"]);
 		expect(upstream.receivedFor(requestId).map((request) => request.body.toString("utf8"))).toEqual(["hello"]);
+	});
+});
+
+// An upstream that fails mid-exchange is the upstream failing, not the proxy:
+// 502, in the mode's refusal shape, logged under its own event.
+describe("the app in injection mode, in front of an upstream that resets the connection", () => {
+	let proxy: ProxyProcess;
+
+	beforeAll(async () => {
+		proxy = await startProxy(sessionEnv(), upstream);
+	});
+	afterAll(async () => {
+		await proxy?.stop();
+	});
+
+	it("answers 502 upstream_unavailable, logged injection.upstream_unavailable at error", async () => {
+		const requestId = "injection-upstream-reset";
+		fake.respond(TOKEN_PATH, issued("minted-reset"));
+
+		const res = await send(proxy.origin, {
+			path: RESET_PATH,
+			headers: { "x-request-id": requestId, cookie: "sid=sess-reset" },
+		});
+
+		expect(res.status).toBe(502);
+		expect(res.json()).toEqual({ error: "upstream_unavailable", error_description: "Bad Gateway" });
+		const lines = await proxy.linesFor(requestId);
+		expect(lines[0]).toMatchObject(INCOMING);
+		expect(lines.at(-1)).toMatchObject(
+			line("injection.upstream_unavailable", "error", { msg: "upstream unavailable", error: expect.any(String) }),
+		);
+		expect(upstream.receivedFor(requestId)).toHaveLength(1);
 	});
 });

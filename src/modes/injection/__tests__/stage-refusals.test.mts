@@ -62,4 +62,25 @@ describe("injection's stage refusals", () => {
 			error_description: "Internal Server Error",
 		});
 	});
+
+	it("logs an unavailable upstream at error as injection.upstream_unavailable, and answers upstream_unavailable", () => {
+		const logger = makeLogger();
+		const refusal = {
+			reason: "upstream_unavailable",
+			status: 504,
+			error: Object.assign(new Error("connect ETIMEDOUT"), { code: "ETIMEDOUT" }),
+		} as const;
+		const refusals = stageRefusals(logger);
+
+		refusals.log("rid-4", refusal);
+
+		expect(logger.error).toHaveBeenCalledWith(
+			{ requestId: "rid-4", event: "injection.upstream_unavailable", error: "connect ETIMEDOUT" },
+			"upstream unavailable",
+		);
+		expect(refusals.body(refusal)).toEqual({
+			error: "upstream_unavailable",
+			error_description: "Gateway Timeout",
+		});
+	});
 });

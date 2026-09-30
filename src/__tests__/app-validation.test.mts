@@ -33,6 +33,7 @@ import { expectContinue } from "./expect-continue.mjs";
 import { type FakeProvider, type FakeResponse, json, redirect, startFakeProvider } from "./fake-provider.mjs";
 import {
 	headerPairs,
+	RESET_PATH,
 	type RecordingUpstream,
 	startRecordingUpstream,
 	upstreamBody,
@@ -633,6 +634,46 @@ describe("the app in validation mode, with HTTP_BODY_LIMIT_SIZE=1kb", () => {
 
 		expect(exchange.statusLines).toEqual(["HTTP/1.1 100 Continue", "HTTP/1.1 200 OK"]);
 		expect(upstream.receivedFor(requestId).map((request) => request.body.toString("utf8"))).toEqual(["hello"]);
+	});
+});
+
+
+// An upstream that fails mid-exchange is the upstream failing, not the proxy:
+// 502, in the mode's refusal shape, logged under its own event.
+describe("the app in validation mode, in front of an upstream that resets the connection", () => {
+	let proxy: ProxyProcess;
+
+	beforeAll(async () => {
+		proxy = await startProxy(
+			{ AUTH_MODE: "validation", INTROSPECT_URL: fake.url(INTROSPECT_PATH), LOG_LEVEL: "debug", INTROSPECT_TIMEOUT_MS: "60000" },
+			upstream,
+		);
+	});
+	afterAll(async () => {
+		await proxy?.stop();
+	});
+
+	it("answers 502 Bad Gateway, logged validation.upstream_unavailable at error", async () => {
+		const requestId = "validation-upstream-reset";
+		fake.respond(INTROSPECT_PATH, json(200, { active: true }));
+
+		const res = await send(proxy.origin, {
+			path: RESET_PATH,
+			headers: { "x-request-id": requestId, authorization: "Bearer tok-reset" },
+		});
+
+		expect(res.status).toBe(502);
+		expect(res.json()).toEqual({ code: 502, message: "Bad Gateway" });
+		expect(await proxy.linesFor(requestId)).toMatchObject([
+			INCOMING,
+			{
+				event: "validation.upstream_unavailable",
+				level: "error",
+				msg: "upstream unavailable",
+				error: { code: "ECONNRESET" },
+			},
+		]);
+		expect(upstream.receivedFor(requestId)).toHaveLength(1);
 	});
 });
 

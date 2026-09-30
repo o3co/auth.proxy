@@ -844,7 +844,7 @@ describe("injection router", () => {
 
 	// Whatever no stage answered is refused in this mode's shape, and logged
 	// with the error as a string, as every injection failure line is.
-	it("refuses an unreachable upstream 500 in the refusal shape, logged injection.request_failed", async () => {
+	it("refuses an unreachable upstream 502 in the refusal shape, logged injection.upstream_unavailable", async () => {
 		const closed = http.createServer();
 		await new Promise<void>((resolve) => closed.listen(0, "127.0.0.1", resolve));
 		const closedPort = (closed.address() as AddressInfo).port;
@@ -853,11 +853,11 @@ describe("injection router", () => {
 
 		const res = await request(mountApp(makeConfig(`http://127.0.0.1:${closedPort}`))).get("/any");
 
-		expect(res.status).toBe(500);
-		expect(res.body).toEqual({ error: "request_failed", error_description: "Internal Server Error" });
+		expect(res.status).toBe(502);
+		expect(res.body).toEqual({ error: "upstream_unavailable", error_description: "Bad Gateway" });
 		expect(errorSpy).toHaveBeenCalledWith(
-			{ requestId: expect.any(String), event: "injection.request_failed", error: expect.any(String) },
-			"request failed",
+			{ requestId: expect.any(String), event: "injection.upstream_unavailable", error: expect.any(String) },
+			"upstream unavailable",
 		);
 	});
 });
