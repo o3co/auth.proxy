@@ -302,9 +302,9 @@ grant_type=…&client_id=<クライアント ID>&client_assertion_type=urn:ietf:
 
 アサーションの `iss` と `sub` はクライアント ID、唯一の `aud` はプロバイダーの issuer 識別子で、ランダムな `jti` と、`iat` の 60 秒後の `exp` を持つ。ヘッダーには `typ: client-authentication+jwt` を載せ、同じ鍵で署名した別種の JWT と取り違えられないようにする。プロバイダーは各 `jti` を一度しか受け付けず、プロキシが `jti` を再利用することはない。
 
-**プロバイダーの issuer。** 鍵を使う場合、`VALIDATION_PROVIDER_ISSUER` または `INJECTION_PROVIDER_ISSUER` が必須になり、鍵が無いのに設定すると拒否される（どの鍵にも使われない issuer は、届かなかった鍵である）。プロバイダーのディスカバリー文書（`/.well-known/openid-configuration`）の `issuer` を一字一句そのまま写す: `https`（`http` はループバックホストのみ）、パスは可、クエリ・フラグメント・userinfo・空白は不可。`INTROSPECT_URL` や `INJECTION_PROVIDER_ORIGIN` からは導出しない — プロキシがプロバイダーに到達する URL と、プロバイダーが名乗る issuer は異なりうるからである。audience には、RFC 7523 が許すトークンエンドポイント URL ではなく、`private_key_jwt` で推奨されているとおり issuer だけを使う。
+**プロバイダーの issuer。** 鍵を使う場合、`VALIDATION_PROVIDER_ISSUER` または `INJECTION_PROVIDER_ISSUER` が必須になり、鍵が無いのに設定すると拒否される（どの鍵にも使われない issuer は、届かなかった鍵である）。プロバイダーのディスカバリー文書（`/.well-known/openid-configuration`）の `issuer` を一字一句そのまま写す: `https`（`http` はループバックホストのみ）、パスは可、印字可能な ASCII のみ（IDN ホストは `xn--` 形式で）、クエリ・フラグメント・userinfo・空白は不可。最後の鍵を外すとき — 鍵を持つ交換を無効にするときも — は issuer も外すこと。`INTROSPECT_URL` や `INJECTION_PROVIDER_ORIGIN` からは導出しない — プロキシがプロバイダーに到達する URL と、プロバイダーが名乗る issuer は異なりうるからである。audience には、RFC 7523 が許すトークンエンドポイント URL ではなく、`private_key_jwt` で推奨されているとおり issuer だけを使う。
 
-**鍵。** 秘密鍵の JWK を、環境変数に JSON テキストとして与える。使えるのは Ed25519 鍵（`EdDSA`）、EC P-256・P-384・P-521 鍵（`ES256`・`ES384`・`ES512`）、2048 ビット以上の RSA 鍵（JWK の `alg` が `RS384`・`RS512`・`PS*` を指定しない限り `RS256`）。RFC 9864 の `alg: "Ed25519"` は `EdDSA` として読む。`use` が `sig` 以外のもの、`key_ops` に `sign` を含まないものは拒否する。JWK に `kid` があれば、すべてのアサーションのヘッダーに載り、プロバイダーが対応する公開鍵を選ぶ。それ以外 — 公開鍵、共通鍵、鍵に合わないアルゴリズム — はキー名を示して起動時に失敗し、鍵そのものは出力しない。プロキシは鍵もアサーションもログに書かない。鍵は環境変数（またはそれを設定するシークレットストア）から与え、`application.conf` には書かないこと。イメージのビルドは `config/` をコピーするので、そこに書いた鍵はイメージのレイヤーに残る。
+**鍵。** 秘密鍵の JWK を、環境変数に JSON テキストとして与える。使えるのは Ed25519 鍵（`EdDSA`）、EC P-256・P-384・P-521 鍵（`ES256`・`ES384`・`ES512`）、2048 ビット以上の RSA 鍵（JWK の `alg` が `RS384`・`RS512`・`PS*` を指定しない限り `RS256`）。JWK に `alg` がある場合は、上の JWS の名前 — RFC 9864 の `Ed25519` ではなく `EdDSA` — でなければならない。プロバイダーは登録された鍵の `alg` をヘッダーの `alg` と完全一致で照合するためである。`use` が `sig` 以外のもの、`key_ops` に `sign` を含まないもの、公開部分が秘密鍵と一致しない JWK は拒否する。JWK に `kid` があれば、すべてのアサーションのヘッダーに載り、プロバイダーが対応する公開鍵を選ぶ。それ以外 — 公開鍵、共通鍵、鍵に合わないアルゴリズム — はキー名を示して起動時に失敗し、鍵そのものは出力しない。プロキシは鍵もアサーションもログに書かない。鍵は環境変数（またはそれを設定するシークレットストア）から与え、`application.conf` には書かないこと。イメージのビルドは `config/` をコピーするので、そこに書いた鍵はイメージのレイヤーに残る。
 
 たとえば Node で Ed25519 鍵を生成し、登録する公開鍵も得るには:
 
@@ -316,11 +316,16 @@ console.log("CLIENT_KEY=" + JSON.stringify({ ...privateKey.export({ format: "jwk
 console.log("public JWK: " + JSON.stringify({ ...publicKey.export({ format: "jwk" }), kid }));'
 ```
 
-**プロバイダー側では**（auth.provider の oauth パッケージ README の「Client authentication: `private_key_jwt`」）、クライアントを `tokenEndpointAuthMethod: "private_key_jwt"`、`clientSecret` なしで登録し、公開鍵を `jwks` としてインラインで、またはプロバイダーが取得する `jwksUri` で与える。プロバイダーは各 `jti` をリプレイ seen-set に記録するので、`private_key_jwt` を受け付けるにはコンポジションがそれを組み込んでいる必要がある。組み込まれていないと、プロバイダーはクライアントアサーションに `500 server_error` を返し、プロキシはそれを設定エラーではなくプロバイダー障害（バリデーションでは `502 Bad Gateway`、インジェクションでは `502 provider_unavailable`）として報告する。鍵で認証するセッショングラントのクライアントはコンフィデンシャルクライアントであり、そのように登録すること。
+**プロバイダー側では**（auth.provider の oauth パッケージ README の「Client authentication: `private_key_jwt`」）、クライアントを `tokenEndpointAuthMethod: "private_key_jwt"`、`clientSecret` なしで登録し、公開鍵を `jwks` としてインラインで、またはプロバイダーが取得する `jwksUri` で与える。公開 JWK は、秘密鍵の JWK から秘密のメンバー（`d`、RSA 鍵では `p`・`q`・`dp`・`dq`・`qi` も）を除いたもので、`kid` は残す。`alg` を付けるなら署名に使う `EdDSA`・`ES*`・`RS*`・`PS*`、`key_ops` を付けるなら `["verify"]` にする。プロバイダーは各 `jti` をリプレイ seen-set に記録するので、`private_key_jwt` を受け付けるにはコンポジションがそれを組み込んでいる必要がある。組み込まれていないと、プロバイダーはクライアントアサーションに `500 server_error` を返し、プロキシはそれを設定エラーではなくプロバイダー障害（バリデーションでは `502 Bad Gateway`、インジェクションでは `502 provider_unavailable`）として報告する。鍵で認証するセッショングラントのクライアントはコンフィデンシャルクライアントであり、そのように登録すること。
 
-**既存クライアントを鍵に切り替える。** プロバイダーはクライアントごとに 1 つの認証方式（`tokenEndpointAuthMethod`）しか認めないので、既存クライアントをシークレットやパブリッククライアントからその場で `private_key_jwt` に変えると即時切り替えになり、古い資格情報を送っているインスタンスはその瞬間から拒否される。代わりに、同じスコープ・グラントタイプ・`allowedAudiences` を持つ新しいクライアント ID を `private_key_jwt` で登録し、プロキシを新しいクライアント ID と鍵に順に切り替え、その後で古いクライアントを廃止する。クライアント ID に依存するものが 2 つある: バリデーションの audience 固定は呼び出し元クライアントの ID と `allowedAudiences` であり、セッショングラントのトークンの `aud` はクライアントに `allowedAudiences` が無ければクライアント ID になる — 新しいクライアントには、どちらも元のままになる `allowedAudiences` を与えること。
+**既存クライアントを鍵に切り替える。** プロバイダーはクライアントごとに 1 つの認証方式（`tokenEndpointAuthMethod`）しか認めないので、既存クライアントをシークレットやパブリッククライアントからその場で `private_key_jwt` に変えると即時切り替えになり、古い資格情報を送っているインスタンスはその瞬間から拒否される。代わりに、同じスコープ・グラントタイプ・`allowedAudiences` を持つ新しいクライアント ID を `private_key_jwt` で登録し、プロキシを新しいクライアント ID と鍵に順に切り替え、その後で古いクライアントを廃止する。クライアント ID に依存し、引き継ぐ必要があるもの:
 
-**鍵のローテーション。** プロキシが署名に使う鍵は常に 1 本で、ローテーションは鍵を検証する側で行う。新しい公開鍵をクライアントの `jwks` または `jwksUri` に古いものと並べて公開し、プロキシの鍵を（新しい `kid` とともに）切り替え、古い鍵で署名するインスタンスが無くなったら古い公開鍵を外す。プロバイダーは `kid` で鍵を選ぶので、ロールアウト途中のインスタンスも動き続ける。
+- バリデーションの audience 固定は、呼び出し元クライアントの ID と `allowedAudiences` である。
+- セッショングラントと交換のトークンの `aud` は、クライアントの `allowedAudiences` の先頭、無ければクライアント ID である — 古いクライアントに `allowedAudiences` が無かった場合は、古いクライアント ID を新しいクライアントの `allowedAudiences` の**先頭**に置くこと。
+- セッショングラントのトークンの `azp` はクライアント ID なので、`azp` を固定しているアップストリームは新しい ID を受け入れる必要がある。
+- プロバイダーの発行者エントリのうち `allowedClients` を持つものには、新しい交換クライアントを列挙すること。そうしないと交換はすべて拒否される。
+
+**鍵のローテーション。** プロキシが署名に使う鍵は常に 1 本で、ローテーションは鍵を検証する側で行う。新しい公開鍵をクライアントの `jwks` または `jwksUri` に古いものと並べて公開し、プロキシの鍵を（新しい `kid` とともに）切り替え、古い鍵で署名するインスタンスが無くなったら古い公開鍵を外す。プロバイダーは `kid` で鍵を選ぶので、ロールアウト途中のインスタンスも動き続ける — そのため、すべての鍵に `kid` を付けること。公開鍵が 2 本公開されていると、`kid` の無いアサーションは両方に一致して拒否されるので、`kid` の無い鍵からのローテーションは即時切り替えになる。
 
 **時計。** アサーションは `iat` から 60 秒有効で、プロバイダーはさらに自身の時計の許容誤差（既定 30 秒）を認める。時計が十分に遅れている・進んでいるプロキシのアサーションは拒否される。そのときバリデーションは `502 Provider Configuration Error`、インジェクションは `502 provider_config_error` を返す — 拒否されたクライアント認証すべてと同じである。
 
@@ -366,7 +371,7 @@ make docker       # ランタイムイメージのビルド
 | `CLIENT_ID` | イントロスペクション認証のクライアント ID（任意。`CLIENT_SECRET` と `CLIENT_KEY` のちょうど一方とともに設定する）。 |
 | `CLIENT_SECRET` | イントロスペクション認証のクライアントシークレット（`client_secret_basic`。任意、`CLIENT_ID` とともに）。 |
 | `CLIENT_KEY` | イントロスペクション認証の秘密鍵 JWK（`private_key_jwt`。任意、`CLIENT_ID` と `VALIDATION_PROVIDER_ISSUER` とともに）。[秘密鍵によるクライアント認証](#秘密鍵によるクライアント認証private_key_jwt)を参照。 |
-| `VALIDATION_PROVIDER_ISSUER` | プロバイダーの issuer 識別子。クライアントアサーションの audience。`CLIENT_KEY` を設定する場合は**必須**。 |
+| `VALIDATION_PROVIDER_ISSUER` | プロバイダーの issuer 識別子。クライアントアサーションの audience。`CLIENT_KEY` を設定する場合は**必須**で、設定しない場合は拒否される。 |
 | `INTROSPECT_URL` | イントロスペクションエンドポイント URL。userinfo を含まない絶対 `http(s)` URL であること。それ以外はキー名を示して起動時に失敗する — プロキシは URL ではなく自身のクライアント資格情報で認証する。 |
 | `VALIDATION_REALM` | `WWW-Authenticate` の RFC 6750 `realm`（任意。印字可能 ASCII で 256 文字以内、`"`・`\`・前後の空白を含まない）。未設定なら、別の認証方式を使ったリクエストにはチャレンジを返さない。 |
 | `INTROSPECT_CACHE_TTL_SEC` | キャッシュ TTL（秒、デフォルト: 30）。 |
@@ -380,7 +385,7 @@ make docker       # ランタイムイメージのビルド
 | `INJECTION_PROVIDER_ORIGIN` | プロバイダーオリジン — `scheme://host[:port]`、パス／クエリ／フラグメント／userinfo 不可、http または https のみ（デフォルト: `http://localhost:3000`）。 |
 | `INJECTION_CLIENT_ID` | **必須。** OAuth `client_id`。 |
 | `INJECTION_CLIENT_KEY` | セッショングラントの秘密鍵 JWK（`private_key_jwt`。任意）。未設定ならセッショングラントはパブリッククライアント。 |
-| `INJECTION_PROVIDER_ISSUER` | プロバイダーの issuer 識別子。クライアントアサーションの audience。`INJECTION_CLIENT_KEY` または `INJECTION_EXCHANGE_CLIENT_KEY` を設定する場合は**必須**。 |
+| `INJECTION_PROVIDER_ISSUER` | プロバイダーの issuer 識別子。クライアントアサーションの audience。`INJECTION_CLIENT_KEY`、または有効にした交換の `INJECTION_EXCHANGE_CLIENT_KEY` を設定する場合は**必須**で、どちらも無い場合は拒否される。 |
 | `INJECTION_SCOPE` | **必須。** OAuth `scope` 文字列（スペース区切り）。 |
 | `INJECTION_SESSION_COOKIE_NAME` | セッションクッキー名（デフォルト: `connect.sid`）。RFC 6265 `cookie-name`（RFC 9110 token）であること — 空白・`=`・その他のセパレータは起動時に失敗する。 |
 | `INJECTION_STRIP_INBOUND_AUTHORIZATION` | `"true"` / `"false"`（デフォルト: `false`）。プロキシがトークンを発行しなかったリクエストの受信 `Authorization` ヘッダーを削除する。それ以外の値は起動時に失敗する。[受信 Authorization ヘッダー](#受信-authorization-ヘッダー)を参照。 |

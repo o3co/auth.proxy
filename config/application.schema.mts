@@ -201,7 +201,7 @@ const isIssuerIdentifier = (value: string): boolean => {
  */
 const providerIssuer = (key: string) =>
 	optionalString().refine((value) => value === null || isIssuerIdentifier(value), {
-		message: `${key} must be the provider's issuer identifier as its discovery document names it: https (http only on a loopback host), with no query, fragment, userinfo or whitespace`,
+		message: `${key} must be the provider's issuer identifier as its discovery document names it: https (http only on a loopback host), printable ASCII (an IDN host in its xn-- form), with no query, fragment, userinfo or whitespace`,
 	});
 
 const EXCHANGE_KEY = "auth.injection.exchange";
@@ -476,7 +476,7 @@ export const AppConfigSchema = z.object({
 						code: "custom",
 						path: ["providerIssuer"],
 						message:
-							"auth.injection.providerIssuer is set but no client key uses it: set auth.injection.clientKey or auth.injection.exchange.clientKey, or unset the issuer",
+							"auth.injection.providerIssuer is set but no client key uses it: set auth.injection.clientKey, or enable the exchange with auth.injection.exchange.clientKey, or unset the issuer",
 					});
 				}
 			}),
