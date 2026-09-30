@@ -65,9 +65,10 @@ const upstreamLimit = (bytes: number): number | string => (bytes === 0 ? "0" : b
  * forwarded as if its coded bytes were the body.
  *
  * What it does not do: choose which fields are forwarded, beyond that
- * framing. Every other choice is made before this stage, on `req.headers`. express-http-proxy copies every
- * inbound header except `connection` and `host` onto the outbound request and
- * sets `connection: close` before any decorator runs (`reqHeaders` in
+ * framing. Every other choice is made before this stage, on `req.headers`.
+ * express-http-proxy copies every inbound header except `connection` and
+ * `host` onto the outbound request and sets `connection: close` before any
+ * decorator runs (`reqHeaders` in
  * `express-http-proxy/lib/requestOptions.js`). Node lower-cases every inbound
  * header name in `req.headers`, so that copy already carries `authorization`.
  * Node's `setHeader` dedups header names case-insensitively and the last
@@ -77,8 +78,9 @@ const upstreamLimit = (bytes: number): number | string => (bytes === 0 ? "0" : b
  * by deleting the header from `req.headers`, in the `forward_stripped` case of
  * `injectionMiddleware` (`src/modes/injection/router.mts`), rather than here.
  *
- * Why it is kept: the framing above, and header-name casing. HTTP header names are case-insensitive
- * (RFC 9110 §5.1), so a conforming upstream sees no difference; without the
+ * Why it is kept: the framing above, and header-name casing. HTTP header
+ * names are case-insensitive (RFC 9110 §5.1), so a conforming upstream sees
+ * no difference; without the
  * decorator an upstream would receive `authorization` in lower case, and one
  * that matches the name case-sensitively would miss it. The casing on the
  * wire is pinned by `__tests__/upstream-wire.test.mts`.

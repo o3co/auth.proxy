@@ -11,8 +11,8 @@ import type { ModeRefusals } from "../../router/refusal.mjs";
  * the stage's reason as the `error` code, and `injection.*` events with the
  * error as a string under `error`, as every injection failure line has it. A
  * body over the limit is the caller's to fix, as is any other `4xx`, so both
- * are logged at info; anything else is the proxy or its upstream failing, at
- * error.
+ * are logged at info; anything else is a `5xx`, logged at error — the proxy
+ * or its upstream failing, or a request the proxy cannot forward (`501`).
  */
 export const stageRefusals = (logger: Logger): ModeRefusals => ({
 	log: (requestId, refusal) => {
