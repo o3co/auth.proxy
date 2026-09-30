@@ -52,7 +52,7 @@
 1. `Authorization: Bearer <token>` ヘッダーを検出（`Authorization` ヘッダーが無い、または空の場合はそのまま通過。それ以外の `Authorization` は `400`）。
 2. トークンの SHA-256 ハッシュをキーにインメモリキャッシュを確認。
 3. キャッシュミス時、プロバイダーの `POST /oauth/introspect` を呼び出す。そこからのリダイレクトは追従しない — エンドポイントは設定値である — ので、`502 Provider Configuration Error` を返す。同一トークンの並行ミスは、インジェクションモードと同じく 1 回のプロバイダー呼び出しに集約する（single-flight）。
-4. `active: false` なら `401` を返し、`active: true` ならリクエストを転送する。
+4. `active: false` なら `401` を返し、`active: true` ならリクエストを転送する。応答として読むのは `200` だけで、`200` 以外の `2xx` は、`active: true` を含んでいても、プロバイダーの失敗になる（下のログの表を参照）。
 
 `VALIDATION_REALM` を設定しない場合と設定した場合（ここでは `api`）のチャレンジ:
 
@@ -72,7 +72,7 @@
 | --- | --- | --- |
 | `validation.token_unauthorized` | info | プロバイダーが呼び出し元のトークンについて `401` を返した（`401 Invalid Token`）。 |
 | `validation.provider_config_error` | error | プロバイダーがプロキシ自身のクライアント資格情報を拒否した、またはエンドポイントがリダイレクトした（`502 Provider Configuration Error`）。 |
-| `validation.provider_error` | error | それ以外のプロバイダーの失敗 — `5xx`、`429`、その他の `4xx`、イントロスペクション応答ではない応答、タイムアウト、ネットワークエラー（`502 Bad Gateway`）。 |
+| `validation.provider_error` | error | それ以外のプロバイダーの失敗 — `5xx`、`429`、その他の `4xx`、`200` 以外の `2xx`、イントロスペクション応答ではない応答、タイムアウト、ネットワークエラー（`502 Bad Gateway`）。 |
 | `validation.unexpected_error` | error | それ以外に投げられたもの（`500 Internal Server Error`）。 |
 
 プロバイダーが拒否したトークンはプロキシではなく呼び出し元の問題なので、`injection.session_unauthorized` と同じレベルでログし、error レベルの行に対するアラートは発火しない。`active: false` の応答はログしない。

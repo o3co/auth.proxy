@@ -226,6 +226,18 @@ describe("createIntrospectionClient on the wire", () => {
 	});
 
 	describe("a refusal keeps the provider's status", () => {
+		for (const status of [201, 202, 204, 206]) {
+			it(`${status}, which is not the 200 an answer is, even carrying a live token`, async () => {
+				fake.respond(PATH, status === 204 ? { status } : json(status, { active: true }));
+
+				const err = await refusal(client().introspect(TOKEN, "r"));
+
+				expect(err.status).toBe(status);
+				expect(err.message).toBe(`introspect returned ${status}`);
+				expect(err.refusedCredential).toBeNull();
+			});
+		}
+
 		for (const status of [400, 403, 404, 429, 500, 503]) {
 			it(`${status}, with no refused credential`, async () => {
 				fake.respond(PATH, json(status, { error: "x" }, { "Retry-After": "30" }));

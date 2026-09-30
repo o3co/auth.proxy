@@ -52,7 +52,7 @@ Flow:
 1. Detects `Authorization: Bearer <token>` header (passes through if there is no `Authorization` header, or an empty one; any other `Authorization` is `400`).
 2. Checks in-memory cache keyed by SHA-256 of the token.
 3. On cache miss, calls provider's `POST /oauth/introspect`. A redirect from it is not followed — the endpoint is configuration — and is answered `502 Provider Configuration Error`. Concurrent misses on the same token coalesce into a single provider call (single-flight), as they do in injection mode.
-4. Returns `401` if `active: false`; forwards the request if `active: true`.
+4. Returns `401` if `active: false`; forwards the request if `active: true`. Only a `200` is read as an answer: another `2xx`, even one carrying `active: true`, is a provider failure (see the logging table below).
 
 Challenges, without and with `VALIDATION_REALM` (here `api`):
 
@@ -72,7 +72,7 @@ Two limits worth knowing. A browser cannot read the header cross-origin — `WWW
 | --- | --- | --- |
 | `validation.token_unauthorized` | info | The provider answered `401` about the caller's token (`401 Invalid Token`). |
 | `validation.provider_config_error` | error | The provider refused the proxy's own client credentials, or the endpoint redirected (`502 Provider Configuration Error`). |
-| `validation.provider_error` | error | Any other provider failure — `5xx`, `429`, another `4xx`, a response that is not an introspection response, a timeout or a network error (`502 Bad Gateway`). |
+| `validation.provider_error` | error | Any other provider failure — `5xx`, `429`, another `4xx`, a `2xx` other than `200`, a response that is not an introspection response, a timeout or a network error (`502 Bad Gateway`). |
 | `validation.unexpected_error` | error | Anything else thrown (`500 Internal Server Error`). |
 
 A token the provider refuses is the caller's problem, not the proxy's, so it is logged at the level `injection.session_unauthorized` has and an alert on error-level lines does not fire for it. An `active: false` answer is not logged.

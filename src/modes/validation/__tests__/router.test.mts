@@ -290,6 +290,8 @@ describe("validation router", () => {
 		it.each([
 			{ failure: "the provider answers 503 (IntrospectHttpError 503 from the status)", fetchImpl: async () => new Response("", { status: 503 }) },
 			{ failure: "the provider answers 200 with a non-JSON body (IntrospectHttpError 502 raised by introspect itself)", fetchImpl: async () => new Response("<html>", { status: 200 }) },
+			{ failure: "the provider answers 201 with a live token (IntrospectHttpError 201 from the status)", fetchImpl: async () => Response.json({ active: true }, { status: 201 }) },
+			{ failure: "the provider answers 204 (IntrospectHttpError 204 from the status)", fetchImpl: async () => new Response(null, { status: 204 }) },
 			{ failure: "fetch rejects", fetchImpl: async () => { throw new TypeError("fetch failed"); } },
 			{ failure: "the call times out", fetchImpl: async () => { throw new DOMException("The operation was aborted due to timeout", "TimeoutError"); } },
 		])("answers 502 Bad Gateway when $failure", async ({ fetchImpl }) => {

@@ -362,6 +362,8 @@ describe("decideValidation", () => {
 			{ failure: "the provider's 503", err: new IntrospectHttpError(503, "introspect returned 503") },
 			{ failure: "the provider's 429", err: new IntrospectHttpError(429, "introspect returned 429") },
 			{ failure: "the provider's 400", err: new IntrospectHttpError(400, "introspect returned 400") },
+			{ failure: "the provider's 201", err: new IntrospectHttpError(201, "introspect returned 201") },
+			{ failure: "the provider's 204", err: new IntrospectHttpError(204, "introspect returned 204") },
 			{ failure: "a 200 that is not an introspection response", err: new IntrospectHttpError(502, "introspect returned 200 but …") },
 			{ failure: "a call that never answered", err: new IntrospectHttpError(502, "introspect call failed: timeout") },
 		])("answers 502 Bad Gateway on $failure, logging it at error", async ({ err }) => {
