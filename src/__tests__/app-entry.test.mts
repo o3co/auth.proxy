@@ -20,6 +20,7 @@ import { generateKeyPairSync } from "node:crypto";
 import { afterAll, afterEach, beforeAll, describe, expect, it, vi } from "vitest";
 
 import { bootProxy, type ProxyProcess, SUITE_TIMEOUT_MS, send, startProxy } from "./app-process.mjs";
+import { expectContinue } from "./expect-continue.mjs";
 import { type FakeProvider, json, startFakeProvider } from "./fake-provider.mjs";
 import { type RecordingUpstream, startRecordingUpstream, upstreamBody } from "./recording-upstream.mjs";
 
@@ -209,6 +210,7 @@ describe("the entry point's mounts: healthcheck at the root, the mode router und
 			HTTP_PATH_PREFIX: "/api",
 			CORS_ORIGIN_PATTERN: "^https://app\\.example$",
 			LOG_LEVEL: "debug",
+			HTTP_BODY_LIMIT_SIZE: "1kb",
 		}, upstream);
 	});
 	afterAll(async () => {
@@ -276,5 +278,20 @@ describe("the entry point's mounts: healthcheck at the root, the mode router und
 		expect(await proxy.linesFor("entry-outside")).toEqual([]);
 		expect(upstream.receivedFor("entry-outside")).toEqual([]);
 		expect(fake.requests).toEqual([]);
+	});
+
+	// An oversized upload that expected 100-continue is not invited to send its
+	// body. Outside the prefix no body limit refuses it, so the 404 must not
+	// wait for a body the client was never told to send.
+	it("answers an oversized upload outside the prefix 404 at once, without inviting its body", async () => {
+		const exchange = await expectContinue(
+			proxy.origin,
+			"POST /resource HTTP/1.1\r\nHost: t\r\nx-request-id: entry-outside-expect\r\nContent-Length: 4096\r\nExpect: 100-continue\r\n\r\n",
+			Buffer.alloc(4096, "x"),
+		);
+
+		expect(exchange.statusLines).toEqual(["HTTP/1.1 404 Not Found"]);
+		expect(exchange.bodySent).toBe(false);
+		expect(upstream.receivedFor("entry-outside-expect")).toEqual([]);
 	});
 });

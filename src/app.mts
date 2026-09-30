@@ -17,9 +17,14 @@
 /**
  * The composition root: the process entry point, which runs at import — there
  * is no exported factory. It parses and validates `../config/application.conf`
- * once, then mounts, in this order, the healthcheck and CORS at the root and
- * the mode router under `http.pathPrefix`, listens, and installs graceful
- * shutdown.
+ * once, then mounts, in this order, the healthcheck and CORS at the root, the
+ * mode router under `http.pathPrefix`, and a `404` for whatever neither
+ * answered; listens, answers `Expect: 100-continue` against the body limit
+ * (`continueWithinLimit`), and installs graceful shutdown.
+ *
+ * The `404` is answered at once, without reading the body: express's own
+ * waits for the body to end first, and an oversized upload that expected
+ * 100-continue outside the prefix is not told to send one.
  */
 
 import { parseFile } from "@o3co/ts.hocon";
@@ -29,6 +34,7 @@ import express from "express";
 import { type AppConfig, AppConfigSchema } from "../config/application.schema.mjs";
 import { resolveRouter } from "./app-internal.mjs";
 import logger from "./logger.mjs";
+import { bodyLimitBytes, continueWithinLimit } from "./router/body-limit.mjs";
 import * as routers from "./router/index.mjs";
 import { installGracefulShutdown } from "./shutdown.mjs";
 
@@ -52,8 +58,13 @@ const server = app
 		}),
 	)
 	.use(config.http.pathPrefix, resolveRouter(config))
+	.use((_req: express.Request, res: express.Response) => {
+		res.sendStatus(404);
+	})
 	.listen(config.http.port, config.http.hostname, () => {
 		logger.info(`Server ready at http://${config.http.hostname}:${config.http.port}`);
 	});
+
+server.on("checkContinue", continueWithinLimit(bodyLimitBytes(config), app));
 
 installGracefulShutdown(server, { logger });

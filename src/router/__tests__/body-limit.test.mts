@@ -8,13 +8,18 @@
  * end of the router is refused with its own status or `500` rather than left
  * to express's HTML page. What each refusal is — its reason and status — is
  * the stages'; how it is logged and what body answers it are the mode's
- * (`ModeRefusals`), so a double stands in for the mode here.
+ * (`ModeRefusals`), so a double stands in for the mode here. The server's
+ * `checkContinue` listener (`continueWithinLimit`) is driven on a raw socket,
+ * so the interim `100 Continue` is visible.
  */
+import { createServer } from "node:http";
+import type { AddressInfo } from "node:net";
 import { Readable } from "node:stream";
 import express, { type NextFunction, type Request, type Response } from "express";
 import request from "supertest";
 import { describe, expect, it } from "vitest";
-import { createBodyLimitGuard } from "../body-limit.mjs";
+import { expectContinue } from "../../__tests__/expect-continue.mjs";
+import { continueWithinLimit, createBodyLimitGuard } from "../body-limit.mjs";
 import { createErrorHandler } from "../error-handler.mjs";
 import type { ModeRefusals, StageRefusal } from "../refusal.mjs";
 
@@ -185,5 +190,78 @@ describe("createErrorHandler", () => {
 		expect(outcome).toBe("closed");
 		expect(handedOn).toBe(false);
 		expect(logged).toEqual([["rid-3", { reason: "request_failed", status: 500, error: err }]]);
+	});
+});
+
+// Node answers `Expect: 100-continue` itself unless the server installs a
+// `checkContinue` listener; without one, an oversized upload is told to go
+// ahead and is sent in full before the guard refuses it.
+describe("continueWithinLimit", () => {
+	const serverWith = async (limitBytes: number) => {
+		const { logged, refusals } = recordingMode();
+		const reached = { count: 0 };
+		const handle = appWith(limitBytes, refusals, reached);
+		const server = createServer();
+		server.on("request", handle);
+		server.on("checkContinue", continueWithinLimit(limitBytes, handle));
+		await new Promise<void>((resolve) => server.listen(0, "127.0.0.1", resolve));
+		const { port } = server.address() as AddressInfo;
+		const close = () =>
+			new Promise<void>((resolve) => {
+				server.closeAllConnections();
+				server.close(() => resolve());
+			});
+		return { origin: `http://127.0.0.1:${port}`, logged, reached, close };
+	};
+	const head = (length: number) =>
+		`POST /x HTTP/1.1\r\nHost: t\r\nContent-Type: application/octet-stream\r\nContent-Length: ${length}\r\nExpect: 100-continue\r\n\r\n`;
+
+	it("refuses a declared length over the limit without saying 100 Continue, so the body is never sent", async () => {
+		const { origin, logged, reached, close } = await serverWith(1024);
+		try {
+			const exchange = await expectContinue(origin, head(4096), Buffer.alloc(4096));
+
+			expect(exchange.statusLines).toEqual(["HTTP/1.1 413 Payload Too Large"]);
+			expect(exchange.bodySent).toBe(false);
+			expect(JSON.parse(exchange.body)).toEqual({ reason: "body_too_large", status: 413 });
+			expect(logged).toHaveLength(1);
+			expect(reached.count).toBe(0);
+		} finally {
+			await close();
+		}
+	});
+
+	it.each([
+		["within the limit", 5],
+		["at the limit", 1024],
+	])("says 100 Continue to a declared length %s, then answers the request", async (_label, length) => {
+		const { origin, logged, close } = await serverWith(1024);
+		try {
+			const exchange = await expectContinue(origin, head(length), Buffer.alloc(length, "x"));
+
+			expect(exchange.statusLines).toEqual(["HTTP/1.1 100 Continue", "HTTP/1.1 200 OK"]);
+			expect(exchange.bodySent).toBe(true);
+			expect(JSON.parse(exchange.body)).toEqual({ ok: true });
+			expect(logged).toEqual([]);
+		} finally {
+			await close();
+		}
+	});
+
+	// A chunked body declares no length; the upstream stage measures it as it
+	// reads, so it is told to go ahead.
+	it("says 100 Continue to a request that declares no length", async () => {
+		const { origin, close } = await serverWith(1024);
+		try {
+			const exchange = await expectContinue(
+				origin,
+				"POST /x HTTP/1.1\r\nHost: t\r\nTransfer-Encoding: chunked\r\nExpect: 100-continue\r\n\r\n",
+				Buffer.from("5\r\nhello\r\n0\r\n\r\n"),
+			);
+
+			expect(exchange.statusLines).toEqual(["HTTP/1.1 100 Continue", "HTTP/1.1 200 OK"]);
+		} finally {
+			await close();
+		}
 	});
 });

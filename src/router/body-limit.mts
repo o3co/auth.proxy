@@ -2,8 +2,12 @@
 // SPDX-License-Identifier: Apache-2.0
 
 /**
- * The body limit ahead of a mode, `createBodyLimitGuard`, and the byte count
- * every stage enforces, `bodyLimitBytes`.
+ * The body limit ahead of a mode, `createBodyLimitGuard`; the byte count
+ * every stage enforces, `bodyLimitBytes`; and `continueWithinLimit`, the
+ * server's `checkContinue` listener, which says `100 Continue` exactly to the
+ * requests the guard lets through. The listener is not a stage of a mode:
+ * `app.mts` installs it on the server, where Node asks it before any router
+ * runs.
  *
  * `http.bodyLimitSize` is enforced where the body is read: in the upstream
  * stage, after the mode has introspected a token or minted one. A request
@@ -15,6 +19,7 @@
  * same way.
  */
 
+import type { IncomingMessage, RequestListener, ServerResponse } from "node:http";
 import type { RequestHandler } from "express";
 import { parseByteSize } from "../byte-size.mjs";
 import { type ModeRefusals, refuse } from "./refusal.mjs";
@@ -36,12 +41,25 @@ export const bodyLimitBytes = (config: { http: { bodyLimitSize: string } }): num
 };
 
 /**
+ * The declared `Content-Length`, when it is over `limitBytes`; `null` when
+ * the request declares none or one within the limit. The guard refuses
+ * exactly these requests, and the listener says `100 Continue` to exactly the
+ * others, so one test decides both.
+ */
+const declaredOverLimit = (req: IncomingMessage, limitBytes: number): number | null => {
+	const declared = req.headers["content-length"];
+	return declared !== undefined && Number(declared) > limitBytes ? Number(declared) : null;
+};
+
+/**
  * Refuses a request whose declared `Content-Length` is over `limitBytes`
  * before anything after it runs. Node has already refused a request whose
  * `Content-Length` is not a length, or that carries it with
  * `Transfer-Encoding`, so the header is either absent or a length. A request
  * without one passes: the upstream stage measures it. Node drains the unread
- * body once the refusal is sent, so a keep-alive connection goes on.
+ * body once the refusal is sent, so a keep-alive connection goes on — except
+ * for a request that expected `100-continue` and was not told to send its
+ * body, whose connection Node closes after the refusal.
  */
 export const createBodyLimitGuard = ({
 	limitBytes,
@@ -51,16 +69,35 @@ export const createBodyLimitGuard = ({
 	refusals: ModeRefusals;
 }): RequestHandler => {
 	return (req, res, next) => {
-		const declared = req.headers["content-length"];
-		if (declared !== undefined && Number(declared) > limitBytes) {
-			refuse(req, res, refusals, {
-				reason: "body_too_large",
-				status: 413,
-				limitBytes,
-				contentLength: Number(declared),
-			});
+		const contentLength = declaredOverLimit(req, limitBytes);
+		if (contentLength !== null) {
+			refuse(req, res, refusals, { reason: "body_too_large", status: 413, limitBytes, contentLength });
 			return;
 		}
 		next();
 	};
 };
+
+/**
+ * The server's `checkContinue` listener: the body limit for a request that
+ * sends `Expect: 100-continue` and waits to be told to send its body. Node
+ * says `100 Continue` itself unless a listener is installed, so without this
+ * one an oversized upload is invited, sent in full, and only then refused.
+ *
+ * It says `100 Continue` when the declared length is within the limit, or
+ * none is declared, and hands the request to `handle` either way. An
+ * oversized one reaches `createBodyLimitGuard` without the client having been
+ * told to send, and is refused there, in the mode's own shape, before a
+ * client that waits for the go-ahead sends its body; Node closes the
+ * connection after that answer. A client that sends the body without waiting,
+ * as RFC 9110 §10.1.1 allows, may meet the closed connection before it reads
+ * the refusal.
+ */
+export const continueWithinLimit =
+	(limitBytes: number, handle: RequestListener) =>
+	(req: IncomingMessage, res: ServerResponse): void => {
+		if (declaredOverLimit(req, limitBytes) === null) {
+			res.writeContinue();
+		}
+		handle(req, res);
+	};

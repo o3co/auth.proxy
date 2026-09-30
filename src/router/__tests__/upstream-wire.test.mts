@@ -18,6 +18,7 @@ import type { AddressInfo } from "node:net";
 import express from "express";
 import request from "supertest";
 import { afterEach, beforeEach, describe, expect, it } from "vitest";
+import { expectContinue } from "../../__tests__/expect-continue.mjs";
 import { postChunked } from "../../__tests__/post-chunked.mjs";
 import { createUpstreamProxy } from "../upstream.mjs";
 
@@ -147,5 +148,29 @@ describe("createUpstreamProxy on the wire", () => {
 		expect(res.status).toBe(200);
 		expect(bodies.map((body) => body.toString("utf8"))).toEqual(["declared"]);
 		expect(rawPairs(received[0], "content-length").map(([, value]) => value)).toEqual(["8"]);
+	});
+
+	// The stage has the whole body before it sends the request on, so there
+	// is nothing to ask the upstream to wait for. Forwarded, the expectation
+	// makes Node send the request's headers at once, before the library sets
+	// the Content-Length it frames the body by, and the request fails.
+	it("sends a body that expected 100-continue on without the expectation", async () => {
+		const front = app.listen(0, "127.0.0.1");
+		await new Promise<void>((resolve) => front.on("listening", resolve));
+		try {
+			const { port } = front.address() as AddressInfo;
+			const exchange = await expectContinue(
+				`http://127.0.0.1:${port}`,
+				"POST /upload HTTP/1.1\r\nHost: t\r\nContent-Length: 8\r\nExpect: 100-continue\r\n\r\n",
+				Buffer.from("expected"),
+			);
+
+			expect(exchange.statusLines).toEqual(["HTTP/1.1 100 Continue", "HTTP/1.1 200 OK"]);
+			expect(bodies.map((body) => body.toString("utf8"))).toEqual(["expected"]);
+			expect(rawPairs(received[0], "expect")).toEqual([]);
+		} finally {
+			front.closeAllConnections();
+			front.close();
+		}
 	});
 });
