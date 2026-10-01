@@ -37,6 +37,7 @@ import { expectContinue } from "./expect-continue.mjs";
 import { type FakeProvider, type FakeResponse, json, startFakeProvider } from "./fake-provider.mjs";
 import {
 	CUT_PATH,
+	HEAD_ONLY_PATH,
 	headerPairs,
 	RESET_PATH,
 	type RecordingUpstream,
@@ -1137,6 +1138,22 @@ describe("the app in injection mode, in front of an upstream that resets the con
 			line("injection.upstream_unavailable", "error", { msg: "upstream unavailable", error: expect.any(String) }),
 		);
 		expect(upstream.receivedFor(requestId)).toHaveLength(1);
+	});
+
+	// Nothing of the answer sent yet, so it is a 502 — the proxy's own, not
+	// wearing the upstream's head.
+	it("answers 502 upstream_unavailable, without the upstream's headers, on an upstream that sent only its head", async () => {
+		const requestId = "injection-upstream-head-only";
+		fake.respond(TOKEN_PATH, issued("minted-head"));
+
+		const res = await send(proxy.origin, {
+			path: HEAD_ONLY_PATH,
+			headers: { "x-request-id": requestId, cookie: "sid=sess-head" },
+		});
+
+		expect(res.status).toBe(502);
+		expect(res.headers["content-encoding"]).toBeUndefined();
+		expect(res.json()).toEqual({ error: "upstream_unavailable", error_description: "Bad Gateway" });
 	});
 
 	// Its status already sent, the answer cannot become a 502: the caller's

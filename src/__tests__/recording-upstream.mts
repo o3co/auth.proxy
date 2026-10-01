@@ -48,6 +48,12 @@ export const RESET_PATH = "/__upstream_resets";
  */
 export const CUT_PATH = "/__upstream_cuts_off";
 
+/**
+ * A path the upstream sends only the head for — status and headers, a coding
+ * among them — and then resets the connection on, before any of the body.
+ */
+export const HEAD_ONLY_PATH = "/__upstream_sends_only_the_head";
+
 /** The body the upstream answers `path` with. */
 export const upstreamBody = (path: string): { upstream: "reached"; path: string } => ({
 	upstream: "reached",
@@ -81,6 +87,12 @@ export const startRecordingUpstream = async (): Promise<RecordingUpstream> => {
 			recorded.body = Buffer.concat(chunks);
 			if (path.endsWith(RESET_PATH)) {
 				req.socket.resetAndDestroy();
+				return;
+			}
+			if (path.endsWith(HEAD_ONLY_PATH)) {
+				res.writeHead(200, { "Content-Type": "application/json", "Content-Encoding": "gzip", "Content-Length": "100" });
+				res.flushHeaders();
+				setTimeout(() => req.socket.resetAndDestroy(), 20);
 				return;
 			}
 			if (path.endsWith(CUT_PATH)) {

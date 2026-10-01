@@ -33,6 +33,7 @@ import { expectContinue } from "./expect-continue.mjs";
 import { type FakeProvider, type FakeResponse, json, redirect, startFakeProvider } from "./fake-provider.mjs";
 import {
 	CUT_PATH,
+	HEAD_ONLY_PATH,
 	headerPairs,
 	RESET_PATH,
 	type RecordingUpstream,
@@ -674,6 +675,22 @@ describe("the app in validation mode, in front of an upstream that resets the co
 			},
 		]);
 		expect(upstream.receivedFor(requestId)).toHaveLength(1);
+	});
+
+	// Nothing of the answer sent yet, so it is a 502 — the proxy's own, not
+	// wearing the upstream's head.
+	it("answers 502 in the refusal shape, without the upstream's headers, on an upstream that sent only its head", async () => {
+		const requestId = "validation-upstream-head-only";
+		fake.respond(INTROSPECT_PATH, json(200, { active: true }));
+
+		const res = await send(proxy.origin, {
+			path: HEAD_ONLY_PATH,
+			headers: { "x-request-id": requestId, authorization: "Bearer tok-head" },
+		});
+
+		expect(res.status).toBe(502);
+		expect(res.headers["content-encoding"]).toBeUndefined();
+		expect(res.json()).toEqual({ code: 502, message: "Bad Gateway" });
 	});
 
 	// Its status already sent, the answer cannot become a 502: the caller's
