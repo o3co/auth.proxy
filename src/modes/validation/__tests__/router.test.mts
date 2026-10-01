@@ -2,7 +2,7 @@
 // SPDX-License-Identifier: Apache-2.0
 
 import { once } from "node:events";
-import { createServer, request as httpRequest, type IncomingHttpHeaders, type Server } from "node:http";
+import { createServer, request as httpRequest, type IncomingHttpHeaders, type IncomingMessage, type Server } from "node:http";
 import { type AddressInfo, connect, createServer as createNetServer } from "node:net";
 import express from "express";
 import request from "supertest";
@@ -541,9 +541,14 @@ describe("validation router", () => {
 	it("logs no unavailable upstream when the caller leaves before a slow upstream answers", async () => {
 		vi.stubGlobal("fetch", vi.fn(async () => Response.json({ active: true })));
 		let slowReached = 0;
-		const slow = createServer((_req, res) => {
+		let reached: (req: IncomingMessage) => void = () => {};
+		const upstreamRequest = new Promise<IncomingMessage>((resolve) => {
+			reached = resolve;
+		});
+		// It never answers, so its request can only close by the library's abort.
+		const slow = createServer((req) => {
 			slowReached++;
-			setTimeout(() => res.end("late"), 400);
+			reached(req);
 		});
 		slow.listen(0, "127.0.0.1");
 		await once(slow, "listening");
@@ -561,11 +566,19 @@ describe("validation router", () => {
 			});
 			caller.on("error", () => {});
 			caller.end();
-			await new Promise((resolve) => setTimeout(resolve, 100));
+			// Leave once the request is at the upstream, and wait for the
+			// library's abort to reach it there. The proxy's socket closes in the
+			// same batch of close callbacks as the upstream's, or an earlier one,
+			// so its error has reached `proxyErrorHandler` before any timer; a
+			// microtask alone is not enough.
+			const atUpstream = await upstreamRequest;
+			atUpstream.on("error", () => {});
+			const aborted = new Promise((resolve) => atUpstream.once("close", resolve));
 			caller.destroy();
-			await new Promise((resolve) => setTimeout(resolve, 500));
+			await aborted;
+			await new Promise((resolve) => setTimeout(resolve, 50));
 
-			// The request reached the upstream, so the library's own abort ran.
+			// The upstream saw the library's own abort: its request closed.
 			expect(slowReached).toBe(1);
 			const events = logged.error.mock.calls.map(([fields]) => (fields as { event?: string }).event);
 			expect(events).not.toContain("validation.upstream_unavailable");
@@ -582,7 +595,18 @@ describe("validation router", () => {
 	// request failing, though no one is left to answer.
 	it("logs a caller that leaves partway through its body as request_failed at info", async () => {
 		vi.stubGlobal("fetch", vi.fn(async () => Response.json({ active: true })));
-		const logged = { info: vi.fn(), warn: vi.fn(), error: vi.fn(), debug: vi.fn() };
+		let seen: () => void = () => {};
+		const incoming = new Promise<void>((resolve) => {
+			seen = resolve;
+		});
+		const logged = {
+			info: vi.fn((...args: [string] | [Record<string, unknown>, string]) => {
+				if (typeof args[0] === "object" && args[0].event === "validation.incoming_request") seen();
+			}),
+			warn: vi.fn(),
+			error: vi.fn(),
+			debug: vi.fn(),
+		};
 		const front = express()
 			.use(createRouter({ config: makeConfig(upstreamPort), deps: { logger: logged } }))
 			.listen(0, "127.0.0.1");
@@ -594,12 +618,16 @@ describe("validation router", () => {
 				"POST /protected HTTP/1.1\r\nHost: t\r\nAuthorization: Bearer t\r\nContent-Length: 1000\r\n\r\n",
 			);
 			socket.write(Buffer.alloc(100, "x"));
-			await new Promise((resolve) => setTimeout(resolve, 100));
+			// Leave once the router has the request, partway through its body.
+			await incoming;
 			socket.destroy();
-			await new Promise((resolve) => setTimeout(resolve, 300));
+			// Until the refusal is logged, or a deadline that fails on the assertion.
+			const events = () => logged.info.mock.calls.map(([fields]) => (fields as { event?: string }).event);
+			for (let waited = 0; !events().includes("validation.request_failed") && waited < 3000; waited += 20) {
+				await new Promise((resolve) => setTimeout(resolve, 20));
+			}
 
-			const events = logged.info.mock.calls.map(([fields]) => (fields as { event?: string }).event);
-			expect(events).toContain("validation.request_failed");
+			expect(events()).toContain("validation.request_failed");
 			expect(upstreamCalls).toBe(0);
 		} finally {
 			front.closeAllConnections();
