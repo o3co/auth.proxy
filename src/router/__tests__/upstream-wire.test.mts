@@ -225,6 +225,14 @@ describe("createUpstreamProxy on the wire, the upstream's answer", () => {
 				req.socket.destroy();
 				return;
 			}
+			if (req.url === "/te") {
+				// Chunked, and naming fields the caller's response never carries.
+				res.setHeader("Connection", "close, transfer-encoding");
+				res.write("chunked ");
+				res.end("answer for /te");
+				return;
+			}
+			if (req.url === "/connection") res.setHeader("Connection", "close, connection");
 			if (req.url === "/hop") {
 				res.setHeader("Connection", "X-Up, X-Request-Id, X-Proxy-Set");
 				res.setHeader("X-Up", "1");
@@ -269,28 +277,45 @@ describe("createUpstreamProxy on the wire, the upstream's answer", () => {
 		}
 	});
 
-	/** Writes `requests` on one connection and reads until it closes or `settleMs` passes. */
-	const exchange = async (requests: string, settleMs = 300): Promise<{ text: string; closed: boolean }> => {
+	/**
+	 * Writes `requests` on one connection and reads until `received` says the
+	 * answers are in, or the connection closes, then a short while more to see
+	 * whether it closes after them.
+	 */
+	const exchange = async (
+		requests: string,
+		received: (text: string) => boolean,
+	): Promise<{ text: string; closed: boolean }> => {
 		const { port } = proxyServer.address() as AddressInfo;
 		const socket = connect(port, "127.0.0.1");
 		let text = "";
 		let closed = false;
+		let arrived: () => void = () => {};
+		const answered = new Promise<void>((resolve) => {
+			arrived = resolve;
+		});
 		socket.on("data", (chunk: Buffer) => {
 			text += chunk.toString("latin1");
+			if (received(text)) arrived();
 		});
 		socket.on("close", () => {
 			closed = true;
+			arrived();
 		});
 		socket.write(requests);
-		await new Promise((resolve) => setTimeout(resolve, settleMs));
+		await answered;
+		await new Promise((resolve) => setTimeout(resolve, 100));
 		socket.destroy();
 		return { text, closed };
 	};
 
+	/** The answers are in once `marker`, the end of the last body, has arrived. */
+	const through = (marker: string) => (text: string) => text.includes(marker);
+
 	const get = (path: string) => `GET ${path} HTTP/1.1\r\nHost: proxy.test\r\n\r\n`;
 
 	it("keeps the caller's connection open after a proxied answer", async () => {
-		const { text, closed } = await exchange(get("/plain"));
+		const { text, closed } = await exchange(get("/plain"), through("answer for /plain"));
 
 		expect(text).toMatch(/^HTTP\/1\.1 200/);
 		expect(text.toLowerCase()).not.toContain("connection: close");
@@ -298,15 +323,15 @@ describe("createUpstreamProxy on the wire, the upstream's answer", () => {
 	});
 
 	it("answers both of two pipelined requests on one connection", async () => {
-		const { text } = await exchange(get("/k1") + get("/k2"));
+		const { text } = await exchange(get("/k1") + get("/k2"), through("answer for /k2"));
 
 		expect(text.match(/HTTP\/1\.1 200/g)).toHaveLength(2);
 		expect(text).toContain("answer for /k1");
 		expect(text).toContain("answer for /k2");
 	});
 
-	it("drops the upstream's hop-by-hop fields and those its Connection names, but not the request id", async () => {
-		const { text } = await exchange(get("/hop"));
+	it("drops the upstream's hop-by-hop fields and those its Connection names, but keeps the proxy's own, with the proxy's value", async () => {
+		const { text } = await exchange(get("/hop"), through("answer for /hop"));
 		const head = text.slice(0, text.indexOf("\r\n\r\n")).toLowerCase();
 
 		expect(head).toMatch(/^http\/1\.1 200/);
@@ -315,7 +340,7 @@ describe("createUpstreamProxy on the wire, the upstream's answer", () => {
 		}
 		expect(head).not.toMatch(/\r\nconnection: (?!keep-alive)/);
 		expect(head).toContain("\r\nx-kept: yes");
-		expect(head).toContain("\r\nx-request-id:");
+		expect(head).toContain("\r\nx-request-id: rid-proxy");
 		expect(head).toContain("\r\nx-proxy-set: proxy");
 	});
 
@@ -323,7 +348,7 @@ describe("createUpstreamProxy on the wire, the upstream's answer", () => {
 	// and on the proxy's own: the upstream's fields are kept out without
 	// turning that off.
 	it("announces the kept-alive connection on a proxied answer, as Node does", async () => {
-		const { text } = await exchange(get("/plain"));
+		const { text } = await exchange(get("/plain"), through("answer for /plain"));
 		const head = text.slice(0, text.indexOf("\r\n\r\n")).toLowerCase();
 
 		expect(head).toContain("\r\nconnection: keep-alive");
@@ -333,6 +358,7 @@ describe("createUpstreamProxy on the wire, the upstream's answer", () => {
 	it("announces Connection: close to a caller that asked for it, and closes", async () => {
 		const { text, closed } = await exchange(
 			"GET /plain HTTP/1.1\r\nHost: proxy.test\r\nConnection: close\r\n\r\n",
+			() => false,
 		);
 
 		expect(text.toLowerCase()).toContain("\r\nconnection: close");
@@ -340,10 +366,28 @@ describe("createUpstreamProxy on the wire, the upstream's answer", () => {
 	});
 
 	it("announces the kept-alive connection on the proxy's own answer after the stage", async () => {
-		const { text } = await exchange(get("/reset"));
+		const { text } = await exchange(get("/reset"), through("upstream_unavailable"));
 		const head = text.slice(0, text.indexOf("\r\n\r\n")).toLowerCase();
 
 		expect(head).toMatch(/^http\/1\.1 502/);
+		expect(head).toContain("\r\nconnection: keep-alive");
+	});
+
+	// Fields an odd upstream names that the caller's response never carries:
+	// naming them must not take Node's own framing or announcement away.
+	it("keeps the caller's chunked framing and connection when the upstream names Transfer-Encoding", async () => {
+		const { text } = await exchange(get("/te") + get("/k2"), through("answer for /k2"));
+		const head = text.slice(0, text.indexOf("\r\n\r\n")).toLowerCase();
+
+		expect(head).toContain("\r\ntransfer-encoding: chunked");
+		expect(head).toContain("\r\nconnection: keep-alive");
+		expect(text).toContain("answer for /te");
+	});
+
+	it("announces the kept-alive connection when the upstream names Connection itself", async () => {
+		const { text } = await exchange(get("/connection"), through("answer for /connection"));
+		const head = text.slice(0, text.indexOf("\r\n\r\n")).toLowerCase();
+
 		expect(head).toContain("\r\nconnection: keep-alive");
 	});
 });
