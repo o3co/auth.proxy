@@ -32,9 +32,8 @@ const ERROR_CODES: Record<StageRefusal["reason"], string> = {
  * any other `4xx`, so both are logged at info. An upstream that could not be
  * reached or dropped the exchange — before its answer started, or partway
  * through it — is `upstream_unavailable`, logged at error under its own
- * event; any other
- * `5xx` is logged at error too — the proxy failing, or a request it cannot
- * forward (`501`).
+ * event; any other `5xx` is logged at error too — the proxy failing, or a
+ * request it cannot forward (`501`).
  */
 export const stageRefusals = (logger: Logger): ModeRefusals => ({
 	log: (requestId, refusal) => {
