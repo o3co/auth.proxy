@@ -154,8 +154,13 @@ const connectionOptions = (connection: string | undefined): string[] =>
  * `Connection` never reaches the header map, so Node writes its own: it keeps
  * or closes the caller's connection and says which. A stage after this one
  * that has to close the connection sets `shouldKeepAlive`, not the field.
+ *
+ * Returns what puts the head back to the one the proxy had set before the
+ * stage, for an answer of the proxy's own in place of the upstream's — every
+ * field the upstream's head brought dropped, the proxy's at its values, and
+ * nothing the upstream's `Connection` named held against it.
  */
-const keepUpstreamHopFieldsOff = (res: ServerResponse): void => {
+const keepUpstreamHopFieldsOff = (res: ServerResponse): (() => void) => {
 	const proxySet = res.getHeaders();
 	let named: string[] = [];
 	const setHeader = res.setHeader;
@@ -180,6 +185,17 @@ const keepUpstreamHopFieldsOff = (res: ServerResponse): void => {
 		this.sendDate = sendDate;
 		return (writeHead as (...rest: unknown[]) => ServerResponse).apply(this, args);
 	} as ServerResponse["writeHead"];
+	return () => {
+		named = [];
+		const sendDate = res.sendDate;
+		for (const name of res.getHeaderNames()) {
+			if (proxySet[name] === undefined) res.removeHeader(name);
+		}
+		for (const [name, value] of Object.entries(proxySet)) {
+			if (value !== undefined) setHeader.call(res, name, value);
+		}
+		res.sendDate = sendDate;
+	};
 };
 
 /**
@@ -188,9 +204,11 @@ const keepUpstreamHopFieldsOff = (res: ServerResponse): void => {
  * complete — the upstream dropped the connection partway through the body —
  * is handed on as an `UpstreamUnavailableError`; nothing else would see it,
  * since the library pipes after its own promise chain has settled. A caller
- * that has already left is no one to answer, as in `proxyErrorHandler`.
+ * that has already left is no one to answer, as in `proxyErrorHandler`. An
+ * answer cut off before any of it was written — its head only — is answered
+ * by the proxy, so its head goes back to the proxy's first (`restoreHead`).
  */
-const watchAnswer = (res: ServerResponse, next: NextFunction): void => {
+const watchAnswer = (res: ServerResponse, next: NextFunction, restoreHead: () => void): void => {
 	res.once("pipe", (answer: IncomingMessage) => {
 		let cause: unknown = new Error("upstream answer ended before it was complete");
 		answer.once("error", (err) => {
@@ -198,6 +216,7 @@ const watchAnswer = (res: ServerResponse, next: NextFunction): void => {
 		});
 		answer.once("close", () => {
 			if (answer.complete || res.destroyed) return;
+			if (!res.headersSent) restoreHead();
 			next(new UpstreamUnavailableError(502, cause));
 		});
 	});
@@ -298,8 +317,7 @@ const upstreamLimit = (bytes: number): number | string => (bytes === 0 ? "0" : b
 export const createUpstreamProxy = (config: UpstreamStageConfig): RequestHandler => {
 	const forward = proxyTo(config);
 	return (req, res, next) => {
-		keepUpstreamHopFieldsOff(res);
-		watchAnswer(res, next);
+		watchAnswer(res, next, keepUpstreamHopFieldsOff(res));
 		forward(req, res, next);
 	};
 };
