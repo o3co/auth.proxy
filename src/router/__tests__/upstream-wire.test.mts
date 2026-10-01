@@ -221,11 +221,16 @@ describe("createUpstreamProxy on the wire, the upstream's answer", () => {
 
 	beforeEach(async () => {
 		upstream = createServer((req, res) => {
+			if (req.url === "/reset") {
+				req.socket.destroy();
+				return;
+			}
 			if (req.url === "/hop") {
-				res.setHeader("Connection", "X-Up, X-Request-Id");
+				res.setHeader("Connection", "X-Up, X-Request-Id, X-Proxy-Set");
 				res.setHeader("X-Up", "1");
-				res.setHeader("Keep-Alive", "timeout=5");
+				res.setHeader("Keep-Alive", "timeout=97");
 				res.setHeader("Proxy-Connection", "keep-alive");
+				res.setHeader("Upgrade", "h2c");
 				res.setHeader("Proxy-Authenticate", 'Basic realm="upstream"');
 				res.setHeader("Trailer", "X-Checksum");
 				res.setHeader("X-Request-Id", "rid-upstream");
@@ -236,12 +241,22 @@ describe("createUpstreamProxy on the wire, the upstream's answer", () => {
 		await new Promise<void>((resolve) => upstream.listen(0, "127.0.0.1", resolve));
 		const { port } = upstream.address() as AddressInfo;
 		const app = express();
+		// A field the proxy sets before the stage, as `cors` and the request id
+		// middleware do: the upstream's Connection naming it does not remove it.
+		app.use((_req, res, next) => {
+			res.setHeader("X-Proxy-Set", "proxy");
+			next();
+		});
 		app.use(
 			createUpstreamProxy({
 				http: { bodyLimitSize: "1mb" },
 				upstream: { baseURL: `http://127.0.0.1:${port}` },
 			}),
 		);
+		// The proxy's own answer after the stage, as the router's error handler gives.
+		app.use((_err: unknown, _req: express.Request, res: express.Response, _next: express.NextFunction) => {
+			res.status(502).json({ error: "upstream_unavailable" });
+		});
 		proxyServer = createServer(app);
 		await new Promise<void>((resolve) => proxyServer.listen(0, "127.0.0.1", resolve));
 	});
@@ -294,11 +309,40 @@ describe("createUpstreamProxy on the wire, the upstream's answer", () => {
 		const head = text.slice(0, text.indexOf("\r\n\r\n")).toLowerCase();
 
 		expect(head).toMatch(/^http\/1\.1 200/);
-		for (const name of ["x-up", "keep-alive: timeout", "proxy-connection", "proxy-authenticate", "trailer"]) {
+		for (const name of ["x-up", "keep-alive: timeout=97", "proxy-connection", "upgrade", "proxy-authenticate", "trailer"]) {
 			expect(head).not.toContain(`\r\n${name}`);
 		}
 		expect(head).not.toMatch(/\r\nconnection: (?!keep-alive)/);
 		expect(head).toContain("\r\nx-kept: yes");
-		expect(head).toContain("\r\nx-request-id: rid-upstream");
+		expect(head).toContain("\r\nx-request-id:");
+		expect(head).toContain("\r\nx-proxy-set: proxy");
+	});
+
+	// Node announces the connection it keeps or closes, on the proxied answer
+	// and on the proxy's own: the upstream's fields are kept out without
+	// turning that off.
+	it("announces the kept-alive connection on a proxied answer, as Node does", async () => {
+		const { text } = await exchange(get("/plain"));
+		const head = text.slice(0, text.indexOf("\r\n\r\n")).toLowerCase();
+
+		expect(head).toContain("\r\nconnection: keep-alive");
+		expect(head).toMatch(/\r\nkeep-alive: timeout=\d+/);
+	});
+
+	it("announces Connection: close to a caller that asked for it, and closes", async () => {
+		const { text, closed } = await exchange(
+			"GET /plain HTTP/1.1\r\nHost: proxy.test\r\nConnection: close\r\n\r\n",
+		);
+
+		expect(text.toLowerCase()).toContain("\r\nconnection: close");
+		expect(closed).toBe(true);
+	});
+
+	it("announces the kept-alive connection on the proxy's own answer after the stage", async () => {
+		const { text } = await exchange(get("/reset"));
+		const head = text.slice(0, text.indexOf("\r\n\r\n")).toLowerCase();
+
+		expect(head).toMatch(/^http\/1\.1 502/);
+		expect(head).toContain("\r\nconnection: keep-alive");
 	});
 });
