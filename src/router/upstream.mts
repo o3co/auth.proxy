@@ -248,6 +248,12 @@ const upstreamLimit = (bytes: number): number | string => (bytes === 0 ? "0" : b
  * by deleting the header from `req.headers`, in the `forward_stripped` case of
  * `injectionMiddleware` (`src/modes/injection/router.mts`), rather than here.
  *
+ * On the way back, the upstream's connection fields stay on its hop: the
+ * fields its `Connection` names, save `x-request-id`, and the hop-by-hop
+ * fields are dropped from the caller's response as its head is written
+ * (`dropUpstreamHopFields`), so the caller's connection is kept or closed as
+ * Node decides for it and the answer still streams.
+ *
  * Why it is kept: the framing above, the connection's own fields, and
  * header-name casing. HTTP header names are case-insensitive (RFC 9110 §5.1),
  * so a conforming upstream sees no difference; without the decorator an

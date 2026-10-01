@@ -324,6 +324,8 @@ Whatever else reaches the end of a mode's router unanswered is refused in the sa
 
 The fields that belong to the caller's connection to the proxy are not sent upstream (RFC 9110 §7.6.1): those the inbound `Connection` names, `Keep-Alive`, `TE`, `Upgrade` and `Proxy-Connection`. Nor is `Proxy-Authorization`, a credential for this hop the proxy does not use (§11.7.2). Naming `Authorization`, `x-request-id` or `Connection` itself in `Connection` does not remove them: what the upstream receives for those is the proxy's to decide — for `Authorization`, the inbound token in validation mode, and in injection mode the minted one or whatever the mode left in place (see [Inbound Authorization headers](#inbound-authorization-headers)); for `x-request-id`, the proxy's request id; for `Connection`, a connection closed after the one request.
 
+The upstream's connection fields stay on its hop in the same way. Its response's `Connection`, the fields that names, `Keep-Alive`, `Proxy-Connection`, `Upgrade`, `Trailer` and `Proxy-Authenticate` do not reach the caller, so the caller's own connection is kept or closed as Node decides for it — a proxied answer does not close a keep-alive connection. The upstream's `Connection` naming `x-request-id` does not remove it. The answer still streams as it arrives.
+
 ### Client authentication with a private key (`private_key_jwt`)
 
 Wherever the proxy authenticates to the provider as a client, it can hold a private key instead of a shared secret ([RFC 7523 §2.2](https://www.rfc-editor.org/rfc/rfc7523.html#section-2.2)): introspection in validation mode, the exchange, and the session grant.
