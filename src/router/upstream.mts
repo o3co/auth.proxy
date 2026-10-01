@@ -120,26 +120,11 @@ const PROXY_DECIDED = new Set(["authorization", "x-request-id", "connection"]);
 
 /**
  * The upstream's fields for its connection to this proxy, never sent to the
- * caller (RFC 9110 §7.6.1): `Connection` itself, which the library's
- * `connection: close` makes a Node upstream answer `close` to, and which would
- * close the caller's connection too; the other hop-by-hop fields; `Trailer`,
- * which announces fields the piped body does not carry on; and
- * `Proxy-Authenticate` (§11.7.1), a challenge for the upstream's own hop.
+ * caller (RFC 9110 §7.6.1), beside `Connection` itself: the other hop-by-hop
+ * fields; `Trailer`, which announces fields the piped body does not carry on;
+ * and `Proxy-Authenticate` (§11.7.1), a challenge for the upstream's own hop.
  */
-const UPSTREAM_HOP_ONLY = [
-	"connection",
-	"keep-alive",
-	"proxy-connection",
-	"upgrade",
-	"trailer",
-	"proxy-authenticate",
-];
-
-/**
- * Fields the proxy answers the caller with whatever the upstream's
- * `Connection` names: the request id, which the caller correlates by.
- */
-const PROXY_ANSWERED = new Set(["x-request-id"]);
+const UPSTREAM_HOP_ONLY = new Set(["keep-alive", "proxy-connection", "upgrade", "trailer", "proxy-authenticate"]);
 
 /** The field names a `Connection` value lists, lower-cased. */
 const connectionOptions = (connection: string | undefined): string[] =>
@@ -149,24 +134,40 @@ const connectionOptions = (connection: string | undefined): string[] =>
 		.filter((name) => name !== "");
 
 /**
- * Drops the upstream's connection fields from `res` as its head is written:
- * the fields its `Connection` names, save `PROXY_ANSWERED`, and
- * `UPSTREAM_HOP_ONLY`. The library copies the upstream's fields onto `res`
- * one by one and then pipes the body, and Node writes the head on the first
- * write through `writeHead`, so wrapping it keeps the answer streaming. Its
- * own response decorator would read the whole body first. The proxy sets none
- * of these fields itself, so what is dropped is the upstream's.
+ * Keeps the upstream's connection fields off `res`. The library copies the
+ * upstream's fields onto `res` one by one through `setHeader` and then pipes
+ * the body, so the stage takes over `setHeader` for this response: the
+ * upstream's `Connection` is held back rather than set, and so are
+ * `UPSTREAM_HOP_ONLY`. As the head is written — Node writes it through
+ * `writeHead`, on the first write too — the fields that `Connection` names are
+ * removed, except those the proxy had set before the stage (the request id,
+ * `cors`'s): they are the proxy's answer, not the upstream's hop. Its own
+ * response decorator would read the whole body first, so the answer still
+ * streams.
+ *
+ * `Connection` never reaches the header map, so Node writes its own: it keeps
+ * or closes the caller's connection and says which. A stage after this one
+ * that has to close the connection sets `shouldKeepAlive`, not the field.
  */
-const dropUpstreamHopFields = (res: ServerResponse): void => {
-	const original = res.writeHead;
-	res.writeHead = function (this: ServerResponse, ...args: unknown[]) {
-		const connection = this.getHeader("connection");
-		const named = connectionOptions(Array.isArray(connection) ? connection.join(",") : connection?.toString());
-		for (const name of named) {
-			if (!PROXY_ANSWERED.has(name)) this.removeHeader(name);
+const keepUpstreamHopFieldsOff = (res: ServerResponse): void => {
+	const proxySet = new Set(res.getHeaderNames());
+	let named: string[] = [];
+	const setHeader = res.setHeader;
+	res.setHeader = function (this: ServerResponse, name: string, value: number | string | readonly string[]) {
+		const field = name.toLowerCase();
+		if (field === "connection") {
+			named = connectionOptions(Array.isArray(value) ? value.join(",") : String(value));
+			return this;
 		}
-		for (const name of UPSTREAM_HOP_ONLY) this.removeHeader(name);
-		return (original as (...rest: unknown[]) => ServerResponse).apply(this, args);
+		if (UPSTREAM_HOP_ONLY.has(field)) return this;
+		return setHeader.call(this, name, value);
+	} as ServerResponse["setHeader"];
+	const writeHead = res.writeHead;
+	res.writeHead = function (this: ServerResponse, ...args: unknown[]) {
+		for (const name of named) {
+			if (!proxySet.has(name)) this.removeHeader(name);
+		}
+		return (writeHead as (...rest: unknown[]) => ServerResponse).apply(this, args);
 	} as ServerResponse["writeHead"];
 };
 
@@ -248,11 +249,10 @@ const upstreamLimit = (bytes: number): number | string => (bytes === 0 ? "0" : b
  * by deleting the header from `req.headers`, in the `forward_stripped` case of
  * `injectionMiddleware` (`src/modes/injection/router.mts`), rather than here.
  *
- * On the way back, the upstream's connection fields stay on its hop: the
- * fields its `Connection` names, save `x-request-id`, and the hop-by-hop
- * fields are dropped from the caller's response as its head is written
- * (`dropUpstreamHopFields`), so the caller's connection is kept or closed as
- * Node decides for it and the answer still streams.
+ * On the way back, the upstream's connection fields stay on its hop: its
+ * `Connection`, the fields that names, and the hop-by-hop fields do not reach
+ * the caller (`keepUpstreamHopFieldsOff`). Node keeps or closes the caller's
+ * connection and announces it, and the answer still streams.
  *
  * Why it is kept: the framing above, the connection's own fields, and
  * header-name casing. HTTP header names are case-insensitive (RFC 9110 §5.1),
@@ -264,7 +264,7 @@ const upstreamLimit = (bytes: number): number | string => (bytes === 0 ? "0" : b
 export const createUpstreamProxy = (config: UpstreamStageConfig): RequestHandler => {
 	const forward = proxyTo(config);
 	return (req, res, next) => {
-		dropUpstreamHopFields(res);
+		keepUpstreamHopFieldsOff(res);
 		forward(req, res, next);
 	};
 };

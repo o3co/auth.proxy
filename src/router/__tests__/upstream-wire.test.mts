@@ -244,6 +244,7 @@ describe("createUpstreamProxy on the wire, the upstream's answer", () => {
 		// A field the proxy sets before the stage, as `cors` and the request id
 		// middleware do: the upstream's Connection naming it does not remove it.
 		app.use((_req, res, next) => {
+			res.setHeader("x-request-id", "rid-proxy");
 			res.setHeader("X-Proxy-Set", "proxy");
 			next();
 		});
