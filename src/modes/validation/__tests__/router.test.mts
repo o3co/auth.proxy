@@ -2,7 +2,7 @@
 // SPDX-License-Identifier: Apache-2.0
 
 import { once } from "node:events";
-import { createServer, request as httpRequest, type IncomingHttpHeaders, type Server } from "node:http";
+import { createServer, request as httpRequest, type IncomingHttpHeaders, type IncomingMessage, type Server } from "node:http";
 import { type AddressInfo, connect, createServer as createNetServer } from "node:net";
 import express from "express";
 import request from "supertest";
@@ -541,8 +541,13 @@ describe("validation router", () => {
 	it("logs no unavailable upstream when the caller leaves before a slow upstream answers", async () => {
 		vi.stubGlobal("fetch", vi.fn(async () => Response.json({ active: true })));
 		let slowReached = 0;
-		const slow = createServer((_req, res) => {
+		let reached: (req: IncomingMessage) => void = () => {};
+		const upstreamRequest = new Promise<IncomingMessage>((resolve) => {
+			reached = resolve;
+		});
+		const slow = createServer((req, res) => {
 			slowReached++;
+			reached(req);
 			setTimeout(() => res.end("late"), 400);
 		});
 		slow.listen(0, "127.0.0.1");
@@ -561,9 +566,14 @@ describe("validation router", () => {
 			});
 			caller.on("error", () => {});
 			caller.end();
-			await new Promise((resolve) => setTimeout(resolve, 100));
+			// Leave once the request is at the upstream, and wait for the
+			// library's abort to reach it there, then for the proxy's side of it.
+			const atUpstream = await upstreamRequest;
+			atUpstream.on("error", () => {});
+			const aborted = new Promise((resolve) => atUpstream.once("close", resolve));
 			caller.destroy();
-			await new Promise((resolve) => setTimeout(resolve, 500));
+			await aborted;
+			await new Promise((resolve) => setTimeout(resolve, 50));
 
 			// The request reached the upstream, so the library's own abort ran.
 			expect(slowReached).toBe(1);
@@ -596,10 +606,13 @@ describe("validation router", () => {
 			socket.write(Buffer.alloc(100, "x"));
 			await new Promise((resolve) => setTimeout(resolve, 100));
 			socket.destroy();
-			await new Promise((resolve) => setTimeout(resolve, 300));
+			// Until the refusal is logged, or a deadline that fails on the assertion.
+			const events = () => logged.info.mock.calls.map(([fields]) => (fields as { event?: string }).event);
+			for (let waited = 0; !events().includes("validation.request_failed") && waited < 3000; waited += 20) {
+				await new Promise((resolve) => setTimeout(resolve, 20));
+			}
 
-			const events = logged.info.mock.calls.map(([fields]) => (fields as { event?: string }).event);
-			expect(events).toContain("validation.request_failed");
+			expect(events()).toContain("validation.request_failed");
 			expect(upstreamCalls).toBe(0);
 		} finally {
 			front.closeAllConnections();
