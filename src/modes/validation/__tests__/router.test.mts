@@ -545,10 +545,10 @@ describe("validation router", () => {
 		const upstreamRequest = new Promise<IncomingMessage>((resolve) => {
 			reached = resolve;
 		});
-		const slow = createServer((req, res) => {
+		// It never answers, so its request can only close by the library's abort.
+		const slow = createServer((req) => {
 			slowReached++;
 			reached(req);
-			setTimeout(() => res.end("late"), 400);
 		});
 		slow.listen(0, "127.0.0.1");
 		await once(slow, "listening");
