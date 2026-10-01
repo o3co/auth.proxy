@@ -101,12 +101,20 @@ describe("graceful shutdown with kept-alive callers", () => {
 			// `/now` is answered without reading a body, as a refusal is.
 			if (req.url === "/now") res.end("now");
 			else if (req.url === "/large") res.end(Buffer.alloc(LARGE, "a"));
-			else return hold(res);
+			// `/read` reads its whole body before it waits, as a proxied request does.
+			else if (req.url === "/read") {
+				req.resume();
+				return req.on("end", () => hold(res));
+			} else return hold(res);
 			answered.get(req.url)?.();
 		});
 		servers.push(server);
 		const accepted: Socket[] = [];
 		server.on("connection", (socket: Socket) => accepted.push(socket));
+		/** Resolves once the server has accepted `count` connections. */
+		const hasAccepted = async (count: number) => {
+			while (accepted.length < count) await new Promise((resolve) => setImmediate(resolve));
+		};
 		/** Resolves once the server has read `bytes` bytes, so what was sent is in its hands. */
 		const hasRead = async (bytes: number) => {
 			while (accepted.reduce((total, socket) => total + socket.bytesRead, 0) < bytes) {
@@ -155,7 +163,7 @@ describe("graceful shutdown with kept-alive callers", () => {
 			sockets.push(connected.socket);
 			return connected;
 		};
-		return { caller, nextRequest, answeredAt, hasRead, shutDown: () => signal(), exitCode };
+		return { caller, nextRequest, answeredAt, hasAccepted, hasRead, shutDown: () => signal(), exitCode };
 	};
 
 	it("answers a request in flight, closes its connection after it, and drains", async () => {
@@ -300,8 +308,7 @@ describe("graceful shutdown with kept-alive callers", () => {
 	it("closes a connection that has sent nothing when the drain starts", async () => {
 		const proxy = await start();
 		const caller = proxy.caller();
-		await caller.connected;
-		await new Promise((resolve) => setImmediate(resolve));
+		await proxy.hasAccepted(1);
 
 		proxy.shutDown();
 
@@ -397,6 +404,20 @@ describe("graceful shutdown with kept-alive callers", () => {
 		await caller.closed;
 		expect(heads(caller.received())).toHaveLength(2);
 		expect(caller.received()).toContain("later");
+	});
+
+	it("closes the connection of a request whose body was read before the drain, once it is answered", async () => {
+		const proxy = await start();
+		const caller = proxy.caller();
+		caller.send("POST /read HTTP/1.1\r\nHost: proxy.test\r\nContent-Length: 5\r\n\r\nhello");
+		const res = await proxy.nextRequest();
+
+		proxy.shutDown();
+		res.end("read");
+
+		expect(await proxy.exitCode).toBe(0);
+		await caller.closed;
+		expect(caller.received()).toContain("read");
 	});
 
 	it("closes a connection answered before its request body has all arrived, once the body ends", async () => {
