@@ -28,7 +28,8 @@ const ANSWER_DEADLINE_MS = 2_000;
 /**
  * Sends `head` (the request line and headers, `Expect: 100-continue` among
  * them) and writes `body` only once `100 Continue` arrives. Resolves once the
- * final answer is complete or the connection closes; rejects when the
+ * final answer is complete — its `Content-Length` read, or its chunked body
+ * ended — or the connection closes, which a kept-alive one does not; rejects when the
  * connection goes silent for {@link ANSWER_DEADLINE_MS} first, so a server
  * that waits for a body it never invited fails the test with that, not with a
  * test timeout.
@@ -57,6 +58,8 @@ export const expectContinue = (origin: string, head: string, body: Buffer): Prom
 			const headEnd = finalHead === undefined ? -1 : received.indexOf("\r\n\r\n", received.lastIndexOf(finalHead));
 			if (lengthMatch && headEnd !== -1) {
 				if (Buffer.byteLength(received.slice(headEnd + 4), "latin1") >= Number(lengthMatch[1])) settle();
+			} else if (headEnd !== -1 && received.slice(headEnd + 4).endsWith("0\r\n\r\n")) {
+				settle();
 			}
 		});
 		socket.on("close", settle);
