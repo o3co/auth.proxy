@@ -167,11 +167,14 @@ const keepUpstreamHopFieldsOff = (res: ServerResponse): void => {
 	} as ServerResponse["setHeader"];
 	const writeHead = res.writeHead;
 	res.writeHead = function (this: ServerResponse, ...args: unknown[]) {
+		// Removing `Date` turns Node's own off; the caller's answer is still dated.
+		const sendDate = this.sendDate;
 		for (const name of named) {
 			const proxyValue = proxySet[name];
 			if (proxyValue !== undefined) setHeader.call(this, name, proxyValue);
 			else if (this.hasHeader(name)) this.removeHeader(name);
 		}
+		this.sendDate = sendDate;
 		return (writeHead as (...rest: unknown[]) => ServerResponse).apply(this, args);
 	} as ServerResponse["writeHead"];
 };
