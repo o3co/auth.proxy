@@ -14,7 +14,7 @@
  * again on the upstream side and would hide the difference.
  */
 import { createServer, type Server } from "node:http";
-import type { AddressInfo } from "node:net";
+import { type AddressInfo, connect } from "node:net";
 import express from "express";
 import request from "supertest";
 import { afterEach, beforeEach, describe, expect, it } from "vitest";
@@ -206,5 +206,99 @@ describe("createUpstreamProxy on the wire", () => {
 		expect(rawPairs(received[0], "authorization")).toEqual([["Authorization", "Bearer inbound-7f3a"]]);
 		expect(rawPairs(received[0], "x-request-id")).toEqual([["x-request-id", "rid-2c9e"]]);
 		expect(rawPairs(received[0], "connection").map(([, value]) => value.toLowerCase())).toEqual(["close"]);
+	});
+});
+
+/**
+ * The upstream's own connection fields, on the way back. The library sends
+ * `connection: close` upstream, so a Node upstream answers `Connection: close`;
+ * copied onto the caller's response, that field would close the caller's
+ * keep-alive connection after every proxied answer.
+ */
+describe("createUpstreamProxy on the wire, the upstream's answer", () => {
+	let upstream: Server;
+	let proxyServer: Server;
+
+	beforeEach(async () => {
+		upstream = createServer((req, res) => {
+			if (req.url === "/hop") {
+				res.setHeader("Connection", "X-Up, X-Request-Id");
+				res.setHeader("X-Up", "1");
+				res.setHeader("Keep-Alive", "timeout=5");
+				res.setHeader("Proxy-Connection", "keep-alive");
+				res.setHeader("Proxy-Authenticate", 'Basic realm="upstream"');
+				res.setHeader("Trailer", "X-Checksum");
+				res.setHeader("X-Request-Id", "rid-upstream");
+				res.setHeader("X-Kept", "yes");
+			}
+			res.end(`answer for ${req.url}`);
+		});
+		await new Promise<void>((resolve) => upstream.listen(0, "127.0.0.1", resolve));
+		const { port } = upstream.address() as AddressInfo;
+		const app = express();
+		app.use(
+			createUpstreamProxy({
+				http: { bodyLimitSize: "1mb" },
+				upstream: { baseURL: `http://127.0.0.1:${port}` },
+			}),
+		);
+		proxyServer = createServer(app);
+		await new Promise<void>((resolve) => proxyServer.listen(0, "127.0.0.1", resolve));
+	});
+
+	afterEach(async () => {
+		for (const server of [proxyServer, upstream]) {
+			server.closeAllConnections();
+			await new Promise<void>((resolve, reject) => server.close((err) => (err ? reject(err) : resolve())));
+		}
+	});
+
+	/** Writes `requests` on one connection and reads until it closes or `settleMs` passes. */
+	const exchange = async (requests: string, settleMs = 300): Promise<{ text: string; closed: boolean }> => {
+		const { port } = proxyServer.address() as AddressInfo;
+		const socket = connect(port, "127.0.0.1");
+		let text = "";
+		let closed = false;
+		socket.on("data", (chunk: Buffer) => {
+			text += chunk.toString("latin1");
+		});
+		socket.on("close", () => {
+			closed = true;
+		});
+		socket.write(requests);
+		await new Promise((resolve) => setTimeout(resolve, settleMs));
+		socket.destroy();
+		return { text, closed };
+	};
+
+	const get = (path: string) => `GET ${path} HTTP/1.1\r\nHost: proxy.test\r\n\r\n`;
+
+	it("keeps the caller's connection open after a proxied answer", async () => {
+		const { text, closed } = await exchange(get("/plain"));
+
+		expect(text).toMatch(/^HTTP\/1\.1 200/);
+		expect(text.toLowerCase()).not.toContain("connection: close");
+		expect(closed).toBe(false);
+	});
+
+	it("answers both of two pipelined requests on one connection", async () => {
+		const { text } = await exchange(get("/k1") + get("/k2"));
+
+		expect(text.match(/HTTP\/1\.1 200/g)).toHaveLength(2);
+		expect(text).toContain("answer for /k1");
+		expect(text).toContain("answer for /k2");
+	});
+
+	it("drops the upstream's hop-by-hop fields and those its Connection names, but not the request id", async () => {
+		const { text } = await exchange(get("/hop"));
+		const head = text.slice(0, text.indexOf("\r\n\r\n")).toLowerCase();
+
+		expect(head).toMatch(/^http\/1\.1 200/);
+		for (const name of ["x-up", "keep-alive: timeout", "proxy-connection", "proxy-authenticate", "trailer"]) {
+			expect(head).not.toContain(`\r\n${name}`);
+		}
+		expect(head).not.toMatch(/\r\nconnection: (?!keep-alive)/);
+		expect(head).toContain("\r\nx-kept: yes");
+		expect(head).toContain("\r\nx-request-id: rid-upstream");
 	});
 });
