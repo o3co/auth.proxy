@@ -62,7 +62,7 @@ Challenges, without and with `VALIDATION_REALM` (here `api`):
 | `400`: a `Bearer` credential too malformed to read (`Bearer`, `Bearer  t`) | `Bearer error="invalid_request"` | `Bearer realm="api", error="invalid_request"` |
 | `400`: another method (`Basic …`, or a lowercase `bearer`, which this proxy does not admit) — no error code, as §3.1 says | none | `Bearer realm="api"` |
 
-A `413`, `500`, `501`, `502` or `504` carries none, because it is the proxy's or the provider's failure rather than a statement about the caller's credential. Injection mode answers no challenge on any path, deliberately: its caller holds a session cookie, not a Bearer token.
+A `413`, `500`, `501`, `502` or `504` carries none, because none of them is a statement about the caller's Bearer credential. Injection mode answers no challenge on any path, deliberately: its caller holds a session cookie, not a Bearer token.
 
 Two limits worth knowing. A browser cannot read the header cross-origin — `WWW-Authenticate` is not CORS-safelisted and this proxy sets no `Access-Control-Expose-Headers` — so a SPA on another origin sees the status and the body only. And `invalid_token` invites a client to fetch a new token and retry (§3.1), which cannot help in the audience case described below: a token the provider calls `active: false` because its `aud` names neither this proxy's client nor an audience registered in that client's `allowedAudiences` is refused the same way however fresh it is.
 
@@ -403,7 +403,7 @@ Shared environment variables:
 | `AUTH_MODE` | **Required.** `"validation"` or `"injection"`. |
 | `HTTP_PORT` | HTTP listen port (default: 80). |
 | `HTTP_HOSTNAME` | HTTP listen hostname (default: 0.0.0.0). |
-| `HTTP_PATH_PREFIX` | Path prefix for proxy routes (default: /). A request outside it, other than the healthcheck, is answered `404` with the text `Not Found`, without reading its body. |
+| `HTTP_PATH_PREFIX` | Path prefix for proxy routes (default: /). A request outside it, other than the healthcheck, is answered `404` with the text `Not Found`, without reading its body — except an `OPTIONS` while `CORS_ORIGIN_PATTERN` is set, which CORS answers `204` before the prefix is checked (#148). |
 | `HTTP_BODY_LIMIT_SIZE` | Request body size limit (default: 10mb). A number, optionally signed `+`, with an optional unit — `b`, `kb`, `mb`, `gb`, `tb`, `pb`; 1kb = 1024 bytes — or the proxy does not start. See [Request body limit](#request-body-limit). |
 | `UPSTREAM_BASEURL` | Upstream service base URL. |
 | `CORS_ORIGIN_PATTERN` | CORS origin regex pattern (optional). |

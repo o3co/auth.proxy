@@ -190,7 +190,9 @@ operator sees on the wire and in the logs, and what to do.
   `Upgrade`, `Trailer` and `Proxy-Authenticate` are kept off the caller's
   response; Node announces the connection it keeps or closes. A field the
   proxy set before forwarding (`x-request-id`, the CORS fields) keeps the
-  proxy's value, and an upstream naming `Transfer-Encoding`, `Connection` or
+  proxy's value when the upstream names it in `Connection`; an upstream that
+  sends the field itself still replaces the proxy's value, as in 0.7.0
+  (#170). An upstream naming `Transfer-Encoding`, `Connection` or
   `Date` cannot take Node's framing, announcement or `Date` away. A caller
   that read one of these from the upstream stops seeing it. Answers still
   stream. Callers' connections now stay open between proxied answers and
