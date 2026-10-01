@@ -233,6 +233,7 @@ describe("createUpstreamProxy on the wire, the upstream's answer", () => {
 				return;
 			}
 			if (req.url === "/connection") res.setHeader("Connection", "close, connection");
+			if (req.url === "/date") res.setHeader("Connection", "close, date");
 			if (req.url === "/hop") {
 				res.setHeader("Connection", "X-Up, X-Request-Id, X-Proxy-Set");
 				res.setHeader("X-Up", "1");
@@ -303,7 +304,8 @@ describe("createUpstreamProxy on the wire, the upstream's answer", () => {
 			arrived();
 		});
 		socket.write(requests);
-		await answered;
+		// A deadline, so a missing answer fails on the assertions, with what did arrive.
+		await Promise.race([answered, new Promise((resolve) => setTimeout(resolve, 2_000))]);
 		await new Promise((resolve) => setTimeout(resolve, 100));
 		socket.destroy();
 		return { text, closed };
@@ -382,6 +384,7 @@ describe("createUpstreamProxy on the wire, the upstream's answer", () => {
 		expect(head).toContain("\r\ntransfer-encoding: chunked");
 		expect(head).toContain("\r\nconnection: keep-alive");
 		expect(text).toContain("answer for /te");
+		expect(text).toContain("answer for /k2");
 	});
 
 	it("announces the kept-alive connection when the upstream names Connection itself", async () => {
@@ -389,5 +392,12 @@ describe("createUpstreamProxy on the wire, the upstream's answer", () => {
 		const head = text.slice(0, text.indexOf("\r\n\r\n")).toLowerCase();
 
 		expect(head).toContain("\r\nconnection: keep-alive");
+	});
+
+	it("still dates the caller's response when the upstream names Date", async () => {
+		const { text } = await exchange(get("/date"), through("answer for /date"));
+		const head = text.slice(0, text.indexOf("\r\n\r\n")).toLowerCase();
+
+		expect(head).toMatch(/\r\ndate: /);
 	});
 });
