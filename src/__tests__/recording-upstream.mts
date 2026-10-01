@@ -50,8 +50,10 @@ export const RESET_PATH = "/__upstream_resets";
 export const CUT_PATH = "/__upstream_cuts_off";
 
 /**
- * A path the upstream sends only the head for — status and headers, a coding
- * among them — and then closes the connection on, before any of the body.
+ * A path the upstream sends only the head for — status and headers: a coding,
+ * a cookie, caching, its own request id and vary, and a `Connection` naming
+ * the content type — and then closes the connection on, before any of the
+ * body.
  */
 export const HEAD_ONLY_PATH = "/__upstream_sends_only_the_head";
 
@@ -97,7 +99,16 @@ export const startRecordingUpstream = async (): Promise<RecordingUpstream> => {
 				return;
 			}
 			if (path.endsWith(HEAD_ONLY_PATH)) {
-				res.writeHead(200, { "Content-Type": "application/json", "Content-Encoding": "gzip", "Content-Length": "100" });
+				res.writeHead(200, {
+					"Content-Type": "application/json",
+					"Content-Encoding": "gzip",
+					"Content-Length": "100",
+					"Set-Cookie": "upstream=1",
+					"Cache-Control": "max-age=3600",
+					"X-Request-Id": "upstream-id",
+					Vary: "Cookie",
+					Connection: "close, content-type",
+				});
 				res.flushHeaders();
 				req.socket.end();
 				return;

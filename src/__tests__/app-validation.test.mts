@@ -691,8 +691,15 @@ describe("the app in validation mode, in front of an upstream that resets the co
 		});
 
 		expect(res.status).toBe(502);
-		expect(res.headers["content-encoding"]).toBeUndefined();
+		for (const name of ["content-encoding", "set-cookie", "cache-control"]) {
+			expect(res.headers[name]).toBeUndefined();
+		}
+		expect(res.headers["x-request-id"]).toBe(requestId);
+		expect(res.headers["content-type"]).toMatch(/^application\/json/);
+		expect(res.headers.date).toBeDefined();
 		expect(res.json()).toEqual({ code: 502, message: "Bad Gateway" });
+		const lines = await proxy.linesFor(requestId);
+		expect(lines.at(-1)).toMatchObject({ event: "validation.upstream_unavailable", level: "error" });
 	});
 
 	// Its status already sent, the answer cannot become a 502: the caller's
@@ -723,23 +730,26 @@ describe("the app in validation mode, in front of an upstream that resets the co
 		const requestId = "validation-caller-leaves-midway";
 		fake.respond(INTROSPECT_PATH, json(200, { active: true }));
 
-		await new Promise<void>((resolve, reject) => {
+		const status = await new Promise<number | undefined>((resolve, reject) => {
+			const timer = setTimeout(() => reject(new Error("no part of the answer arrived")), 5_000);
 			const req = httpRequest(
 				new URL(TRICKLE_PATH, proxy.origin),
 				{ headers: { "x-request-id": requestId, authorization: "Bearer tok-leave" }, agent: false },
 				(res) => {
 					res.once("data", () => {
+						clearTimeout(timer);
 						req.destroy();
-						resolve();
+						resolve(res.statusCode);
 					});
 				},
 			);
 			req.on("error", () => {});
-			req.once("close", () => resolve());
 			req.end();
-			setTimeout(() => reject(new Error("no part of the answer arrived")), 5_000).unref();
 		});
 
+		// The upstream's answer, left midway.
+		expect(status).toBe(200);
+		expect(upstream.receivedFor(requestId)).toHaveLength(1);
 		const lines = await proxy.linesFor(requestId);
 		expect(lines.map((line) => line.event)).not.toContain("validation.upstream_unavailable");
 	});

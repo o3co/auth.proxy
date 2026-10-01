@@ -1152,8 +1152,15 @@ describe("the app in injection mode, in front of an upstream that resets the con
 		});
 
 		expect(res.status).toBe(502);
-		expect(res.headers["content-encoding"]).toBeUndefined();
+		for (const name of ["content-encoding", "set-cookie", "cache-control"]) {
+			expect(res.headers[name]).toBeUndefined();
+		}
+		expect(res.headers["x-request-id"]).toBe(requestId);
+		expect(res.headers["content-type"]).toMatch(/^application\/json/);
+		expect(res.headers.date).toBeDefined();
 		expect(res.json()).toEqual({ error: "upstream_unavailable", error_description: "Bad Gateway" });
+		const lines = await proxy.linesFor(requestId);
+		expect(lines.at(-1)).toMatchObject({ event: "injection.upstream_unavailable", level: "error" });
 	});
 
 	// Its status already sent, the answer cannot become a 502: the caller's
