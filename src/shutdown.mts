@@ -13,7 +13,9 @@
  * See the License for the specific language governing permissions and
  * limitations under the License.
  */
+import { subscribe } from "node:diagnostics_channel";
 import type { Server, ServerResponse } from "node:http";
+import type { Socket } from "node:net";
 import type { Logger } from "./logger.mjs";
 
 /**
@@ -28,10 +30,11 @@ import type { Logger } from "./logger.mjs";
  *    sockets are released (`closeIdleConnections`) — they hold the server open
  *    with no request behind them, so a quiet proxy would otherwise wait out
  *    the whole deadline for nothing. A connection busy with a request is not
- *    kept alive past its answer: an answer not yet started says
- *    `Connection: close`, and one under way has its connection released as
- *    it ends, so a caller that keeps its connection alive cannot hold the
- *    drain open until `keepAliveTimeout`.
+ *    kept alive past its last answer — pipelined answers before it still go
+ *    out, and a request arriving during the drain is answered too: that
+ *    answer says `Connection: close` when its head is not yet written, and
+ *    the connection is released as it ends, so a caller that keeps its
+ *    connection alive cannot hold the drain open until `keepAliveTimeout`.
  * 3. **In-flight requests get `drainTimeoutMs`** (default 10s) to finish;
  *    `server.close()` alone waits indefinitely on one stuck request.
  * 4. **Past the deadline, remaining connections are cut**
@@ -104,29 +107,44 @@ export function installGracefulShutdown(server: Server, options: GracefulShutdow
 	let shuttingDown = false;
 	let finished = false;
 
-	/** The answers still being written, which the drain must not keep alive. */
-	const answering = new Set<ServerResponse>();
+	/**
+	 * The latest request each open connection carries. Its answer is the one
+	 * the drain closes the connection after: answers to the requests pipelined
+	 * before it still go out on the connection.
+	 */
+	const latest = new Map<Socket, ServerResponse>();
 
 	/**
-	 * Ends keep-alive for `res`: an answer whose head is not written yet says
-	 * `Connection: close` and Node closes after it; for one already under way
-	 * the connection goes idle as it ends, and is released then.
+	 * Ends keep-alive after `res`. An answer whose head is not written yet says
+	 * `Connection: close`, and Node closes after it. Either way the connection
+	 * is released once the answer ends, since it is idle then: an answer under
+	 * way has already said keep-alive, and a `Connection` field an answer set
+	 * overrides `shouldKeepAlive`. A connection still reading a request body
+	 * when its answer ends is not idle, and waits for the deadline.
 	 */
 	const closeAfter = (res: ServerResponse): void => {
-		if (!res.headersSent) {
-			res.shouldKeepAlive = false;
-			return;
-		}
-		res.once("finish", () => setImmediate(() => server.closeIdleConnections()));
+		if (!res.headersSent) res.shouldKeepAlive = false;
+		res.once("finish", () => server.closeIdleConnections());
 	};
 
-	server.on("request", (_req, res: ServerResponse) => {
-		if (shuttingDown) {
-			closeAfter(res);
-			return;
-		}
-		answering.add(res);
-		res.once("close", () => answering.delete(res));
+	/**
+	 * Every request this server receives, before any listener answers it —
+	 * those that expect `100-continue` included, which never fire `request`.
+	 */
+	subscribe("http.server.request.start", (message) => {
+		const { server: from, socket, response } = message as {
+			server: unknown;
+			socket: Socket;
+			response: ServerResponse;
+		};
+		if (from !== server) return;
+		const previous = latest.get(socket);
+		if (previous === undefined) socket.once("close", () => latest.delete(socket));
+		latest.set(socket, response);
+		if (!shuttingDown) return;
+		// A later request on the connection: it, not the one before, closes it.
+		if (previous !== undefined && !previous.headersSent) previous.shouldKeepAlive = true;
+		closeAfter(response);
 	});
 
 	/** Sentinel so a timed-out cleanup is reported as that, not as a throw. */
@@ -221,7 +239,7 @@ export function installGracefulShutdown(server: Server, options: GracefulShutdow
 		// lost by releasing them — and without this a quiet server waits out
 		// the whole deadline for connections that will never send anything.
 		server.closeIdleConnections();
-		for (const res of answering) closeAfter(res);
+		for (const res of latest.values()) closeAfter(res);
 	};
 
 	for (const signal of SIGNALS) onSignal(signal, handler);
