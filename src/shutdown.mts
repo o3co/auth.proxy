@@ -28,17 +28,21 @@ import type { Logger } from "./logger.mjs";
  *    than starting a second cleanup over the first one's work.
  * 2. **New connections stop immediately** (`close`), and each open one closes
  *    once its last answer has been written out — at once for an idle
- *    keep-alive connection, which would otherwise hold a quiet proxy for the
- *    whole deadline. A connection busy with a request is not kept alive past
- *    its last answer: pipelined answers before it still go out, a request
- *    arriving during the drain is answered too, and the last answer says
- *    `Connection: close` when its head is unwritten as it takes its turn on
- *    the connection — not one whose head was written while it waited, since
- *    a request pipelined after it may still be on its way. An answer that
- *    ends during the drain is written out before its connection closes,
- *    whichever connection finishes first. One that had ended but was still
- *    being written when the drain started is Node's to keep: `close` releases
- *    idle connections itself, and counts an ended answer as idle.
+ *    keep-alive connection, or one that has sent nothing, which would
+ *    otherwise hold a quiet proxy for the whole deadline. A connection busy
+ *    with a request is not kept alive past its last answer: pipelined
+ *    answers before it still go out, a request arriving during the drain —
+ *    or whose head was still arriving when it started — is answered too, and
+ *    the last answer says `Connection: close` when its head is unwritten as
+ *    it takes its turn on the connection, unless the answer set a
+ *    `Connection` field of its own. Not one whose head was written while it
+ *    waited, since a request pipelined after it may still be on its way. An
+ *    answer that ends during the drain is written out before its connection
+ *    closes, whichever connection finishes first. One that had ended but was
+ *    still being written when the drain started is Node's to keep: `close`
+ *    releases idle connections itself, and counts an ended answer as idle. A
+ *    caller that stops halfway through a request's head holds the drain until
+ *    the deadline. This is the plain HTTP server the proxy listens with.
  * 3. **In-flight requests get `drainTimeoutMs`** (default 10s) to finish;
  *    `server.close()` alone waits indefinitely on one stuck request.
  * 4. **Past the deadline, remaining connections are cut**
@@ -144,8 +148,8 @@ export function installGracefulShutdown(server: Server, options: GracefulShutdow
 	 *
 	 * The close itself is the drain's own, not left to Node's: an answer
 	 * whose head was written first has already said keep-alive, and a
-	 * `Connection` field an answer set overrides `shouldKeepAlive`.
-	 * `destroySoon` waits for what is still buffered, so an answer that has
+	 * `Connection` field an answer set overrides `shouldKeepAlive`. It waits
+	 * for the answer to finish — every byte written — so an answer that has
 	 * ended but is still being written is not cut; and the connection is
 	 * closed only while that answer is still its latest.
 	 */
@@ -278,13 +282,19 @@ export function installGracefulShutdown(server: Server, options: GracefulShutdow
 			}
 			void finish(0, "drained");
 		});
-		// A connection with no request yet, or whose last answer has been
-		// written out, has nothing behind it, so nothing is lost by closing it
-		// now — and without this a quiet server waits out the whole deadline
-		// for connections that will never send anything.
+		// `close` has already released the idle connections it sees. Left are
+		// the busy ones, which close after their latest answer, and two kinds
+		// it keeps: one that has sent nothing, which Node counts as busy and
+		// would hold until the deadline, so it is closed now; and one whose
+		// next request's head is still arriving, which is left to close after
+		// that request once it is whole.
 		for (const [socket, carried] of connections) {
-			if (carried === undefined) socket.destroySoon();
-			else closeAfter(socket, carried.response);
+			if (socket.destroyed) continue;
+			if (carried === undefined) {
+				if (socket.bytesRead === 0) socket.destroySoon();
+			} else if (!carried.response.writableFinished) {
+				closeAfter(socket, carried.response);
+			}
 		}
 	};
 
