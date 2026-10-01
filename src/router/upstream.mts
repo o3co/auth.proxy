@@ -20,6 +20,7 @@
  * do, and why it is kept, is the doc comment on the function.
  */
 
+import type { ServerResponse } from "node:http";
 import type { RequestHandler } from "express";
 import proxy from "express-http-proxy";
 import { bodyLimitBytes } from "./body-limit.mjs";
@@ -117,12 +118,57 @@ const THIS_HOP_ONLY = ["keep-alive", "proxy-connection", "te", "upgrade", "proxy
  */
 const PROXY_DECIDED = new Set(["authorization", "x-request-id", "connection"]);
 
-/** The field names the inbound `Connection` lists, lower-cased. */
+/**
+ * The upstream's fields for its connection to this proxy, never sent to the
+ * caller (RFC 9110 §7.6.1): `Connection` itself, which the library's
+ * `connection: close` makes a Node upstream answer `close` to, and which would
+ * close the caller's connection too; the other hop-by-hop fields; `Trailer`,
+ * which announces fields the piped body does not carry on; and
+ * `Proxy-Authenticate` (§11.7.1), a challenge for the upstream's own hop.
+ */
+const UPSTREAM_HOP_ONLY = [
+	"connection",
+	"keep-alive",
+	"proxy-connection",
+	"upgrade",
+	"trailer",
+	"proxy-authenticate",
+];
+
+/**
+ * Fields the proxy answers the caller with whatever the upstream's
+ * `Connection` names: the request id, which the caller correlates by.
+ */
+const PROXY_ANSWERED = new Set(["x-request-id"]);
+
+/** The field names a `Connection` value lists, lower-cased. */
 const connectionOptions = (connection: string | undefined): string[] =>
 	(connection ?? "")
 		.split(",")
 		.map((name) => name.trim().toLowerCase())
 		.filter((name) => name !== "");
+
+/**
+ * Drops the upstream's connection fields from `res` as its head is written:
+ * the fields its `Connection` names, save `PROXY_ANSWERED`, and
+ * `UPSTREAM_HOP_ONLY`. The library copies the upstream's fields onto `res`
+ * one by one and then pipes the body, and Node writes the head on the first
+ * write through `writeHead`, so wrapping it keeps the answer streaming. Its
+ * own response decorator would read the whole body first. The proxy sets none
+ * of these fields itself, so what is dropped is the upstream's.
+ */
+const dropUpstreamHopFields = (res: ServerResponse): void => {
+	const original = res.writeHead;
+	res.writeHead = function (this: ServerResponse, ...args: unknown[]) {
+		const connection = this.getHeader("connection");
+		const named = connectionOptions(Array.isArray(connection) ? connection.join(",") : connection?.toString());
+		for (const name of named) {
+			if (!PROXY_ANSWERED.has(name)) this.removeHeader(name);
+		}
+		for (const name of UPSTREAM_HOP_ONLY) this.removeHeader(name);
+		return (original as (...rest: unknown[]) => ServerResponse).apply(this, args);
+	} as ServerResponse["writeHead"];
+};
 
 /** The two config fields the stage reads. `AppConfig` satisfies it structurally. */
 export interface UpstreamStageConfig {
@@ -209,7 +255,16 @@ const upstreamLimit = (bytes: number): number | string => (bytes === 0 ? "0" : b
  * the name case-sensitively would miss it. The casing on the
  * wire is pinned by `__tests__/upstream-wire.test.mts`.
  */
-export const createUpstreamProxy = (config: UpstreamStageConfig): RequestHandler =>
+export const createUpstreamProxy = (config: UpstreamStageConfig): RequestHandler => {
+	const forward = proxyTo(config);
+	return (req, res, next) => {
+		dropUpstreamHopFields(res);
+		forward(req, res, next);
+	};
+};
+
+/** The library's handler, configured as `createUpstreamProxy` describes. */
+const proxyTo = (config: UpstreamStageConfig): RequestHandler =>
 	proxy(config.upstream.baseURL, {
 		limit: upstreamLimit(bodyLimitBytes(config)),
 		proxyErrorHandler: (err, res, next) => {
