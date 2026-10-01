@@ -68,15 +68,25 @@ const inbound: IncomingHttpHeaders = {
 };
 
 describe("createUpstreamProxy", () => {
-	let stage: ReturnType<typeof createUpstreamProxy>;
-
 	beforeEach(() => {
 		proxyMock.mockClear();
-		stage = createUpstreamProxy(config);
+		createUpstreamProxy(config);
 	});
 
-	it("returns the handler proxy() built", () => {
-		expect(stage).toBe(proxyMock.mock.results[0]?.value);
+	// The stage wraps the response's head writer — the upstream's connection
+	// fields are dropped there, which `upstream-wire.test.mts` pins — and
+	// hands the request to the handler proxy() built.
+	it("hands each request to the handler proxy() built", () => {
+		const built = vi.fn();
+		proxyMock.mockReturnValueOnce(built);
+		const wrapped = createUpstreamProxy(config);
+		const req = {};
+		const res = { getHeaders: () => ({}), setHeader: () => {}, writeHead: () => {} };
+		const next = () => {};
+
+		wrapped(req as never, res as never, next);
+
+		expect(built).toHaveBeenCalledWith(req, res, next);
 	});
 
 	it("targets upstream.baseURL and sets exactly limit (= http.bodyLimitSize in bytes) and proxyReqOptDecorator", () => {
