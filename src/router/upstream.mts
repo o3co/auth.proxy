@@ -20,17 +20,20 @@
  * do, and why it is kept, is the doc comment on the function.
  */
 
-import type { ServerResponse } from "node:http";
-import type { RequestHandler } from "express";
+import type { IncomingMessage, ServerResponse } from "node:http";
+import type { NextFunction, RequestHandler } from "express";
 import proxy from "express-http-proxy";
 import { bodyLimitBytes } from "./body-limit.mjs";
 
 /**
- * The upstream failing rather than the request, before its answer started: it
+ * The upstream failing rather than the request. Before its answer started: it
  * could not be reached, its TLS handshake failed, or it dropped the exchange
  * or answered something that is not HTTP (`502`), or it timed out (`504`,
- * RFC 9110 §15.6.5). `cause` is what the connection threw. The router's error
- * handler answers it as the `upstream_unavailable` refusal.
+ * RFC 9110 §15.6.5) — the router's error handler answers it as the
+ * `upstream_unavailable` refusal. Or after its answer started: it dropped the
+ * connection partway through the body — the status is already sent, so the
+ * error handler logs it as that refusal and closes the caller's connection.
+ * `cause` is what the connection threw.
  */
 export class UpstreamUnavailableError extends Error {
 	constructor(
@@ -179,6 +182,27 @@ const keepUpstreamHopFieldsOff = (res: ServerResponse): void => {
 	} as ServerResponse["writeHead"];
 };
 
+/**
+ * Watches the upstream's answer as the library pipes it into `res` (a pipe
+ * says so to its destination with `pipe`). An answer that ends before it is
+ * complete — the upstream dropped the connection partway through the body —
+ * is handed on as an `UpstreamUnavailableError`; nothing else would see it,
+ * since the library pipes after its own promise chain has settled. A caller
+ * that has already left is no one to answer, as in `proxyErrorHandler`.
+ */
+const watchAnswer = (res: ServerResponse, next: NextFunction): void => {
+	res.once("pipe", (answer: IncomingMessage) => {
+		let cause: unknown = new Error("upstream answer ended before it was complete");
+		answer.once("error", (err) => {
+			cause = err;
+		});
+		answer.once("close", () => {
+			if (answer.complete || res.destroyed) return;
+			next(new UpstreamUnavailableError(502, cause));
+		});
+	});
+};
+
 /** The two config fields the stage reads. `AppConfig` satisfies it structurally. */
 export interface UpstreamStageConfig {
 	upstream: { baseURL: string };
@@ -211,8 +235,9 @@ const upstreamLimit = (bytes: number): number | string => (bytes === 0 ? "0" : b
  * there is no one to answer and no upstream failure to report. A refusal that
  * says its status — the body reader's, of a body the caller cut short — is
  * handed on, and logged, though no one is left to read the answer. Once the
- * upstream's answer starts it is streamed to the caller as it arrives, and a
- * failure after that point is not seen here.
+ * upstream's answer starts it is streamed to the caller as it arrives; an
+ * answer the upstream cuts off partway is handed on too (`watchAnswer`), and
+ * the error handler, the status being spent, closes the caller's connection.
  *
  * What the decorator does. When `req.headers.authorization` is present as this
  * stage runs — empty included, as the injection paths read presence — it sets
@@ -274,6 +299,7 @@ export const createUpstreamProxy = (config: UpstreamStageConfig): RequestHandler
 	const forward = proxyTo(config);
 	return (req, res, next) => {
 		keepUpstreamHopFieldsOff(res);
+		watchAnswer(res, next);
 		forward(req, res, next);
 	};
 };
