@@ -40,14 +40,20 @@ describe("graceful shutdown with a kept-alive caller", () => {
 	const start = async (options: { checkContinue?: boolean; connectionField?: string } = {}) => {
 		const pending: ServerResponse[] = [];
 		const arrived = new Set<() => void>();
+		let answeredNow: () => void = () => {};
+		const nowAnswered = new Promise<void>((resolve) => {
+			answeredNow = resolve;
+		});
 		const hold = (res: ServerResponse) => {
 			if (options.connectionField !== undefined) res.setHeader("Connection", options.connectionField);
 			pending.push(res);
 			for (const notify of arrived) notify();
 		};
 		server = createServer((req: IncomingMessage, res: ServerResponse) => {
-			if (req.url === "/now") res.end("now");
-			else hold(res);
+			if (req.url === "/now") {
+				res.end("now");
+				answeredNow();
+			} else hold(res);
 		});
 		if (options.checkContinue) {
 			server.on("checkContinue", (req: IncomingMessage, res: ServerResponse) => {
@@ -97,6 +103,8 @@ describe("graceful shutdown with a kept-alive caller", () => {
 		return {
 			send: (raw: string) => caller.write(raw),
 			nextRequest,
+			/** Resolves once the server has answered `/now`, queued or not. */
+			nowAnswered,
 			shutDown: () => signal(),
 			exitCode,
 			received: () => text,
@@ -166,6 +174,7 @@ describe("graceful shutdown with a kept-alive caller", () => {
 
 		caller.shutDown();
 		caller.send(get("/now"));
+		await caller.nowAnswered;
 		held.end("held");
 
 		expect(await caller.exitCode).toBe(0);
