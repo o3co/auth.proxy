@@ -184,7 +184,11 @@ describe("graceful shutdown with kept-alive callers", () => {
 		expect(caller.received()).toContain("second");
 	});
 
-	it("tells a request that arrives during the drain the connection closes, though it is answered at once", async () => {
+	// A request pipelined behind the held one, answered at once while it
+	// waits: its head is written before it is the connection's turn, while a
+	// later request may still be on its way, so it is not told. The drain
+	// closes the connection after it.
+	it("answers a request that arrives during the drain, and closes after it", async () => {
 		const proxy = await start();
 		const caller = proxy.caller();
 		caller.send(get("/held"));
@@ -200,8 +204,26 @@ describe("graceful shutdown with kept-alive callers", () => {
 		await caller.closed;
 		const answered = heads(caller.received());
 		expect(answered).toHaveLength(2);
-		expect(answered[1]).toContain("\r\nconnection: close");
-		expect(answered[1]).not.toContain("keep-alive");
+		expect(answered[0]).not.toContain("\r\nconnection: close");
+		expect(caller.received()).toContain("now");
+	});
+
+	it("answers every request that arrives together during the drain", async () => {
+		const proxy = await start();
+		const caller = proxy.caller();
+		caller.send(get("/held"));
+		const held = await proxy.nextRequest();
+
+		proxy.shutDown();
+		const largeAnswered = proxy.answeredAt("/large");
+		caller.send(get("/now") + get("/large"));
+		await largeAnswered;
+		held.end("held");
+
+		expect(await proxy.exitCode).toBe(0);
+		await caller.closed;
+		expect(heads(caller.received())).toHaveLength(3);
+		expect(caller.bytes()).toBeGreaterThan(LARGE);
 	});
 
 	it("writes out a large answer that arrived during the drain before closing its connection", async () => {
