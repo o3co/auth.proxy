@@ -221,7 +221,7 @@ const watchAnswer = (res: ServerResponse, next: NextFunction, restoreHead: () =>
 			// The log line says the answer had started, not only what the connection threw.
 			const cause = new Error(
 				`upstream answer cut off after it started: ${thrown?.message ?? "ended before it was complete"}`,
-				{ cause: thrown },
+				thrown === undefined ? undefined : { cause: thrown },
 			);
 			next(new UpstreamUnavailableError(502, cause));
 		});

@@ -95,7 +95,7 @@ Shared stages ([`stage-refusals.mts`](stage-refusals.mts), saying what [`src/rou
 | Event | Level | When | Fields |
 | --- | --- | --- | --- |
 | `injection.body_too_large` | info | A body over `http.bodyLimitSize`: `413 body_too_large`. | `limitBytes`; `contentLength` when the request declared one |
-| `injection.upstream_unavailable` | error | Before its answer started, the upstream could not be reached, dropped the exchange or timed out: `upstream_unavailable`, `502` or `504`. | `error` |
+| `injection.upstream_unavailable` | error | The upstream could not be reached, dropped the exchange or timed out: `upstream_unavailable`, `502` or `504` — or, once some of its answer had reached the caller, cut it off, and the caller's connection was closed. | `error` |
 | `injection.request_failed` | info for a `4xx`, error otherwise | Anything else no stage answered — a body that ended early: `request_failed` with the error's own status, or `500`. | `error` |
 
 Exchange path ([`decideExchange`](exchange.mts)). An exchanged token replaces `Authorization` by design, so this path writes no `authorization_override`:
