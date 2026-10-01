@@ -53,12 +53,9 @@ describe("graceful shutdown with a kept-alive caller", () => {
 		const { port } = server.address() as AddressInfo;
 		socket = connect(port, "127.0.0.1");
 		let text = "";
-		let closed = false;
+		const closed = new Promise<void>((resolve) => socket?.on("close", () => resolve()));
 		socket.on("data", (chunk: Buffer) => {
 			text += chunk.toString("latin1");
-		});
-		socket.on("close", () => {
-			closed = true;
 		});
 		const nextRequest = () =>
 			new Promise<ServerResponse>((resolve) => {
@@ -78,7 +75,8 @@ describe("graceful shutdown with a kept-alive caller", () => {
 			shutDown: () => signal(),
 			exitCode,
 			received: () => text,
-			closed: () => closed,
+			/** Resolves when the server closes the caller's connection. */
+			closed,
 		};
 	};
 
@@ -91,8 +89,8 @@ describe("graceful shutdown with a kept-alive caller", () => {
 		res.end("in flight");
 
 		expect(await caller.exitCode).toBe(0);
+		await caller.closed;
 		expect(caller.received().toLowerCase()).toContain("\r\nconnection: close");
-		expect(caller.closed()).toBe(true);
 	});
 
 	it("closes the connection of an answer already under way once it ends, and drains", async () => {
@@ -105,6 +103,7 @@ describe("graceful shutdown with a kept-alive caller", () => {
 		res.end(" and ended");
 
 		expect(await caller.exitCode).toBe(0);
+		await caller.closed;
 		expect(caller.received()).toContain("ended");
 	});
 });
