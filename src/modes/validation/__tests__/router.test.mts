@@ -567,7 +567,10 @@ describe("validation router", () => {
 			caller.on("error", () => {});
 			caller.end();
 			// Leave once the request is at the upstream, and wait for the
-			// library's abort to reach it there, then for the proxy's side of it.
+			// library's abort to reach it there. The proxy's socket closes in the
+			// same batch of close callbacks as the upstream's, or an earlier one,
+			// so its error has reached `proxyErrorHandler` before any timer; a
+			// microtask alone is not enough.
 			const atUpstream = await upstreamRequest;
 			atUpstream.on("error", () => {});
 			const aborted = new Promise((resolve) => atUpstream.once("close", resolve));
@@ -575,7 +578,7 @@ describe("validation router", () => {
 			await aborted;
 			await new Promise((resolve) => setTimeout(resolve, 50));
 
-			// The request reached the upstream, so the library's own abort ran.
+			// The upstream saw the library's own abort: its request closed.
 			expect(slowReached).toBe(1);
 			const events = logged.error.mock.calls.map(([fields]) => (fields as { event?: string }).event);
 			expect(events).not.toContain("validation.upstream_unavailable");
@@ -592,7 +595,18 @@ describe("validation router", () => {
 	// request failing, though no one is left to answer.
 	it("logs a caller that leaves partway through its body as request_failed at info", async () => {
 		vi.stubGlobal("fetch", vi.fn(async () => Response.json({ active: true })));
-		const logged = { info: vi.fn(), warn: vi.fn(), error: vi.fn(), debug: vi.fn() };
+		let seen: () => void = () => {};
+		const incoming = new Promise<void>((resolve) => {
+			seen = resolve;
+		});
+		const logged = {
+			info: vi.fn((...args: [string] | [Record<string, unknown>, string]) => {
+				if (typeof args[0] === "object" && args[0].event === "validation.incoming_request") seen();
+			}),
+			warn: vi.fn(),
+			error: vi.fn(),
+			debug: vi.fn(),
+		};
 		const front = express()
 			.use(createRouter({ config: makeConfig(upstreamPort), deps: { logger: logged } }))
 			.listen(0, "127.0.0.1");
@@ -604,7 +618,8 @@ describe("validation router", () => {
 				"POST /protected HTTP/1.1\r\nHost: t\r\nAuthorization: Bearer t\r\nContent-Length: 1000\r\n\r\n",
 			);
 			socket.write(Buffer.alloc(100, "x"));
-			await new Promise((resolve) => setTimeout(resolve, 100));
+			// Leave once the router has the request, partway through its body.
+			await incoming;
 			socket.destroy();
 			// Until the refusal is logged, or a deadline that fails on the assertion.
 			const events = () => logged.info.mock.calls.map(([fields]) => (fields as { event?: string }).event);
