@@ -18,16 +18,18 @@ and this project adheres to [Semantic Versioning](https://semver.org/spec/v2.0.0
   instead of `INJECTION_EXCHANGE_CLIENT_SECRET`), `INJECTION_CLIENT_KEY` (the
   session grant, which stays a public client while it is unset), and the
   provider's issuer identifier, `VALIDATION_PROVIDER_ISSUER` (required with
-  `CLIENT_KEY`) and `INJECTION_PROVIDER_ISSUER` (required with either
-  injection key). A key is a private JWK as JSON text — Ed25519 (`EdDSA`), EC
+  `CLIENT_KEY`) and `INJECTION_PROVIDER_ISSUER` (required with
+  `INJECTION_CLIENT_KEY`, or with `INJECTION_EXCHANGE_CLIENT_KEY` when the
+  exchange is enabled). A key is a private JWK as JSON text — Ed25519 (`EdDSA`), EC
   P-256/P-384/P-521 (`ES*`) or RSA of 2048 bits or more (`RS256`, or the JWK's
   `RS*`/`PS*`) — supplied from the environment, not written into
   `application.conf`, which the image build copies. With a key, the call
   carries `client_id`, `client_assertion_type` and `client_assertion` in its
   body and no `Authorization` header; the assertion has `iss` = `sub` = the
   client id, `aud` = the configured issuer, a random `jti`, a 60-second life
-  and `typ: client-authentication+jwt`. Boot refuses, naming the variables, a
-  key and a secret for the same client, a key the proxy cannot sign with (its
+  and `typ: client-authentication+jwt`. Boot refuses, naming the configuration
+  keys (`auth.validation.client.clientKey`, `auth.injection.providerIssuer`,
+  …), a key and a secret for the same client, a key the proxy cannot sign with (its
   `use` or `key_ops` forbid signing, its public members are not its private
   key's, or its `alg` is `Ed25519` rather than `EdDSA` — the key is never
   printed), a key without an issuer, an issuer no key uses, and an issuer the
@@ -36,7 +38,9 @@ and this project adheres to [Semantic Versioning](https://semver.org/spec/v2.0.0
   away, or a clock far enough off — is answered as any refused client
   authentication: `502 Provider Configuration Error` in validation,
   `502 provider_config_error` in injection. A deployment that sets none of
-  the new variables sends exactly what it sent before. **Action:** register
+  the new variables sends the same request as before — the same headers with
+  the same values, and the same body; only the `Authorization` header's
+  position among the headers moved. **Action:** register
   the public key at the provider, then set the key and the issuer (copied
   from the provider's discovery document); the README's "Client
   authentication with a private key" covers switching an existing client and
@@ -62,14 +66,17 @@ operator sees on the wire and in the logs, and what to do.
   one grammar — a number, optionally `+`, with an optional
   `b`/`kb`/`mb`/`gb`/`tb`/`pb` (1kb = 1024) — and values the body reader used
   to misread fail at boot: `10 megabytes`, `10k`, `" 10mb"` and `10kib` (read
-  as 10 bytes), `1e3` (1 byte), `""`, `abc` and `.5mb` (no limit), and negative
-  values. Every value read as meant — `10mb`, `1.5MB`, `1024`, `+10mb`, `0` —
+  as 10 bytes), `1e3` (1 byte), `""` (read as the library's default, 1mb), `abc` and `.5mb` (no limit),
+  and negative values. Every value read as meant — `10mb`, `1.5MB`, `1024`, `+10mb`, `0` —
   reads the same. **Action:** a deployment whose `HTTP_BODY_LIMIT_SIZE` is
-  one of the refused spellings fails to start; write the size it meant.
+  one of the refused spellings fails to start; write the size it meant. An
+  empty `HTTP_BODY_LIMIT_SIZE` ran with a 1mb limit: set `1mb` to keep it,
+  since unsetting the variable gives the `10mb` default.
 
 - **BREAKING: an upstream that failed is `502` (`504` on a timeout), logged as
   `<mode>.upstream_unavailable` (#157, #162).** An upstream the proxy could
-  not reach was answered `500` under `<mode>.request_failed`; one that reset
+  not reach was express's HTML `500` page, with the stack on stderr and no
+  log event; one that reset
   the connection was answered by the proxying library itself, a bodyless
   `504 text/plain` with `X-Timeout-Reason`, unlogged. A refused connection, an
   unknown host, a host or network that is down, a failed TLS handshake or
@@ -78,8 +85,9 @@ operator sees on the wire and in the logs, and what to do.
   `{ "code", "message" }`, injection
   `{ "error": "upstream_unavailable", "error_description" }`, logged at error
   under the new event. A caller that hangs up before a slow upstream answers
-  is still not logged. **Action:** alerts keyed on `request_failed` stop
-  firing for an upstream failure — alert on `upstream_unavailable`. Only a
+  is still not logged. **Action:** alerts on the proxy's `500`s or its
+  stderr stacks no longer see an upstream failure — alert on
+  `<mode>.upstream_unavailable` (`502`/`504`). Only a
   request the upstream never received is safe to retry blindly.
 
 - **BREAKING: the upstream no longer receives the caller's hop-by-hop fields
@@ -116,7 +124,8 @@ operator sees on the wire and in the logs, and what to do.
   `<mode>.request_failed` — at info for a `4xx`, at error otherwise.
 
 - **`Expect: 100-continue` is answered by the proxy (#158, #161).** It says
-  `100 Continue` only when the declared length is within the limit; an
+  `100 Continue` unless the declared length is over the limit (a chunked
+  body, which declares none, is measured as it is read); an
   oversized upload is refused `413` on its headers, before a client that
   waits sends its body, and the connection is then closed rather than kept
   alive. A client that sends the body without waiting may meet the closed
@@ -125,8 +134,8 @@ operator sees on the wire and in the logs, and what to do.
 
 - **A request no router answers is `404 Not Found` at once (#161).** Outside
   `http.pathPrefix` and not the healthcheck, it was express's HTML page
-  (`Cannot POST /path`) after reading the whole body; an oversized upload
-  that expected 100-continue there waited until the client gave up. It is now
+  (`Cannot POST /path`) after reading the whole body, an upload that expected
+  100-continue having been invited to send it in full. It is now
   `404` with the text `Not Found`, without reading the body.
 
 - **Graceful shutdown closes a busy kept-alive connection after its last
@@ -145,16 +154,15 @@ operator sees on the wire and in the logs, and what to do.
 
 ### Security
 
-- **`Proxy-Authorization` no longer reaches the upstream, and a caller can no
-  longer strip what the proxy decides by naming it in `Connection` (#160,
-  #164).** The upstream stage copied every inbound header but `connection`
-  and `host`, so a credential the caller presented for this hop went to the
-  upstream. Honouring `Connection` naively is the known abuse of an
-  intermediary: here a caller could have named `Authorization` to take away
-  the token the proxy forwarded or injected, `x-request-id` to take away the
-  request id, or `Connection` to remove the proxy's `connection: close` and
-  have the upstream socket pooled and reused for the next caller's request.
-  Those three are kept. Also BREAKING under Changed.
+- **`Proxy-Authorization` no longer reaches the upstream (#160, #164).** The
+  upstream stage copied every inbound header but `connection` and `host`, so
+  a credential the caller presented for this hop went to the upstream. The
+  fields the inbound `Connection` names are now dropped too, except
+  `Authorization`, `x-request-id` and `Connection`: a caller cannot use
+  `Connection` to take away the token the proxy forwards or injected, the
+  request id, or the proxy's `connection: close` (which would have the
+  upstream socket pooled and reused for the next caller's request). Also
+  BREAKING under Changed.
 
 - **An oversized declared body spends none of the provider's budget (#155).**
   It is refused before introspection or a token mint; see Changed.
@@ -183,8 +191,12 @@ operator sees on the wire and in the logs, and what to do.
   response; Node announces the connection it keeps or closes. A field the
   proxy set before forwarding (`x-request-id`, the CORS fields) keeps the
   proxy's value, and an upstream naming `Transfer-Encoding`, `Connection` or
-  `Date` cannot take Node's framing, announcement or `Date` away. Answers
-  still stream.
+  `Date` cannot take Node's framing, announcement or `Date` away. A caller
+  that read one of these from the upstream stops seeing it. Answers still
+  stream. Callers' connections now stay open between proxied answers and
+  close after Node's default 5-second keep-alive idle timeout, which the
+  proxy does not configure: a load balancer that pools connections to the
+  proxy should idle them out in less than that.
 
 - **An upstream answer cut off after it started closes the caller's
   connection and is logged (#163, #169).** It left the caller's connection
