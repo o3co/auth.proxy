@@ -36,6 +36,8 @@ import { type ProxyProcess, SUITE_TIMEOUT_MS, send, startProxy } from "./app-pro
 import { expectContinue } from "./expect-continue.mjs";
 import { type FakeProvider, type FakeResponse, json, startFakeProvider } from "./fake-provider.mjs";
 import {
+	CUT_PATH,
+	HEAD_ONLY_PATH,
 	headerPairs,
 	RESET_PATH,
 	type RecordingUpstream,
@@ -1136,5 +1138,50 @@ describe("the app in injection mode, in front of an upstream that resets the con
 			line("injection.upstream_unavailable", "error", { msg: "upstream unavailable", error: expect.any(String) }),
 		);
 		expect(upstream.receivedFor(requestId)).toHaveLength(1);
+	});
+
+	// Nothing of the answer sent yet, so it is a 502 — the proxy's own, not
+	// wearing the upstream's head.
+	it("answers 502 upstream_unavailable, without the upstream's headers, on an upstream that sent only its head", async () => {
+		const requestId = "injection-upstream-head-only";
+		fake.respond(TOKEN_PATH, issued("minted-head"));
+
+		const res = await send(proxy.origin, {
+			path: HEAD_ONLY_PATH,
+			headers: { "x-request-id": requestId, cookie: "sid=sess-head" },
+		});
+
+		expect(res.status).toBe(502);
+		for (const name of ["content-encoding", "set-cookie", "cache-control"]) {
+			expect(res.headers[name]).toBeUndefined();
+		}
+		expect(res.headers["x-request-id"]).toBe(requestId);
+		expect(res.headers["content-type"]).toMatch(/^application\/json/);
+		expect(res.headers.date).toBeDefined();
+		expect(res.json()).toEqual({ error: "upstream_unavailable", error_description: "Bad Gateway" });
+		const lines = await proxy.linesFor(requestId);
+		expect(lines.at(-1)).toMatchObject({ event: "injection.upstream_unavailable", level: "error" });
+	});
+
+	// Its status already sent, the answer cannot become a 502: the caller's
+	// connection is closed, so the answer ends early, and the failure logged.
+	it("closes the caller's connection on an answer cut off after it started, logged injection.upstream_unavailable", async () => {
+		const requestId = "injection-upstream-cut";
+		fake.respond(TOKEN_PATH, issued("minted-cut"));
+
+		await expect(
+			send(proxy.origin, {
+				path: CUT_PATH,
+				headers: { "x-request-id": requestId, cookie: "sid=sess-cut" },
+			}),
+		).rejects.toThrow("aborted");
+		const lines = await proxy.linesFor(requestId);
+		expect(lines[0]).toMatchObject(INCOMING);
+		expect(lines.at(-1)).toMatchObject(
+			line("injection.upstream_unavailable", "error", {
+				msg: "upstream unavailable",
+				error: expect.stringContaining("after it started"),
+			}),
+		);
 	});
 });

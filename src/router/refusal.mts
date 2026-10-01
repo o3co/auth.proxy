@@ -17,9 +17,12 @@ export type StageRefusal =
 	/** The body is over `http.bodyLimitSize`: declared up front, or found while reading it. */
 	| { reason: "body_too_large"; status: 413; limitBytes: number; contentLength?: number }
 	/**
-	 * Before its answer started, the upstream could not be reached or dropped
-	 * the exchange: `502`, or `504` when it timed out. `error` is what the
-	 * connection threw.
+	 * The upstream could not be reached or dropped the exchange: `502`, or
+	 * `504` when it timed out. Before any of its answer reached the caller,
+	 * the refusal answers the caller; once some of it has, the status is spent,
+	 * and the refusal is only logged as the caller's connection is closed.
+	 * `error` is what the connection threw — for an answer cut off after it
+	 * started, an error that says so, around it.
 	 */
 	| { reason: "upstream_unavailable"; status: 502 | 504; error: unknown }
 	/** Anything else that reached the end of the router unanswered. */

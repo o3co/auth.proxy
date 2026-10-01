@@ -25,6 +25,7 @@
  */
 
 import { generateKeyPairSync } from "node:crypto";
+import { request as httpRequest } from "node:http";
 import { jwtVerify } from "jose";
 import { afterAll, afterEach, beforeAll, describe, expect, it, vi } from "vitest";
 
@@ -32,10 +33,13 @@ import { type ProxyProcess, SUITE_TIMEOUT_MS, send, startProxy } from "./app-pro
 import { expectContinue } from "./expect-continue.mjs";
 import { type FakeProvider, type FakeResponse, json, redirect, startFakeProvider } from "./fake-provider.mjs";
 import {
+	CUT_PATH,
+	HEAD_ONLY_PATH,
 	headerPairs,
 	RESET_PATH,
 	type RecordingUpstream,
 	startRecordingUpstream,
+	TRICKLE_PATH,
 	upstreamBody,
 } from "./recording-upstream.mjs";
 
@@ -673,6 +677,81 @@ describe("the app in validation mode, in front of an upstream that resets the co
 			},
 		]);
 		expect(upstream.receivedFor(requestId)).toHaveLength(1);
+	});
+
+	// Nothing of the answer sent yet, so it is a 502 — the proxy's own, not
+	// wearing the upstream's head.
+	it("answers 502 in the refusal shape, without the upstream's headers, on an upstream that sent only its head", async () => {
+		const requestId = "validation-upstream-head-only";
+		fake.respond(INTROSPECT_PATH, json(200, { active: true }));
+
+		const res = await send(proxy.origin, {
+			path: HEAD_ONLY_PATH,
+			headers: { "x-request-id": requestId, authorization: "Bearer tok-head" },
+		});
+
+		expect(res.status).toBe(502);
+		for (const name of ["content-encoding", "set-cookie", "cache-control"]) {
+			expect(res.headers[name]).toBeUndefined();
+		}
+		expect(res.headers["x-request-id"]).toBe(requestId);
+		expect(res.headers["content-type"]).toMatch(/^application\/json/);
+		expect(res.headers.date).toBeDefined();
+		expect(res.json()).toEqual({ code: 502, message: "Bad Gateway" });
+		const lines = await proxy.linesFor(requestId);
+		expect(lines.at(-1)).toMatchObject({ event: "validation.upstream_unavailable", level: "error" });
+	});
+
+	// Its status already sent, the answer cannot become a 502: the caller's
+	// connection is closed, so the answer ends early, and the failure logged.
+	it("closes the caller's connection on an answer cut off after it started, logged validation.upstream_unavailable", async () => {
+		const requestId = "validation-upstream-cut";
+		fake.respond(INTROSPECT_PATH, json(200, { active: true }));
+
+		await expect(
+			send(proxy.origin, {
+				path: CUT_PATH,
+				headers: { "x-request-id": requestId, authorization: "Bearer tok-cut" },
+			}),
+		).rejects.toThrow("aborted");
+		expect(await proxy.linesFor(requestId)).toMatchObject([
+			INCOMING,
+			{
+				event: "validation.upstream_unavailable",
+				level: "error",
+				msg: "upstream unavailable",
+				error: { message: expect.stringContaining("after it started") },
+			},
+		]);
+	});
+
+	// The caller leaving mid-download is not the upstream failing.
+	it("logs no unavailable upstream when the caller leaves partway through an answer", async () => {
+		const requestId = "validation-caller-leaves-midway";
+		fake.respond(INTROSPECT_PATH, json(200, { active: true }));
+
+		const status = await new Promise<number | undefined>((resolve, reject) => {
+			const timer = setTimeout(() => reject(new Error("no part of the answer arrived")), 5_000);
+			const req = httpRequest(
+				new URL(TRICKLE_PATH, proxy.origin),
+				{ headers: { "x-request-id": requestId, authorization: "Bearer tok-leave" }, agent: false },
+				(res) => {
+					res.once("data", () => {
+						clearTimeout(timer);
+						req.destroy();
+						resolve(res.statusCode);
+					});
+				},
+			);
+			req.on("error", () => {});
+			req.end();
+		});
+
+		// The upstream's answer, left midway.
+		expect(status).toBe(200);
+		expect(upstream.receivedFor(requestId)).toHaveLength(1);
+		const lines = await proxy.linesFor(requestId);
+		expect(lines.map((line) => line.event)).not.toContain("validation.upstream_unavailable");
 	});
 });
 
