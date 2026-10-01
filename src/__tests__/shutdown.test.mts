@@ -23,6 +23,7 @@ function makeServer() {
 		}),
 		closeIdleConnections: vi.fn(),
 		closeAllConnections: vi.fn(),
+		on: vi.fn(),
 	};
 	return {
 		server: server as unknown as Server,

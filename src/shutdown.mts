@@ -13,7 +13,7 @@
  * See the License for the specific language governing permissions and
  * limitations under the License.
  */
-import type { Server } from "node:http";
+import type { Server, ServerResponse } from "node:http";
 import type { Logger } from "./logger.mjs";
 
 /**
@@ -27,7 +27,11 @@ import type { Logger } from "./logger.mjs";
  * 2. **New connections stop immediately** (`close`), and idle keep-alive
  *    sockets are released (`closeIdleConnections`) — they hold the server open
  *    with no request behind them, so a quiet proxy would otherwise wait out
- *    the whole deadline for nothing.
+ *    the whole deadline for nothing. A connection busy with a request is not
+ *    kept alive past its answer: an answer not yet started says
+ *    `Connection: close`, and one under way has its connection released as
+ *    it ends, so a caller that keeps its connection alive cannot hold the
+ *    drain open until `keepAliveTimeout`.
  * 3. **In-flight requests get `drainTimeoutMs`** (default 10s) to finish;
  *    `server.close()` alone waits indefinitely on one stuck request.
  * 4. **Past the deadline, remaining connections are cut**
@@ -99,6 +103,31 @@ export function installGracefulShutdown(server: Server, options: GracefulShutdow
 
 	let shuttingDown = false;
 	let finished = false;
+
+	/** The answers still being written, which the drain must not keep alive. */
+	const answering = new Set<ServerResponse>();
+
+	/**
+	 * Ends keep-alive for `res`: an answer whose head is not written yet says
+	 * `Connection: close` and Node closes after it; for one already under way
+	 * the connection goes idle as it ends, and is released then.
+	 */
+	const closeAfter = (res: ServerResponse): void => {
+		if (!res.headersSent) {
+			res.shouldKeepAlive = false;
+			return;
+		}
+		res.once("finish", () => setImmediate(() => server.closeIdleConnections()));
+	};
+
+	server.on("request", (_req, res: ServerResponse) => {
+		if (shuttingDown) {
+			closeAfter(res);
+			return;
+		}
+		answering.add(res);
+		res.once("close", () => answering.delete(res));
+	});
 
 	/** Sentinel so a timed-out cleanup is reported as that, not as a throw. */
 	const CLEANUP_TIMED_OUT = Symbol("cleanup-timed-out");
@@ -192,6 +221,7 @@ export function installGracefulShutdown(server: Server, options: GracefulShutdow
 		// lost by releasing them — and without this a quiet server waits out
 		// the whole deadline for connections that will never send anything.
 		server.closeIdleConnections();
+		for (const res of answering) closeAfter(res);
 	};
 
 	for (const signal of SIGNALS) onSignal(signal, handler);
