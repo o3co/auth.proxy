@@ -13,7 +13,7 @@
  * See the License for the specific language governing permissions and
  * limitations under the License.
  */
-import { subscribe } from "node:diagnostics_channel";
+import { subscribe, unsubscribe } from "node:diagnostics_channel";
 import type { Server, ServerResponse } from "node:http";
 import type { Socket } from "node:net";
 import type { Logger } from "./logger.mjs";
@@ -26,15 +26,17 @@ import type { Logger } from "./logger.mjs";
  *
  * 1. **SIGTERM and SIGINT** both start it; a second signal is ignored rather
  *    than starting a second cleanup over the first one's work.
- * 2. **New connections stop immediately** (`close`), and idle keep-alive
- *    sockets are released (`closeIdleConnections`) — they hold the server open
- *    with no request behind them, so a quiet proxy would otherwise wait out
- *    the whole deadline for nothing. A connection busy with a request is not
- *    kept alive past its last answer — pipelined answers before it still go
- *    out, and a request arriving during the drain is answered too: that
- *    answer says `Connection: close` when its head is not yet written, and
- *    the connection is released as it ends, so a caller that keeps its
- *    connection alive cannot hold the drain open until `keepAliveTimeout`.
+ * 2. **New connections stop immediately** (`close`), and each open one closes
+ *    once its last answer has been written out — at once for an idle
+ *    keep-alive connection, which would otherwise hold a quiet proxy for the
+ *    whole deadline. A connection busy with a request is not kept alive past
+ *    its last answer: pipelined answers before it still go out, a request
+ *    arriving during the drain is answered too, and the last answer says
+ *    `Connection: close` when its head is not yet written. An answer that
+ *    ends during the drain is written out before its connection closes,
+ *    whichever connection finishes first. One that had ended but was still
+ *    being written when the drain started is Node's to keep: `close` releases
+ *    idle connections itself, and counts an ended answer as idle.
  * 3. **In-flight requests get `drainTimeoutMs`** (default 10s) to finish;
  *    `server.close()` alone waits indefinitely on one stuck request.
  * 4. **Past the deadline, remaining connections are cut**
@@ -107,45 +109,72 @@ export function installGracefulShutdown(server: Server, options: GracefulShutdow
 	let shuttingDown = false;
 	let finished = false;
 
-	/**
-	 * The latest request each open connection carries. Its answer is the one
-	 * the drain closes the connection after: answers to the requests pipelined
-	 * before it still go out on the connection.
-	 */
-	const latest = new Map<Socket, ServerResponse>();
+	/** A connection's latest request: its answer, and whether Node meant to keep the connection after it. */
+	interface Carried {
+		readonly response: ServerResponse;
+		readonly keepAlive: boolean;
+	}
 
 	/**
-	 * Ends keep-alive after `res`. An answer whose head is not written yet says
-	 * `Connection: close`, and Node closes after it. Either way the connection
-	 * is released once the answer ends, since it is idle then: an answer under
-	 * way has already said keep-alive, and a `Connection` field an answer set
-	 * overrides `shouldKeepAlive`. A connection still reading a request body
-	 * when its answer ends is not idle, and waits for the deadline.
+	 * Each open connection, and the latest request it carries — none before
+	 * its first. That request's answer is the one the drain closes the
+	 * connection after: answers to the requests pipelined before it still go
+	 * out on the connection.
 	 */
-	const closeAfter = (res: ServerResponse): void => {
+	const connections = new Map<Socket, Carried | undefined>();
+
+	const track = (socket: Socket): void => {
+		if (connections.has(socket)) return;
+		connections.set(socket, undefined);
+		socket.once("close", () => connections.delete(socket));
+	};
+
+	/**
+	 * Closes `socket` after `res`, its latest answer, has been written out. An
+	 * answer whose head is not written yet says `Connection: close` too. The
+	 * close is the drain's own, not left to Node's: an answer under way has
+	 * already said keep-alive, and a `Connection` field an answer set
+	 * overrides `shouldKeepAlive`. `destroySoon` waits for what is still
+	 * buffered, so an answer that has ended but is still being written is not
+	 * cut; and the connection is closed only while that answer is still its
+	 * latest.
+	 */
+	const closeAfter = (socket: Socket, res: ServerResponse): void => {
 		if (!res.headersSent) res.shouldKeepAlive = false;
-		res.once("finish", () => server.closeIdleConnections());
+		if (res.writableFinished) {
+			socket.destroySoon();
+			return;
+		}
+		res.once("finish", () => {
+			if (connections.get(socket)?.response === res) socket.destroySoon();
+		});
 	};
 
 	/**
 	 * Every request this server receives, before any listener answers it —
 	 * those that expect `100-continue` included, which never fire `request`.
+	 * `shouldKeepAlive` is still what Node took from the request.
 	 */
-	subscribe("http.server.request.start", (message) => {
+	const onRequest = (message: unknown): void => {
 		const { server: from, socket, response } = message as {
 			server: unknown;
 			socket: Socket;
 			response: ServerResponse;
 		};
 		if (from !== server) return;
-		const previous = latest.get(socket);
-		if (previous === undefined) socket.once("close", () => latest.delete(socket));
-		latest.set(socket, response);
+		track(socket);
+		const previous = connections.get(socket);
+		connections.set(socket, { response, keepAlive: response.shouldKeepAlive });
 		if (!shuttingDown) return;
 		// A later request on the connection: it, not the one before, closes it.
-		if (previous !== undefined && !previous.headersSent) previous.shouldKeepAlive = true;
-		closeAfter(response);
-	});
+		if (previous !== undefined && !previous.response.headersSent) {
+			previous.response.shouldKeepAlive = previous.keepAlive;
+		}
+		closeAfter(socket, response);
+	};
+	subscribe("http.server.request.start", onRequest);
+	server.on("connection", track);
+	server.once("close", () => unsubscribe("http.server.request.start", onRequest));
 
 	/** Sentinel so a timed-out cleanup is reported as that, not as a throw. */
 	const CLEANUP_TIMED_OUT = Symbol("cleanup-timed-out");
@@ -235,11 +264,14 @@ export function installGracefulShutdown(server: Server, options: GracefulShutdow
 			}
 			void finish(0, "drained");
 		});
-		// Idle keep-alive sockets have no request behind them, so nothing is
-		// lost by releasing them — and without this a quiet server waits out
-		// the whole deadline for connections that will never send anything.
-		server.closeIdleConnections();
-		for (const res of latest.values()) closeAfter(res);
+		// A connection with no request yet, or whose last answer has been
+		// written out, has nothing behind it, so nothing is lost by closing it
+		// now — and without this a quiet server waits out the whole deadline
+		// for connections that will never send anything.
+		for (const [socket, carried] of connections) {
+			if (carried === undefined) socket.destroySoon();
+			else closeAfter(socket, carried.response);
+		}
 	};
 
 	for (const signal of SIGNALS) onSignal(signal, handler);
