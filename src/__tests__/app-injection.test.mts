@@ -36,6 +36,7 @@ import { type ProxyProcess, SUITE_TIMEOUT_MS, send, startProxy } from "./app-pro
 import { expectContinue } from "./expect-continue.mjs";
 import { type FakeProvider, type FakeResponse, json, startFakeProvider } from "./fake-provider.mjs";
 import {
+	CUT_PATH,
 	headerPairs,
 	RESET_PATH,
 	type RecordingUpstream,
@@ -1136,5 +1137,24 @@ describe("the app in injection mode, in front of an upstream that resets the con
 			line("injection.upstream_unavailable", "error", { msg: "upstream unavailable", error: expect.any(String) }),
 		);
 		expect(upstream.receivedFor(requestId)).toHaveLength(1);
+	});
+
+	// Its status already sent, the answer cannot become a 502: the caller's
+	// connection is closed, so the answer ends early, and the failure logged.
+	it("closes the caller's connection on an answer cut off after it started, logged injection.upstream_unavailable", async () => {
+		const requestId = "injection-upstream-cut";
+		fake.respond(TOKEN_PATH, issued("minted-cut"));
+
+		await expect(
+			send(proxy.origin, {
+				path: CUT_PATH,
+				headers: { "x-request-id": requestId, cookie: "sid=sess-cut" },
+			}),
+		).rejects.toThrow();
+		const lines = await proxy.linesFor(requestId);
+		expect(lines[0]).toMatchObject(INCOMING);
+		expect(lines.at(-1)).toMatchObject(
+			line("injection.upstream_unavailable", "error", { msg: "upstream unavailable", error: expect.any(String) }),
+		);
 	});
 });

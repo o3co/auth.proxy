@@ -42,6 +42,12 @@ export interface RecordingUpstream {
  */
 export const RESET_PATH = "/__upstream_resets";
 
+/**
+ * A path the upstream starts answering — status, headers and part of the body
+ * — and then resets the connection on: an answer cut off after it started.
+ */
+export const CUT_PATH = "/__upstream_cuts_off";
+
 /** The body the upstream answers `path` with. */
 export const upstreamBody = (path: string): { upstream: "reached"; path: string } => ({
 	upstream: "reached",
@@ -75,6 +81,12 @@ export const startRecordingUpstream = async (): Promise<RecordingUpstream> => {
 			recorded.body = Buffer.concat(chunks);
 			if (path.endsWith(RESET_PATH)) {
 				req.socket.resetAndDestroy();
+				return;
+			}
+			if (path.endsWith(CUT_PATH)) {
+				res.writeHead(200, { "Content-Type": "application/json", "Content-Length": "100" });
+				res.write('{"partial":');
+				setTimeout(() => req.socket.resetAndDestroy(), 20);
 				return;
 			}
 			res.writeHead(200, { "Content-Type": "application/json" });

@@ -32,6 +32,7 @@ import { type ProxyProcess, SUITE_TIMEOUT_MS, send, startProxy } from "./app-pro
 import { expectContinue } from "./expect-continue.mjs";
 import { type FakeProvider, type FakeResponse, json, redirect, startFakeProvider } from "./fake-provider.mjs";
 import {
+	CUT_PATH,
 	headerPairs,
 	RESET_PATH,
 	type RecordingUpstream,
@@ -673,6 +674,24 @@ describe("the app in validation mode, in front of an upstream that resets the co
 			},
 		]);
 		expect(upstream.receivedFor(requestId)).toHaveLength(1);
+	});
+
+	// Its status already sent, the answer cannot become a 502: the caller's
+	// connection is closed, so the answer ends early, and the failure logged.
+	it("closes the caller's connection on an answer cut off after it started, logged validation.upstream_unavailable", async () => {
+		const requestId = "validation-upstream-cut";
+		fake.respond(INTROSPECT_PATH, json(200, { active: true }));
+
+		await expect(
+			send(proxy.origin, {
+				path: CUT_PATH,
+				headers: { "x-request-id": requestId, authorization: "Bearer tok-cut" },
+			}),
+		).rejects.toThrow();
+		expect(await proxy.linesFor(requestId)).toMatchObject([
+			INCOMING,
+			{ event: "validation.upstream_unavailable", level: "error", msg: "upstream unavailable" },
+		]);
 	});
 });
 
