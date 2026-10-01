@@ -32,7 +32,9 @@ import type { Logger } from "./logger.mjs";
  *    whole deadline. A connection busy with a request is not kept alive past
  *    its last answer: pipelined answers before it still go out, a request
  *    arriving during the drain is answered too, and the last answer says
- *    `Connection: close` when its head is not yet written. An answer that
+ *    `Connection: close` when its head is unwritten as it takes its turn on
+ *    the connection — not one whose head was written while it waited, since
+ *    a request pipelined after it may still be on its way. An answer that
  *    ends during the drain is written out before its connection closes,
  *    whichever connection finishes first. One that had ended but was still
  *    being written when the drain started is Node's to keep: `close` releases
@@ -130,17 +132,29 @@ export function installGracefulShutdown(server: Server, options: GracefulShutdow
 	};
 
 	/**
-	 * Closes `socket` after `res`, its latest answer, has been written out. An
-	 * answer whose head is not written yet says `Connection: close` too. The
-	 * close is the drain's own, not left to Node's: an answer under way has
-	 * already said keep-alive, and a `Connection` field an answer set
-	 * overrides `shouldKeepAlive`. `destroySoon` waits for what is still
-	 * buffered, so an answer that has ended but is still being written is not
-	 * cut; and the connection is closed only while that answer is still its
-	 * latest.
+	 * Closes `socket` after `res`, its latest answer, has been written out.
+	 *
+	 * The answer says `Connection: close` when its head is still unwritten as
+	 * it takes its turn on the connection (Node assigns it then, and says so
+	 * with `socket`), and only while it is still the latest. Not before: an
+	 * answer queued behind another may have its head written while a request
+	 * pipelined after it is still on its way, and a `close` it had said would
+	 * make Node drop that request's answer. A later request restores what Node
+	 * meant for the one before, while that one's head is unwritten.
+	 *
+	 * The close itself is the drain's own, not left to Node's: an answer
+	 * whose head was written first has already said keep-alive, and a
+	 * `Connection` field an answer set overrides `shouldKeepAlive`.
+	 * `destroySoon` waits for what is still buffered, so an answer that has
+	 * ended but is still being written is not cut; and the connection is
+	 * closed only while that answer is still its latest.
 	 */
 	const closeAfter = (socket: Socket, res: ServerResponse): void => {
-		if (!res.headersSent) res.shouldKeepAlive = false;
+		const announce = (): void => {
+			if (!res.headersSent && connections.get(socket)?.response === res) res.shouldKeepAlive = false;
+		};
+		if (res.socket === socket) announce();
+		else res.once("socket", announce);
 		if (res.writableFinished) {
 			socket.destroySoon();
 			return;
