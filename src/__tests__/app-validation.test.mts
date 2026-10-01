@@ -25,6 +25,7 @@
  */
 
 import { generateKeyPairSync } from "node:crypto";
+import { request as httpRequest } from "node:http";
 import { jwtVerify } from "jose";
 import { afterAll, afterEach, beforeAll, describe, expect, it, vi } from "vitest";
 
@@ -38,6 +39,7 @@ import {
 	RESET_PATH,
 	type RecordingUpstream,
 	startRecordingUpstream,
+	TRICKLE_PATH,
 	upstreamBody,
 } from "./recording-upstream.mjs";
 
@@ -704,11 +706,42 @@ describe("the app in validation mode, in front of an upstream that resets the co
 				path: CUT_PATH,
 				headers: { "x-request-id": requestId, authorization: "Bearer tok-cut" },
 			}),
-		).rejects.toThrow();
+		).rejects.toThrow("aborted");
 		expect(await proxy.linesFor(requestId)).toMatchObject([
 			INCOMING,
-			{ event: "validation.upstream_unavailable", level: "error", msg: "upstream unavailable" },
+			{
+				event: "validation.upstream_unavailable",
+				level: "error",
+				msg: "upstream unavailable",
+				error: { message: expect.stringContaining("after it started") },
+			},
 		]);
+	});
+
+	// The caller leaving mid-download is not the upstream failing.
+	it("logs no unavailable upstream when the caller leaves partway through an answer", async () => {
+		const requestId = "validation-caller-leaves-midway";
+		fake.respond(INTROSPECT_PATH, json(200, { active: true }));
+
+		await new Promise<void>((resolve, reject) => {
+			const req = httpRequest(
+				new URL(TRICKLE_PATH, proxy.origin),
+				{ headers: { "x-request-id": requestId, authorization: "Bearer tok-leave" }, agent: false },
+				(res) => {
+					res.once("data", () => {
+						req.destroy();
+						resolve();
+					});
+				},
+			);
+			req.on("error", () => {});
+			req.once("close", () => resolve());
+			req.end();
+			setTimeout(() => reject(new Error("no part of the answer arrived")), 5_000).unref();
+		});
+
+		const lines = await proxy.linesFor(requestId);
+		expect(lines.map((line) => line.event)).not.toContain("validation.upstream_unavailable");
 	});
 });
 

@@ -43,16 +43,23 @@ export interface RecordingUpstream {
 export const RESET_PATH = "/__upstream_resets";
 
 /**
- * A path the upstream starts answering — status, headers and part of the body
- * — and then resets the connection on: an answer cut off after it started.
+ * A path the upstream starts answering — status, headers and part of a body
+ * of declared length — and then closes the connection on: an answer cut off
+ * after it started.
  */
 export const CUT_PATH = "/__upstream_cuts_off";
 
 /**
  * A path the upstream sends only the head for — status and headers, a coding
- * among them — and then resets the connection on, before any of the body.
+ * among them — and then closes the connection on, before any of the body.
  */
 export const HEAD_ONLY_PATH = "/__upstream_sends_only_the_head";
+
+/**
+ * A path the upstream starts answering and then keeps open, sending nothing
+ * more until the connection closes: a download a caller can leave midway.
+ */
+export const TRICKLE_PATH = "/__upstream_trickles";
 
 /** The body the upstream answers `path` with. */
 export const upstreamBody = (path: string): { upstream: "reached"; path: string } => ({
@@ -92,13 +99,17 @@ export const startRecordingUpstream = async (): Promise<RecordingUpstream> => {
 			if (path.endsWith(HEAD_ONLY_PATH)) {
 				res.writeHead(200, { "Content-Type": "application/json", "Content-Encoding": "gzip", "Content-Length": "100" });
 				res.flushHeaders();
-				setTimeout(() => req.socket.resetAndDestroy(), 20);
+				req.socket.end();
 				return;
 			}
 			if (path.endsWith(CUT_PATH)) {
 				res.writeHead(200, { "Content-Type": "application/json", "Content-Length": "100" });
+				res.write('{"partial":', () => req.socket.end());
+				return;
+			}
+			if (path.endsWith(TRICKLE_PATH)) {
+				res.writeHead(200, { "Content-Type": "application/json", "Content-Length": "100" });
 				res.write('{"partial":');
-				setTimeout(() => req.socket.resetAndDestroy(), 20);
 				return;
 			}
 			res.writeHead(200, { "Content-Type": "application/json" });

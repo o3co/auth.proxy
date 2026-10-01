@@ -1167,11 +1167,14 @@ describe("the app in injection mode, in front of an upstream that resets the con
 				path: CUT_PATH,
 				headers: { "x-request-id": requestId, cookie: "sid=sess-cut" },
 			}),
-		).rejects.toThrow();
+		).rejects.toThrow("aborted");
 		const lines = await proxy.linesFor(requestId);
 		expect(lines[0]).toMatchObject(INCOMING);
 		expect(lines.at(-1)).toMatchObject(
-			line("injection.upstream_unavailable", "error", { msg: "upstream unavailable", error: expect.any(String) }),
+			line("injection.upstream_unavailable", "error", {
+				msg: "upstream unavailable",
+				error: expect.stringContaining("after it started"),
+			}),
 		);
 	});
 });
