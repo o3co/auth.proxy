@@ -33,11 +33,9 @@ import type { Logger } from "./logger.mjs";
  *    with a request is not kept alive past its last answer: pipelined
  *    answers before it still go out, a request arriving during the drain —
  *    or whose head was still arriving when it started — is answered too, and
- *    the last answer says `Connection: close` when its head is unwritten as
- *    it takes its turn on the connection, unless the answer set a
- *    `Connection` field of its own. Not one whose head was written while it
- *    waited, since a request pipelined after it may still be on its way. An
- *    answer that ends during the drain is written out before its connection
+ *    no answer to a request the server accepted is dropped. The close is not
+ *    announced with `Connection: close`, which would drop the answers to
+ *    requests pipelined after it. An answer that ends during the drain is written out before its connection
  *    closes, whichever connection finishes first. One that had ended but was
  *    still being written when the drain started is Node's to keep: `close`
  *    releases idle connections itself, and counts an ended answer as idle. A
@@ -115,19 +113,12 @@ export function installGracefulShutdown(server: Server, options: GracefulShutdow
 	let shuttingDown = false;
 	let finished = false;
 
-	/** A connection's latest request: its answer, and whether Node meant to keep the connection after it. */
-	interface Carried {
-		readonly response: ServerResponse;
-		readonly keepAlive: boolean;
-	}
-
 	/**
-	 * Each open connection, and the latest request it carries — none before
-	 * its first. That request's answer is the one the drain closes the
-	 * connection after: answers to the requests pipelined before it still go
-	 * out on the connection.
+	 * Each open connection, and the answer it is still writing — the latest,
+	 * when requests are pipelined; none before its first request, or once
+	 * that answer has been written out.
 	 */
-	const connections = new Map<Socket, Carried | undefined>();
+	const connections = new Map<Socket, ServerResponse | undefined>();
 
 	const track = (socket: Socket): void => {
 		if (connections.has(socket)) return;
@@ -136,42 +127,19 @@ export function installGracefulShutdown(server: Server, options: GracefulShutdow
 	};
 
 	/**
-	 * Closes `socket` after `res`, its latest answer, has been written out.
-	 *
-	 * The answer says `Connection: close` when its head is still unwritten as
-	 * it takes its turn on the connection (Node assigns it then, and says so
-	 * with `socket`), and only while it is still the latest. Not before: an
-	 * answer queued behind another may have its head written while a request
-	 * pipelined after it is still on its way, and a `close` it had said would
-	 * make Node drop that request's answer. A later request restores what Node
-	 * meant for the one before, while that one's head is unwritten.
-	 *
-	 * The close itself is the drain's own, not left to Node's: an answer
-	 * whose head was written first has already said keep-alive, and a
-	 * `Connection` field an answer set overrides `shouldKeepAlive`. It waits
-	 * for the answer to finish — every byte written — so an answer that has
-	 * ended but is still being written is not cut; and the connection is
-	 * closed only while that answer is still its latest.
-	 */
-	const closeAfter = (socket: Socket, res: ServerResponse): void => {
-		const announce = (): void => {
-			if (!res.headersSent && connections.get(socket)?.response === res) res.shouldKeepAlive = false;
-		};
-		if (res.socket === socket) announce();
-		else res.once("socket", announce);
-		if (res.writableFinished) {
-			socket.destroySoon();
-			return;
-		}
-		res.once("finish", () => {
-			if (connections.get(socket)?.response === res) socket.destroySoon();
-		});
-	};
-
-	/**
 	 * Every request this server receives, before any listener answers it —
 	 * those that expect `100-continue` included, which never fire `request`.
-	 * `shouldKeepAlive` is still what Node took from the request.
+	 * Once its answer has been written out — every byte, so an answer that
+	 * has ended but is still being written is not cut — the connection lets go
+	 * of it, and during the drain closes, unless a later request has arrived
+	 * on it, whose answer it closes after instead.
+	 *
+	 * The close is the drain's own and unannounced. An answer that said
+	 * `Connection: close` would make Node drop the answer to any request
+	 * pipelined after it, and the drain cannot know whether one is on its
+	 * way; a caller sees its connection close after an answer, as it does when
+	 * `keepAliveTimeout` passes. It also holds whatever `Connection` field an
+	 * answer set.
 	 */
 	const onRequest = (message: unknown): void => {
 		const { server: from, socket, response } = message as {
@@ -181,14 +149,12 @@ export function installGracefulShutdown(server: Server, options: GracefulShutdow
 		};
 		if (from !== server) return;
 		track(socket);
-		const previous = connections.get(socket);
-		connections.set(socket, { response, keepAlive: response.shouldKeepAlive });
-		if (!shuttingDown) return;
-		// A later request on the connection: it, not the one before, closes it.
-		if (previous !== undefined && !previous.response.headersSent) {
-			previous.response.shouldKeepAlive = previous.keepAlive;
-		}
-		closeAfter(socket, response);
+		connections.set(socket, response);
+		response.once("finish", () => {
+			if (connections.get(socket) !== response) return;
+			connections.set(socket, undefined);
+			if (shuttingDown) socket.destroySoon();
+		});
 	};
 	subscribe("http.server.request.start", onRequest);
 	server.on("connection", track);
@@ -283,18 +249,13 @@ export function installGracefulShutdown(server: Server, options: GracefulShutdow
 			void finish(0, "drained");
 		});
 		// `close` has already released the idle connections it sees. Left are
-		// the busy ones, which close after their latest answer, and two kinds
-		// it keeps: one that has sent nothing, which Node counts as busy and
-		// would hold until the deadline, so it is closed now; and one whose
-		// next request's head is still arriving, which is left to close after
-		// that request once it is whole.
-		for (const [socket, carried] of connections) {
-			if (socket.destroyed) continue;
-			if (carried === undefined) {
-				if (socket.bytesRead === 0) socket.destroySoon();
-			} else if (!carried.response.writableFinished) {
-				closeAfter(socket, carried.response);
-			}
+		// the ones still writing an answer, which close after it (`onRequest`),
+		// and two kinds it keeps: one that has sent nothing, which Node counts
+		// as busy and would hold until the deadline, so it is closed now; and
+		// one whose next request's head is still arriving, which closes after
+		// that request's answer once it is whole.
+		for (const [socket, answering] of connections) {
+			if (!socket.destroyed && answering === undefined && socket.bytesRead === 0) socket.destroySoon();
 		}
 	};
 
