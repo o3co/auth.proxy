@@ -47,10 +47,16 @@ const connectTo = (server: Server) => {
 		chunks.push(chunk);
 		bytes += chunk.length;
 	});
+	let sent = 0;
 	return {
 		socket,
 		connected,
-		send: (raw: string) => socket.write(raw),
+		send: (raw: string) => {
+			sent += Buffer.byteLength(raw, "latin1");
+			return socket.write(raw);
+		},
+		/** How many bytes were sent. */
+		sent: () => sent,
 		/** What arrived, as text. */
 		received: () => Buffer.concat(chunks).toString("latin1"),
 		/** How many bytes arrived. */
@@ -92,12 +98,21 @@ describe("graceful shutdown with kept-alive callers", () => {
 			for (const notify of arrived) notify();
 		};
 		const server = createServer((req: IncomingMessage, res: ServerResponse) => {
+			// `/now` is answered without reading a body, as a refusal is.
 			if (req.url === "/now") res.end("now");
 			else if (req.url === "/large") res.end(Buffer.alloc(LARGE, "a"));
 			else return hold(res);
 			answered.get(req.url)?.();
 		});
 		servers.push(server);
+		const accepted: Socket[] = [];
+		server.on("connection", (socket: Socket) => accepted.push(socket));
+		/** Resolves once the server has read `bytes` bytes, so what was sent is in its hands. */
+		const hasRead = async (bytes: number) => {
+			while (accepted.reduce((total, socket) => total + socket.bytesRead, 0) < bytes) {
+				await new Promise((resolve) => setImmediate(resolve));
+			}
+		};
 		if (options.checkContinue) {
 			server.on("checkContinue", (req: IncomingMessage, res: ServerResponse) => {
 				res.writeContinue();
@@ -140,7 +155,7 @@ describe("graceful shutdown with kept-alive callers", () => {
 			sockets.push(connected.socket);
 			return connected;
 		};
-		return { caller, nextRequest, answeredAt, shutDown: () => signal(), exitCode };
+		return { caller, nextRequest, answeredAt, hasRead, shutDown: () => signal(), exitCode };
 	};
 
 	it("answers a request in flight, closes its connection after it, and drains", async () => {
@@ -299,7 +314,7 @@ describe("graceful shutdown with kept-alive callers", () => {
 		const caller = proxy.caller();
 		const nowAnswered = proxy.answeredAt("/now");
 		caller.send("GET /now HTTP/1.1\r\nHost: pro");
-		await new Promise((resolve) => setTimeout(resolve, 50));
+		await proxy.hasRead(caller.sent());
 
 		proxy.shutDown();
 		caller.send("xy.test\r\n\r\n");
@@ -314,7 +329,7 @@ describe("graceful shutdown with kept-alive callers", () => {
 		const proxy = await start();
 		const caller = proxy.caller();
 		caller.send("GET /now HTTP/1.1\r\nHost: pro");
-		await new Promise((resolve) => setTimeout(resolve, 50));
+		await proxy.hasRead(caller.sent());
 
 		proxy.shutDown();
 		const largeAnswered = proxy.answeredAt("/large");
@@ -353,7 +368,7 @@ describe("graceful shutdown with kept-alive callers", () => {
 		caller.send(get("/now"));
 		await firstAnswered;
 		caller.send("GET /large HTTP/1.1\r\nHost: pro");
-		await new Promise((resolve) => setTimeout(resolve, 50));
+		await proxy.hasRead(caller.sent());
 
 		proxy.shutDown();
 		caller.send("xy.test\r\n\r\n");
@@ -382,6 +397,22 @@ describe("graceful shutdown with kept-alive callers", () => {
 		await caller.closed;
 		expect(heads(caller.received())).toHaveLength(2);
 		expect(caller.received()).toContain("later");
+	});
+
+	it("closes a connection answered before its request body has all arrived, once the body ends", async () => {
+		const proxy = await start();
+		const caller = proxy.caller();
+		const nowAnswered = proxy.answeredAt("/now");
+		caller.send("POST /now HTTP/1.1\r\nHost: proxy.test\r\nContent-Length: 10\r\n\r\nhello");
+		await nowAnswered;
+		await proxy.hasRead(caller.sent());
+
+		proxy.shutDown();
+		caller.send("world");
+
+		expect(await proxy.exitCode).toBe(0);
+		await caller.closed;
+		expect(caller.received()).toContain("now");
 	});
 
 	it("closes after a request that expected 100-continue, which never fires request", async () => {
