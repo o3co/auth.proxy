@@ -13,7 +13,9 @@
  * See the License for the specific language governing permissions and
  * limitations under the License.
  */
-import type { Server } from "node:http";
+import { subscribe, unsubscribe } from "node:diagnostics_channel";
+import type { IncomingMessage, Server, ServerResponse } from "node:http";
+import type { Socket } from "node:net";
 import type { Logger } from "./logger.mjs";
 
 /**
@@ -24,10 +26,26 @@ import type { Logger } from "./logger.mjs";
  *
  * 1. **SIGTERM and SIGINT** both start it; a second signal is ignored rather
  *    than starting a second cleanup over the first one's work.
- * 2. **New connections stop immediately** (`close`), and idle keep-alive
- *    sockets are released (`closeIdleConnections`) — they hold the server open
- *    with no request behind them, so a quiet proxy would otherwise wait out
- *    the whole deadline for nothing.
+ * 2. **New connections stop immediately** (`close`), and each open one closes
+ *    once its last request is done with — its answer written out and its
+ *    body arrived — at once for an idle keep-alive connection, or one that
+ *    has sent nothing, which would otherwise hold a quiet proxy for the whole
+ *    deadline. Pipelined answers before the last still go out, a request
+ *    arriving during the drain — or whose head was still arriving when it
+ *    started on a connection with no request in progress — is answered too,
+ *    and no request the server read and handled goes unanswered at the HTTP
+ *    level. The close is not announced with `Connection: close`, which
+ *    would drop the answers to requests pipelined after it. So a caller
+ *    reusing the connection can meet one reset for a request the server
+ *    never read, which it can retry; so can a request whose head was still
+ *    arriving behind one being answered, which closes with that answer. An
+ *    answer that ends during the drain is written out before its connection
+ *    closes, whichever connection finishes first. One that had ended but was
+ *    still being written when the drain started is cut by Node's own
+ *    `close`, which counts an ended answer as idle. A caller that stops
+ *    halfway through a request's head, or through a body answered before it
+ *    arrived, holds the drain until the deadline. This is the plain HTTP
+ *    server the proxy listens with.
  * 3. **In-flight requests get `drainTimeoutMs`** (default 10s) to finish;
  *    `server.close()` alone waits indefinitely on one stuck request.
  * 4. **Past the deadline, remaining connections are cut**
@@ -99,6 +117,61 @@ export function installGracefulShutdown(server: Server, options: GracefulShutdow
 
 	let shuttingDown = false;
 	let finished = false;
+
+	/**
+	 * Each open connection, and the request it is still busy with — the
+	 * latest, when requests are pipelined; none before its first request, or
+	 * once that request's answer has been written out and its body has
+	 * arrived.
+	 */
+	const connections = new Map<Socket, ServerResponse | undefined>();
+
+	const track = (socket: Socket): void => {
+		if (connections.has(socket)) return;
+		connections.set(socket, undefined);
+		socket.once("close", () => connections.delete(socket));
+	};
+
+	/**
+	 * Every request this server receives, before any listener answers it —
+	 * those that expect `100-continue` included, which never fire `request`.
+	 * Once its answer has been written out — every byte, so an answer that
+	 * has ended but is still being written is not cut — and its body has
+	 * arrived, which an answer given before reading it (a refusal) leaves
+	 * behind, the connection lets go of it, and during the drain closes,
+	 * unless a later request has arrived on it, which it closes after instead.
+	 *
+	 * The close is the drain's own and unannounced. An answer that said
+	 * `Connection: close` would make Node drop the answer to any request
+	 * pipelined after it, and the drain cannot know whether one is on its
+	 * way. A caller sees its connection close after an answer, unlike
+	 * `keepAliveTimeout`, which is advertised; one that reuses it meets a
+	 * reset for a request the server never read. It also holds whatever
+	 * `Connection` field an answer set.
+	 */
+	const onRequest = (message: unknown): void => {
+		const { server: from, socket, request, response } = message as {
+			server: unknown;
+			socket: Socket;
+			request: IncomingMessage;
+			response: ServerResponse;
+		};
+		if (from !== server) return;
+		track(socket);
+		connections.set(socket, response);
+		const done = (): void => {
+			if (connections.get(socket) !== response) return;
+			connections.set(socket, undefined);
+			if (shuttingDown) socket.destroySoon();
+		};
+		response.once("finish", () => {
+			if (request.complete) done();
+			else request.once("end", done);
+		});
+	};
+	subscribe("http.server.request.start", onRequest);
+	server.on("connection", track);
+	server.once("close", () => unsubscribe("http.server.request.start", onRequest));
 
 	/** Sentinel so a timed-out cleanup is reported as that, not as a throw. */
 	const CLEANUP_TIMED_OUT = Symbol("cleanup-timed-out");
@@ -188,10 +261,16 @@ export function installGracefulShutdown(server: Server, options: GracefulShutdow
 			}
 			void finish(0, "drained");
 		});
-		// Idle keep-alive sockets have no request behind them, so nothing is
-		// lost by releasing them — and without this a quiet server waits out
-		// the whole deadline for connections that will never send anything.
-		server.closeIdleConnections();
+		// `close` has already released the idle connections it sees. Left are
+		// the ones busy with a request, which close once it is done with
+		// (`onRequest`), and two kinds it keeps: one that has sent nothing,
+		// which Node counts as busy and would hold until the deadline, so it is
+		// closed now; and one whose request's head is still arriving — its
+		// first or a kept-alive connection's next — which closes once that
+		// request, whole, is done with.
+		for (const socket of connections.keys()) {
+			if (socket.bytesRead === 0) socket.destroySoon();
+		}
 	};
 
 	for (const signal of SIGNALS) onSignal(signal, handler);

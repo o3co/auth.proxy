@@ -23,6 +23,8 @@ function makeServer() {
 		}),
 		closeIdleConnections: vi.fn(),
 		closeAllConnections: vi.fn(),
+		on: vi.fn(),
+		once: vi.fn(),
 	};
 	return {
 		server: server as unknown as Server,
@@ -73,11 +75,12 @@ describe("installGracefulShutdown", () => {
 		expect([...signals.keys()].sort()).toEqual(["SIGINT", "SIGTERM"]);
 	});
 
-	it("stops accepting connections and releases idle keep-alive sockets", () => {
+	// Releasing the open connections is pinned against a real server, in
+	// shutdown-keep-alive.test.mts.
+	it("stops accepting connections", () => {
 		const { signals, spies } = install();
 		signals.get("SIGTERM")?.();
 		expect(spies.close).toHaveBeenCalledOnce();
-		expect(spies.closeIdleConnections).toHaveBeenCalledOnce();
 	});
 
 	it("runs cleanup once draining completes, then exits zero", async () => {
