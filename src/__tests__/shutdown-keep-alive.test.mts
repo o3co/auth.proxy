@@ -221,19 +221,22 @@ describe("graceful shutdown with kept-alive callers", () => {
 		expect(caller.bytes()).toBeGreaterThan(LARGE);
 	});
 
+	// An answer that ends during the drain. One already ended but unwritten
+	// when it starts is Node's: `server.close()` releases idle connections
+	// itself, and counts an ended answer as idle.
 	it("does not cut another connection's answer that has ended but is still being written", async () => {
 		const proxy = await start();
 		const slow = proxy.caller();
-		const largeAnswered = proxy.answeredAt("/large");
-		slow.send(get("/large"));
-		await largeAnswered;
-		// The slow caller reads nothing for now, so its answer stays buffered.
-		slow.socket.pause();
+		slow.send(get("/slow"));
+		const slowAnswer = await proxy.nextRequest();
 		const busy = proxy.caller();
 		busy.send(get("/held"));
 		const held = await proxy.nextRequest();
 
 		proxy.shutDown();
+		// The slow caller reads nothing for now, so its answer stays buffered.
+		slow.socket.pause();
+		slowAnswer.end(Buffer.alloc(LARGE, "a"));
 		held.end("held");
 		await busy.closed;
 		slow.socket.resume();
