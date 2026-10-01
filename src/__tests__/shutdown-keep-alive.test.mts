@@ -21,8 +21,8 @@ const logger: Logger = { debug: vi.fn(), info: vi.fn(), warn: vi.fn(), error: vi
 /** How long a drain may take here: far under `keepAliveTimeout`, so one that waits for it fails. */
 const DRAINED_WITHIN_MS = 2_000;
 
-/** An answer larger than any socket buffer, so it has ended long before it is written out. */
-const LARGE = 8 * 1024 * 1024;
+/** An answer larger than both ends' socket buffers grown full, so it has ended long before it is written out. */
+const LARGE = 32 * 1024 * 1024;
 
 const get = (path: string) => `GET ${path} HTTP/1.1\r\nHost: proxy.test\r\n\r\n`;
 
@@ -38,18 +38,22 @@ const heads = (text: string) =>
 const connectTo = (server: Server) => {
 	const { port } = server.address() as AddressInfo;
 	const socket = connect(port, "127.0.0.1");
-	let received = Buffer.alloc(0);
+	const chunks: Buffer[] = [];
+	let bytes = 0;
+	const connected = new Promise<void>((resolve) => socket.once("connect", () => resolve()));
 	const closed = new Promise<void>((resolve) => socket.on("close", () => resolve()));
 	socket.on("data", (chunk: Buffer) => {
-		received = Buffer.concat([received, chunk]);
+		chunks.push(chunk);
+		bytes += chunk.length;
 	});
 	return {
 		socket,
+		connected,
 		send: (raw: string) => socket.write(raw),
 		/** What arrived, as text. */
-		received: () => received.toString("latin1"),
+		received: () => Buffer.concat(chunks).toString("latin1"),
 		/** How many bytes arrived. */
-		bytes: () => received.length,
+		bytes: () => bytes,
 		/** Resolves when the server closes the connection. */
 		closed,
 	};
@@ -61,7 +65,10 @@ describe("graceful shutdown with kept-alive callers", () => {
 
 	afterEach(() => {
 		for (const socket of sockets.splice(0)) socket.destroy();
-		for (const server of servers.splice(0)) server.closeAllConnections();
+		for (const server of servers.splice(0)) {
+			server.close();
+			server.closeAllConnections();
+		}
 	});
 
 	/**
@@ -283,6 +290,72 @@ describe("graceful shutdown with kept-alive callers", () => {
 		expect(await proxy.exitCode).toBe(0);
 		await caller.closed;
 		expect(caller.received()).toContain("now");
+	});
+
+	it("closes a connection that has sent nothing when the drain starts", async () => {
+		const proxy = await start();
+		const caller = proxy.caller();
+		await caller.connected;
+		await new Promise((resolve) => setImmediate(resolve));
+
+		proxy.shutDown();
+
+		expect(await proxy.exitCode).toBe(0);
+		await caller.closed;
+	});
+
+	it("answers a request whose head is still arriving when the drain starts", async () => {
+		const proxy = await start();
+		const caller = proxy.caller();
+		const nowAnswered = proxy.answeredAt("/now");
+		caller.send("GET /now HTTP/1.1\r\nHost: pro");
+		await new Promise((resolve) => setTimeout(resolve, 50));
+
+		proxy.shutDown();
+		caller.send("xy.test\r\n\r\n");
+		await nowAnswered;
+
+		expect(await proxy.exitCode).toBe(0);
+		await caller.closed;
+		expect(heads(caller.received())).toEqual([expect.stringContaining("\r\nconnection: close")]);
+	});
+
+	it("answers the next request on a kept-alive connection, whose head is still arriving when the drain starts", async () => {
+		const proxy = await start();
+		const caller = proxy.caller();
+		const firstAnswered = proxy.answeredAt("/now");
+		caller.send(get("/now"));
+		await firstAnswered;
+		caller.send("GET /large HTTP/1.1\r\nHost: pro");
+		await new Promise((resolve) => setTimeout(resolve, 50));
+
+		proxy.shutDown();
+		caller.send("xy.test\r\n\r\n");
+
+		await caller.closed;
+		expect(await proxy.exitCode).toBe(0);
+		expect(heads(caller.received())).toHaveLength(2);
+		expect(caller.bytes()).toBeGreaterThan(LARGE);
+	});
+
+	it("closes on the latest answer's end, not on an earlier one's", async () => {
+		const proxy = await start();
+		const caller = proxy.caller();
+		caller.send(get("/held"));
+		const first = await proxy.nextRequest();
+
+		proxy.shutDown();
+		caller.send(get("/later"));
+		const later = await proxy.nextRequest();
+		const firstDone = new Promise((resolve) => first.once("finish", resolve));
+		first.end("first");
+		await firstDone;
+		later.end("later");
+
+		expect(await proxy.exitCode).toBe(0);
+		await caller.closed;
+		expect(heads(caller.received())).toHaveLength(2);
+		expect(caller.received()).toContain("later");
 	});
 
 	it("closes after a request that expected 100-continue, which never fires request", async () => {
