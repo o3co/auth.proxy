@@ -81,7 +81,7 @@ describe("createUpstreamProxy", () => {
 		proxyMock.mockReturnValueOnce(built);
 		const wrapped = createUpstreamProxy(config);
 		const req = {};
-		const res = { getHeaderNames: () => [], setHeader: () => {}, writeHead: () => {} };
+		const res = { getHeaders: () => ({}), setHeader: () => {}, writeHead: () => {} };
 		const next = () => {};
 
 		wrapped(req as never, res as never, next);
