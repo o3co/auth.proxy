@@ -33,7 +33,8 @@ import { bodyLimitBytes } from "./body-limit.mjs";
  * `upstream_unavailable` refusal. Or after its answer started: it dropped the
  * connection partway through the body — the status is already sent, so the
  * error handler logs it as that refusal and closes the caller's connection.
- * `cause` is what the connection threw.
+ * `cause` is what the connection threw — for an answer cut off, an error that
+ * says so, around it.
  */
 export class UpstreamUnavailableError extends Error {
 	constructor(
@@ -210,13 +211,18 @@ const keepUpstreamHopFieldsOff = (res: ServerResponse): (() => void) => {
  */
 const watchAnswer = (res: ServerResponse, next: NextFunction, restoreHead: () => void): void => {
 	res.once("pipe", (answer: IncomingMessage) => {
-		let cause: unknown = new Error("upstream answer ended before it was complete");
+		let thrown: Error | undefined;
 		answer.once("error", (err) => {
-			cause = err;
+			thrown = err;
 		});
 		answer.once("close", () => {
 			if (answer.complete || res.destroyed) return;
 			if (!res.headersSent) restoreHead();
+			// The log line says the answer had started, not only what the connection threw.
+			const cause = new Error(
+				`upstream answer cut off after it started: ${thrown?.message ?? "ended before it was complete"}`,
+				{ cause: thrown },
+			);
 			next(new UpstreamUnavailableError(502, cause));
 		});
 	});
