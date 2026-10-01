@@ -5,6 +5,197 @@ All notable changes to this project are documented in this file.
 The format is based on [Keep a Changelog](https://keepachangelog.com/en/1.1.0/),
 and this project adheres to [Semantic Versioning](https://semver.org/spec/v2.0.0.html).
 
+## [0.8.0] — 2026-10-01
+
+### Added
+
+- **`private_key_jwt` client authentication at the provider (#152, #153).**
+  Every provider call that authenticates a client — introspection in
+  validation mode, the external credential exchange and the session grant in
+  injection mode — can carry an RFC 7523 §2.2 assertion instead of a shared
+  secret. New, optional environment variables: `CLIENT_KEY` (introspection,
+  instead of `CLIENT_SECRET`), `INJECTION_EXCHANGE_CLIENT_KEY` (the exchange,
+  instead of `INJECTION_EXCHANGE_CLIENT_SECRET`), `INJECTION_CLIENT_KEY` (the
+  session grant, which stays a public client while it is unset), and the
+  provider's issuer identifier, `VALIDATION_PROVIDER_ISSUER` (required with
+  `CLIENT_KEY`) and `INJECTION_PROVIDER_ISSUER` (required with either
+  injection key). A key is a private JWK as JSON text — Ed25519 (`EdDSA`), EC
+  P-256/P-384/P-521 (`ES*`) or RSA of 2048 bits or more (`RS256`, or the JWK's
+  `RS*`/`PS*`) — supplied from the environment, not written into
+  `application.conf`, which the image build copies. With a key, the call
+  carries `client_id`, `client_assertion_type` and `client_assertion` in its
+  body and no `Authorization` header; the assertion has `iss` = `sub` = the
+  client id, `aud` = the configured issuer, a random `jti`, a 60-second life
+  and `typ: client-authentication+jwt`. Boot refuses, naming the variables, a
+  key and a secret for the same client, a key the proxy cannot sign with (its
+  `use` or `key_ops` forbid signing, its public members are not its private
+  key's, or its `alg` is `Ed25519` rather than `EdDSA` — the key is never
+  printed), a key without an issuer, an issuer no key uses, and an issuer the
+  provider could not have (not https, except on loopback; a query, fragment,
+  userinfo or whitespace). A key the provider refuses — unregistered, rotated
+  away, or a clock far enough off — is answered as any refused client
+  authentication: `502 Provider Configuration Error` in validation,
+  `502 provider_config_error` in injection. A deployment that sets none of
+  the new variables sends exactly what it sent before. **Action:** register
+  the public key at the provider, then set the key and the issuer (copied
+  from the provider's discovery document); the README's "Client
+  authentication with a private key" covers switching an existing client and
+  rotation.
+
+### Changed
+
+Five of the changes below are breaking, marked **BREAKING**. Each says what an
+operator sees on the wire and in the logs, and what to do.
+
+- **BREAKING: an oversized request body is refused before the mode, in the
+  mode's refusal shape, and logged (#147, #155).** A body over
+  `http.bodyLimitSize` was refused only in the upstream stage, after the mode
+  had introspected the token or minted one, with express's HTML `413` page and
+  no log line. A declared `Content-Length` over the limit is now refused `413`
+  before the mode runs, so it spends none of the provider's budget; a chunked
+  body over the limit is refused the same way when the body reader crosses
+  the limit, after the mode has run, and the rest is drained so a keep-alive
+  connection reaches its next request. Validation
+  answers `{ "code", "message" }` and logs `validation.body_too_large`;
+  injection answers `{ "error": "body_too_large", "error_description" }` and
+  logs `injection.body_too_large`, both at info. `HTTP_BODY_LIMIT_SIZE` is now
+  one grammar — a number, optionally `+`, with an optional
+  `b`/`kb`/`mb`/`gb`/`tb`/`pb` (1kb = 1024) — and values the body reader used
+  to misread fail at boot: `10 megabytes`, `10k`, `" 10mb"` and `10kib` (read
+  as 10 bytes), `1e3` (1 byte), `""`, `abc` and `.5mb` (no limit), and negative
+  values. Every value read as meant — `10mb`, `1.5MB`, `1024`, `+10mb`, `0` —
+  reads the same. **Action:** a deployment whose `HTTP_BODY_LIMIT_SIZE` is
+  one of the refused spellings fails to start; write the size it meant.
+
+- **BREAKING: an upstream that failed is `502` (`504` on a timeout), logged as
+  `<mode>.upstream_unavailable` (#157, #162).** An upstream the proxy could
+  not reach was answered `500` under `<mode>.request_failed`; one that reset
+  the connection was answered by the proxying library itself, a bodyless
+  `504 text/plain` with `X-Timeout-Reason`, unlogged. A refused connection, an
+  unknown host, a host or network that is down, a failed TLS handshake or
+  certificate, a reset or hang-up, or an answer that is not HTTP is now `502`,
+  and a timeout `504`, in the mode's refusal shape: validation
+  `{ "code", "message" }`, injection
+  `{ "error": "upstream_unavailable", "error_description" }`, logged at error
+  under the new event. A caller that hangs up before a slow upstream answers
+  is still not logged. **Action:** alerts keyed on `request_failed` stop
+  firing for an upstream failure — alert on `upstream_unavailable`. Only a
+  request the upstream never received is safe to retry blindly.
+
+- **BREAKING: the upstream no longer receives the caller's hop-by-hop fields
+  or `Proxy-Authorization` (#160, #164).** Dropped: every field the inbound
+  `Connection` names (RFC 9110 §7.6.1), `Keep-Alive`, `TE`, `Upgrade`,
+  `Proxy-Connection`, and `Proxy-Authorization`, a credential for this hop
+  the proxy does not use (§11.7.2). Kept even when `Connection` names them:
+  `Authorization`, `x-request-id` and the proxy's own `connection: close`.
+  See Security. **Action:** an upstream that read one of these — a
+  `Proxy-Authorization` meant for this proxy, most likely — stops seeing it.
+
+- **BREAKING: introspection reads only a `200` as an answer (#151, #154).**
+  A provider answering `201`/`202`/`203`/`206`/… with `{"active":true}` had the
+  request forwarded; it is now `502 Bad Gateway`, logged at error under
+  `validation.provider_error` with `introspect returned <status>`, its body
+  released unread. A `204`/`205` was already `502`, but its line said `introspect
+  returned 200 with a body that is not a JSON object…`; it now names the
+  status. auth.provider answers `200`, as RFC 7662's examples do, so no
+  conforming deployment changes. **Action:** none, unless the provider
+  answers introspection with another `2xx`.
+
+- **BREAKING: a request body in a transfer coding other than `chunked` is
+  `501` from the proxy (#156, #159).** It was forwarded and answered `400` by
+  the upstream. It is refused after the mode has checked or minted the token,
+  in the mode's refusal shape, logged `<mode>.request_failed` at error.
+  **Action:** a client that sends `Transfer-Encoding: gzip, chunked` sends the
+  body uncoded, or in `Content-Encoding`.
+
+- **Whatever else no stage answered is answered in the mode's shape and
+  logged (#147, #155).** A body that ended early, or a throw, was express's
+  HTML page and a stack on stderr. It is now refused with its own `4xx`/`5xx`
+  status (or `500`) as validation `{ "code", "message" }` or injection
+  `{ "error": "request_failed", "error_description" }`, logged
+  `<mode>.request_failed` — at info for a `4xx`, at error otherwise.
+
+- **`Expect: 100-continue` is answered by the proxy (#158, #161).** It says
+  `100 Continue` only when the declared length is within the limit; an
+  oversized upload is refused `413` on its headers, before a client that
+  waits sends its body, and the connection is then closed rather than kept
+  alive. A client that sends the body without waiting may meet the closed
+  connection before it reads the `413`; curl, Go, .NET and Java clients wait.
+  The expectation is no longer forwarded upstream. See Fixed.
+
+- **A request no router answers is `404 Not Found` at once (#161).** Outside
+  `http.pathPrefix` and not the healthcheck, it was express's HTML page
+  (`Cannot POST /path`) after reading the whole body; an oversized upload
+  that expected 100-continue there waited until the client gave up. It is now
+  `404` with the text `Not Found`, without reading the body.
+
+- **Graceful shutdown closes a busy kept-alive connection after its last
+  answer (#168).** The drain relied on every proxied answer carrying the
+  upstream's `Connection: close`, which no longer reaches the caller (see
+  Fixed). During a drain, a connection now closes once the request it is
+  busy with has been answered in full and its body has arrived, unless a
+  later request has arrived on it; a connection that has sent nothing closes
+  at once. The close is not announced with `Connection: close`, which could
+  drop the answer to a request pipelined behind it: a caller reusing its
+  connection may meet one reset, for a request the proxy never read, which
+  it can retry. A stalled request head or an early-answered body still holds
+  the drain until its deadline.
+
+- `supertest` 7.3.0 and `vitest` 5.0.2 (dev).
+
+### Security
+
+- **`Proxy-Authorization` no longer reaches the upstream, and a caller can no
+  longer strip what the proxy decides by naming it in `Connection` (#160,
+  #164).** The upstream stage copied every inbound header but `connection`
+  and `host`, so a credential the caller presented for this hop went to the
+  upstream. Honouring `Connection` naively is the known abuse of an
+  intermediary: here a caller could have named `Authorization` to take away
+  the token the proxy forwarded or injected, `x-request-id` to take away the
+  request id, or `Connection` to remove the proxy's `connection: close` and
+  have the upstream socket pooled and reused for the next caller's request.
+  Those three are kept. Also BREAKING under Changed.
+
+- **An oversized declared body spends none of the provider's budget (#155).**
+  It is refused before introspection or a token mint; see Changed.
+
+### Fixed
+
+- **Chunked request bodies reach the upstream (#156, #159).** One that
+  arrived chunked was forwarded with both `Transfer-Encoding: chunked` and
+  the `Content-Length` set after buffering it, which RFC 9112 §6.2 forbids,
+  so a strict upstream answered `400`. The body is now framed by
+  `Content-Length` alone, and `Trailer` is dropped with the chunked framing —
+  a request carrying `Trailer` was `500`, declared length or not.
+
+- **An `Expect: 100-continue` request within the limit reaches the upstream
+  (#158, #161).** Every one with a body was `500`: the expectation was copied
+  upstream, Node sent the outbound headers at once, and setting
+  `Content-Length` afterwards threw. curl adds the header to large uploads.
+  An oversized one was invited, sent in full, and only then refused.
+
+- **A caller's keep-alive connection survives a proxied answer (#165, #167).**
+  The upstream's `Connection: close` — its answer to the proxy's own — was
+  copied to the caller, closing the caller's connection after every proxied
+  answer and dropping pipelined requests. The upstream response's
+  `Connection`, the fields it names, `Keep-Alive`, `Proxy-Connection`, `TE`,
+  `Upgrade`, `Trailer` and `Proxy-Authenticate` are kept off the caller's
+  response; Node announces the connection it keeps or closes. A field the
+  proxy set before forwarding (`x-request-id`, the CORS fields) keeps the
+  proxy's value, and an upstream naming `Transfer-Encoding`, `Connection` or
+  `Date` cannot take Node's framing, announcement or `Date` away. Answers
+  still stream.
+
+- **An upstream answer cut off after it started closes the caller's
+  connection and is logged (#163, #169).** It left the caller's connection
+  open with nothing logged. It is now logged under
+  `<mode>.upstream_unavailable` with an error saying the answer was cut off
+  after it started, and the caller's connection is closed, so the caller sees
+  the answer end early. An upstream that sent only its head before dropping is
+  `502` with the proxy's own head — the upstream's fields (coding, cookies,
+  caching, its request id) dropped. An answer of no declared length ended by
+  a close cannot be told from one cut short.
+
 ## [0.7.0] — 2026-09-24
 
 ### Changed
