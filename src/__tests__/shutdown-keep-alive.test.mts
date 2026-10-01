@@ -172,7 +172,10 @@ describe("graceful shutdown with kept-alive callers", () => {
 		const second = await proxy.nextRequest();
 
 		proxy.shutDown();
+		const firstDone = new Promise((resolve) => first.once("finish", resolve));
 		first.end("first");
+		// The second takes its turn as the first finishes, its head unwritten.
+		await firstDone;
 		second.end("second");
 
 		expect(await proxy.exitCode).toBe(0);
