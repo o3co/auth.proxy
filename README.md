@@ -275,7 +275,7 @@ where `sent` is the instant the token request went out. `ttlSeconds` and `expire
 
 Active access tokens reside in process memory, and so does a configured client secret or private key, which also sits in the process environment. An attacker with read access to proxy process memory can extract all cached tokens and the proxy's own client credentials. Standard host-security practices apply (container isolation, minimal image, no unnecessary `ptrace` capabilities).
 
-Graceful shutdown does not clear the caches: the drain closes the listener and lets in-flight requests finish within `drainTimeoutMs` — during the drain a connection closes after its last answer, so a caller that keeps its connection alive does not hold the drain open — after which the remaining connections are force-closed, and the cached tokens stay in memory until the process exits (#95 F21).
+Graceful shutdown does not clear the caches: the drain closes the listener and lets in-flight requests finish within `drainTimeoutMs` — during the drain a connection closes after its last answer, so a caller that keeps its connection alive does not hold the drain open; a caller that reuses the connection then may see one reset, for a request the proxy never read, which it can retry — after which the remaining connections are force-closed, and the cached tokens stay in memory until the process exits (#95 F21).
 
 ### Provider rate limiting
 

@@ -32,15 +32,20 @@ import type { Logger } from "./logger.mjs";
  *    has sent nothing, which would otherwise hold a quiet proxy for the whole
  *    deadline. Pipelined answers before the last still go out, a request
  *    arriving during the drain — or whose head was still arriving when it
- *    started — is answered too, and no answer to a request the server
- *    accepted is dropped. The close is not announced with
- *    `Connection: close`, which would drop the answers to requests
- *    pipelined after it. An answer that ends during the drain is written out
- *    before its connection closes, whichever connection finishes first. One
- *    that had ended but was still being written when the drain started is
- *    cut by Node's own `close`, which counts an ended answer as idle. A
- *    caller that stops halfway through a request's head holds the drain until
- *    the deadline. This is the plain HTTP server the proxy listens with.
+ *    started on a connection with no request in progress — is answered too,
+ *    and no request the server read and handled goes unanswered at the HTTP
+ *    level. The close is not announced with `Connection: close`, which
+ *    would drop the answers to requests pipelined after it. So a caller
+ *    reusing the connection can meet one reset for a request the server
+ *    never read, which it can retry; so can a request whose head was still
+ *    arriving behind one being answered, which closes with that answer. An
+ *    answer that ends during the drain is written out before its connection
+ *    closes, whichever connection finishes first. One that had ended but was
+ *    still being written when the drain started is cut by Node's own
+ *    `close`, which counts an ended answer as idle. A caller that stops
+ *    halfway through a request's head, or through a body answered before it
+ *    arrived, holds the drain until the deadline. This is the plain HTTP
+ *    server the proxy listens with.
  * 3. **In-flight requests get `drainTimeoutMs`** (default 10s) to finish;
  *    `server.close()` alone waits indefinitely on one stuck request.
  * 4. **Past the deadline, remaining connections are cut**
@@ -139,9 +144,10 @@ export function installGracefulShutdown(server: Server, options: GracefulShutdow
 	 * The close is the drain's own and unannounced. An answer that said
 	 * `Connection: close` would make Node drop the answer to any request
 	 * pipelined after it, and the drain cannot know whether one is on its
-	 * way; a caller sees its connection close after an answer, as it does when
-	 * `keepAliveTimeout` passes. It also holds whatever `Connection` field an
-	 * answer set.
+	 * way. A caller sees its connection close after an answer, unlike
+	 * `keepAliveTimeout`, which is advertised; one that reuses it meets a
+	 * reset for a request the server never read. It also holds whatever
+	 * `Connection` field an answer set.
 	 */
 	const onRequest = (message: unknown): void => {
 		const { server: from, socket, request, response } = message as {
@@ -262,8 +268,8 @@ export function installGracefulShutdown(server: Server, options: GracefulShutdow
 		// closed now; and one whose request's head is still arriving — its
 		// first or a kept-alive connection's next — which closes once that
 		// request, whole, is done with.
-		for (const [socket, answering] of connections) {
-			if (!socket.destroyed && answering === undefined && socket.bytesRead === 0) socket.destroySoon();
+		for (const socket of connections.keys()) {
+			if (socket.bytesRead === 0) socket.destroySoon();
 		}
 	};
 
