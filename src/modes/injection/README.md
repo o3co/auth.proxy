@@ -62,7 +62,7 @@ Injection mode turns a session cookie into the outbound `Authorization: Bearer` 
      - `credential_rejected` (401), for an issuer outside `allowedIssuers`.
    - **Refusals by the stages the modes share** ([`src/router`](../../router/refusal.mts)), said in this mode's shape by [`stage-refusals.mts`](stage-refusals.mts):
      - `body_too_large` (413), a body over `http.bodyLimitSize` — before any provider call when the request declares its length, after the token is minted when it does not;
-     - `upstream_unavailable`, `502` — or `504` when it timed out — for an upstream that could not be reached or dropped the exchange before its answer started;
+     - `upstream_unavailable`, `502` — or `504` when it timed out — for an upstream that could not be reached or dropped the exchange before its answer started (one that drops it partway through is logged the same way, and the caller's connection closed);
      - `request_failed`, with the error's own `4xx` / `5xx` status or `500`, for whatever else no stage answered.
    - **A provider `401`** on the session path is `401 session_required`, unless its `error` is `invalid_client`: that means the proxy's own `clientId` was refused, and it is answered `502 provider_config_error` (#95 F47). On the exchange, a provider `401` is always `502 provider_config_error`.
    - **Everything else.** A timeout or a network error before the response arrives, or an unclassified throw, is `502 provider_unavailable`. A failure while reading a `200`'s body — a timeout or a dropped connection mid-body — is `502 provider_invalid_response`.

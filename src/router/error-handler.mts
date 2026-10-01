@@ -7,8 +7,9 @@
  * What reaches it is what no stage answered: the upstream stage's own
  * failures — a body over the limit that declared no length, a body that
  * ended early, a transfer coding it cannot forward (`501`), an upstream it
- * could not reach or that dropped the exchange before its answer started
- * (`UpstreamUnavailableError`) — and anything a mode's middleware threw.
+ * could not reach or that dropped the exchange, before its answer started or
+ * partway through it (`UpstreamUnavailableError`) — and anything a mode's
+ * middleware threw.
  * Without it, express answers these with its HTML page, and prints the stack
  * to stderr outside the logger. With it, each is a `StageRefusal` the mode
  * logs and answers in its own vocabulary.
