@@ -15,7 +15,7 @@
     "cross-env": "10.1.x",
     "express": "^5.2.1",
     "express-http-proxy": "^2.1.2",
-    "pino": "^10.3.1",
+    "pino": "^10.4.0",
     "zod": "^4.6.5"
   },
   "devDependencies": {
