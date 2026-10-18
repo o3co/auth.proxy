@@ -29,6 +29,12 @@ describe("isSameOriginRequest", () => {
 		}
 	});
 
+	it("refuses an Origin equal to the public origin when Sec-Fetch-Site says anything but same-origin", () => {
+		for (const secFetchSite of ["cross-site", "same-site", "none", ""]) {
+			expect(isSameOriginRequest({ origin: PUBLIC, secFetchSite }, PUBLIC), secFetchSite).toBe(false);
+		}
+	});
+
 	it("refuses an Origin when no public origin is configured", () => {
 		expect(isSameOriginRequest({ origin: PUBLIC, secFetchSite: "same-origin" }, null)).toBe(false);
 	});

@@ -17,9 +17,12 @@
  *
  * Admitted: an `Origin` equal to `auth.injection.publicOrigin`, or no `Origin`
  * and `Sec-Fetch-Site: same-origin`. A browser sets both and a page cannot
- * forge either. A present `Origin` decides on its own — a different one is
- * evidence the request came from elsewhere, whatever `Sec-Fetch-Site` says —
- * so while `publicOrigin` is unset, no request with an `Origin` is admitted.
+ * forge either. Either signal, when present, can only refuse: a different
+ * `Origin` is evidence the request came from elsewhere, whatever
+ * `Sec-Fetch-Site` says, and a `Sec-Fetch-Site` other than `same-origin` is the
+ * same evidence, whatever `Origin` says. So the gate never admits what either
+ * signal tells the provider to refuse, and while `publicOrigin` is unset no
+ * request with an `Origin` is admitted.
  */
 
 import type { CallerContext } from "./session-grant-client.mjs";
@@ -27,7 +30,9 @@ import type { CallerContext } from "./session-grant-client.mjs";
 export const isSameOriginRequest = (
 	caller: Pick<CallerContext, "origin" | "secFetchSite">,
 	publicOrigin: string | null,
-): boolean =>
-	caller.origin !== null
+): boolean => {
+	if (caller.secFetchSite !== null && caller.secFetchSite !== "same-origin") return false;
+	return caller.origin !== null
 		? publicOrigin !== null && caller.origin === publicOrigin
 		: caller.secFetchSite === "same-origin";
+};
