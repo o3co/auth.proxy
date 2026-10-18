@@ -426,7 +426,7 @@ make docker       # ランタイムイメージのビルド
 | `INJECTION_SESSION_COOKIE_NAME` | セッションクッキー名（デフォルト: `connect.sid`）。RFC 6265 `cookie-name`（RFC 9110 token）であること — 空白・`=`・その他のセパレータは起動時に失敗する。 |
 | `INJECTION_STRIP_INBOUND_AUTHORIZATION` | `"true"` / `"false"`（デフォルト: `false`）。プロキシがトークンを発行しなかったリクエストの受信 `Authorization` ヘッダーを削除する。それ以外の値は起動時に失敗する。[受信 Authorization ヘッダー](#受信-authorization-ヘッダー)を参照。 |
 | `INJECTION_PUBLIC_ORIGIN` | ブラウザーがこのプロキシに到達するオリジン、`scheme://host[:port]`（任意。パス・クエリ・フラグメント・userinfo があると起動しない）。`Origin` がこれと一致するリクエストはセッショントークンキャッシュから答えられる。未設定なら、`Origin` がなく `Sec-Fetch-Site: same-origin` を送ったリクエストだけ。[auth.provider のセッショングラントを呼ぶ](#authprovider-のセッショングラントを呼ぶ)を参照。 |
-| `INJECTION_TRUSTED_PROXIES` | セッショングラントでブラウザーのリクエストの出どころをプロバイダーに伝えるとき、このプロキシが `X-Forwarded-For` と `X-Forwarded-Proto` を信じる前段のプロキシ。IP アドレスと `アドレス/プレフィックス` の範囲を空白区切りで並べる（デフォルト: 空 = なし。ソケットの接続元とスキームを送る）。ポートやホスト名は起動時に失敗する。このプロキシの前で TLS を終端するロードバランサーやイングレスを列挙する。列挙しないとプロバイダーには `http` と伝わる。[auth.provider のセッショングラントを呼ぶ](#authprovider-のセッショングラントを呼ぶ)を参照。 |
+| `INJECTION_TRUSTED_PROXIES` | セッショングラントでブラウザーのリクエストの出どころをプロバイダーに伝えるとき、このプロキシが `X-Forwarded-For` と `X-Forwarded-Proto` を信じる前段のプロキシ。IP アドレスと `アドレス/プレフィックス` の範囲を空白区切りで並べる（デフォルト: 空 = なし。ソケットの接続元とスキームを送る）。ポート、IPv6 のゾーン ID、ホスト名は起動時に失敗する。このプロキシの前で TLS を終端するロードバランサーやイングレスを列挙する。列挙しないとプロバイダーには `http` と伝わる。[auth.provider のセッショングラントを呼ぶ](#authprovider-のセッショングラントを呼ぶ)を参照。 |
 | `INJECTION_TOKEN_CACHE_TTL_SEC` | トークンキャッシュ TTL（秒、デフォルト: 60）。セッションキャッシュと交換キャッシュの両方に適用。 |
 | `INJECTION_TOKEN_CACHE_MAX_ENTRIES` | トークンキャッシュ最大エントリ数（デフォルト: 10000）。セッションキャッシュと交換キャッシュそれぞれに適用。 |
 | `INJECTION_TOKEN_CACHE_SAFETY_MARGIN_SEC` | クロックドリフト安全マージン（秒、デフォルト: 5）。両方のキャッシュに適用。 |

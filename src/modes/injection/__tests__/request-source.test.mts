@@ -85,6 +85,13 @@ describe("createRequestSource", () => {
 			);
 		});
 
+		it("stops at a hop with an IPv6 zone ID, which names no address another host can reach", () => {
+			expect(sourceOf(TRUSTED, { peer: "10.0.0.2", forwardedFor: "fe80::1%eth0" }).address).toBe("10.0.0.2");
+			expect(sourceOf(TRUSTED, { peer: "10.0.0.2", forwardedFor: "fd00::1%eth0, 10.0.0.7" }).address).toBe(
+				"10.0.0.7",
+			);
+		});
+
 		it("matches an IPv4-mapped peer against an IPv4 range, and IPv6 against IPv6", () => {
 			expect(
 				sourceOf(TRUSTED, { peer: "::ffff:10.0.0.2", forwardedFor: "203.0.113.5" }).address,

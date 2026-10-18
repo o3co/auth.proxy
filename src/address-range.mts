@@ -8,7 +8,7 @@
  * and by the injection path, which builds its trust list from the same
  * grammar.
  *
- * An address with a port, a host name or surrounding space is not a range: a
+ * An address with a port, a zone ID, a host name or surrounding space is not a range: a
  * trust list that silently dropped such an entry would trust less than the
  * operator wrote, and one that guessed would trust more.
  */
@@ -23,12 +23,20 @@ export interface AddressRange {
 
 const PREFIX = /^(0|[1-9][0-9]{0,2})$/;
 
+/**
+ * `4` or `6` for an IP address, `0` for anything else — including an IPv6
+ * address with a zone ID (`fe80::1%eth0`), which `net.isIP` accepts but which
+ * names an interface of one host, not an address another host can reach.
+ */
+export const ipVersion = (value: string): 0 | 4 | 6 =>
+	value.includes("%") ? 0 : (net.isIP(value) as 0 | 4 | 6);
+
 /** The range `entry` names, or `null` when it is not an address or an address/prefix. */
 export const parseAddressRange = (entry: string): AddressRange | null => {
 	const parts = entry.split("/");
 	if (parts.length > 2) return null;
 	const [address, prefixText] = parts as [string, string | undefined];
-	const version = net.isIP(address);
+	const version = ipVersion(address);
 	if (version === 0) return null;
 	const family = version === 4 ? "ipv4" : "ipv6";
 	const width = version === 4 ? 32 : 128;

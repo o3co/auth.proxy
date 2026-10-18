@@ -455,7 +455,7 @@ describe("proxy config — injection mode", () => {
 		});
 
 		it("refuses an entry that is not an IP address or an address/prefix, naming the key", () => {
-			for (const value of ["proxy.internal", "10.0.0.0/33", "10.0.0.1:80"]) {
+			for (const value of ["proxy.internal", "10.0.0.0/33", "10.0.0.1:80", "fe80::1%eth0"]) {
 				expect(() => trustedProxiesOf({ INJECTION_TRUSTED_PROXIES: value }), value).toThrow(
 					/auth\.injection\.trustedProxies/,
 				);

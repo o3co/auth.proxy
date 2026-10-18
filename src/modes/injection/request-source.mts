@@ -13,7 +13,8 @@
  * from the right, and the walk stops at the first address that is not a
  * trusted proxy — the browser, as far as the trusted chain can tell. Every
  * address to the left of it was written by someone this proxy does not trust.
- * A hop that is not an IP address ends the walk at the last address read. With
+ * A hop that is not an IP address — a host name, a port, an IPv6 zone ID —
+ * ends the walk at the last address read. With
  * an empty list, nothing is trusted: the address is the socket's peer.
  *
  * The scheme is the socket's (`https` on a TLS socket, otherwise `http`),
@@ -24,7 +25,7 @@
 
 import type { IncomingMessage } from "node:http";
 import net from "node:net";
-import { parseAddressRange } from "../../address-range.mjs";
+import { ipVersion, parseAddressRange } from "../../address-range.mjs";
 
 export type RequestProtocol = "http" | "https";
 
@@ -76,7 +77,7 @@ export const createRequestSource = (
 			.filter((hop) => hop.length > 0);
 		for (let i = hops.length - 1; i >= 0 && trusted(address); i--) {
 			const hop = hops[i] as string;
-			if (net.isIP(hop) === 0) break;
+			if (ipVersion(hop) === 0) break;
 			address = hop;
 		}
 

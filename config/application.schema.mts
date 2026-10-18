@@ -486,7 +486,7 @@ export const AppConfigSchema = z.object({
 					(entries) => entries.every((entry) => parseAddressRange(entry) !== null),
 					{
 						message:
-							"auth.injection.trustedProxies entries must be IP addresses or address/prefix ranges (10.0.0.0/8, 192.0.2.1, fd00::/8), with no port or host name",
+							"auth.injection.trustedProxies entries must be IP addresses or address/prefix ranges (10.0.0.0/8, 192.0.2.1, fd00::/8), with no port, zone ID or host name",
 					},
 				),
 				tokenCache: z
