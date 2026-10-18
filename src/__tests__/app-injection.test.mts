@@ -910,8 +910,8 @@ describe.each(SETUPS)("the app in injection mode, $name", (setup) => {
 });
 
 // The provider decides the session grant's same-origin check and its request
-// source from what the session grant carries (README, Calling auth.provider
-// 0.18's session grant): the browser's own Origin and Sec-Fetch-Site, as
+// source from what the session grant carries (README, Calling
+// auth.provider's session grant): the browser's own Origin and Sec-Fetch-Site, as
 // received, and the proxy's own X-Forwarded-For / X-Forwarded-Proto.
 describe("the app in injection mode, telling the provider about the browser's request", () => {
 	let direct: ProxyProcess;
