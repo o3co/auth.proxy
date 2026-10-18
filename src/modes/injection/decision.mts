@@ -32,6 +32,7 @@ import {
 	type CookieRejectReason,
 	extractCookie,
 } from "./cookie-extractor.mjs";
+import { isSameOriginRequest } from "./origin-gate.mjs";
 import {
 	type CallerContext,
 	SESSION_GRANT_TYPE,
@@ -336,7 +337,15 @@ export const decideInjection = async (
 
 	const sessionCookieValue = extraction.value;
 	const cacheKey = sessionCacheKey(cfg, sessionCookieValue);
-	const cached = tokenCache.get(cacheKey);
+	/**
+	 * Only a request that showed it came from the public origin may be answered
+	 * from the cache or from another request's flight: neither reaches the
+	 * provider, whose session grant holds the request to a same-origin check.
+	 * Any other asks the provider itself, with its own headers, and its grant is
+	 * neither cached nor shared (origin-gate.mts).
+	 */
+	const sameOrigin = isSameOriginRequest(caller, cfg.publicOrigin);
+	const cached = sameOrigin ? tokenCache.get(cacheKey) : null;
 
 	const inject = (token: string): InjectionOutcome => {
 		// Presence, as the hand-off and the strip read it: an
@@ -359,33 +368,40 @@ export const decideInjection = async (
 		return inject(cached);
 	}
 
-	try {
-		const { value: token, wasWaiter } = await singleFlight.run(cacheKey, async () => {
-			logger.info({ requestId, event: "injection.grant_fetch" }, "fetching grant");
-			// Captured before the request goes out: expires_in is measured
-			// from here, not from however late the response arrives.
-			const requestedAt = Date.now();
-			const result = await grantClient.exchange({
-				sessionCookieValue,
-				requestId,
-				caller,
-			});
-			const expiresAt = computeCacheExpiresAt({
-				requestedAt,
-				now: Date.now(),
-				ttlSeconds: cfg.tokenCache.ttlSeconds,
-				safetyMarginSeconds: cfg.tokenCache.safetyMarginSeconds,
-				expiresIn: result.expiresIn,
-			});
-			if (expiresAt !== null) {
-				tokenCache.set(cacheKey, result.accessToken, expiresAt);
-			}
-			logger.info(
-				{ requestId, event: "injection.grant_success", expiresIn: result.expiresIn },
-				"grant success",
-			);
-			return result.accessToken;
+	const fetchGrant = async (): Promise<string> => {
+		logger.info({ requestId, event: "injection.grant_fetch", sameOrigin }, "fetching grant");
+		// Captured before the request goes out: expires_in is measured
+		// from here, not from however late the response arrives.
+		const requestedAt = Date.now();
+		const result = await grantClient.exchange({
+			sessionCookieValue,
+			requestId,
+			caller,
 		});
+		const expiresAt = computeCacheExpiresAt({
+			requestedAt,
+			now: Date.now(),
+			ttlSeconds: cfg.tokenCache.ttlSeconds,
+			safetyMarginSeconds: cfg.tokenCache.safetyMarginSeconds,
+			expiresIn: result.expiresIn,
+		});
+		if (sameOrigin && expiresAt !== null) {
+			tokenCache.set(cacheKey, result.accessToken, expiresAt);
+		}
+		logger.info(
+			{ requestId, event: "injection.grant_success", expiresIn: result.expiresIn },
+			"grant success",
+		);
+		return result.accessToken;
+	};
+
+	try {
+		// No await between the cache lookup and `singleFlight.run`: a request
+		// that misses joins a flight still in progress rather than starting a
+		// second grant for the same cookie.
+		const { value: token, wasWaiter } = sameOrigin
+			? await singleFlight.run(cacheKey, fetchGrant)
+			: { value: await fetchGrant(), wasWaiter: false };
 		if (wasWaiter) {
 			logger.debug({ requestId, event: "injection.single_flight_wait" }, "coalesced");
 		}

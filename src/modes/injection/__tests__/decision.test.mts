@@ -43,6 +43,7 @@ const baseCfg: InjectionCfg = {
 	sessionCookieName: "sid",
 	stripInboundAuthorization: false,
 	trustedProxies: [],
+	publicOrigin: null,
 	tokenCache: { ttlSeconds: 60, maxEntries: 100, safetyMarginSeconds: 5 },
 	timeoutMs: 5000,
 	exchange: { enabled: false },
@@ -699,6 +700,115 @@ describe("decideInjection", () => {
 				});
 			}
 			expect(grantClient.exchange).toHaveBeenCalledTimes(1);
+		});
+	});
+
+	// The provider holds a session grant to a same-origin check, and a cache
+	// hit or a joined flight never reaches the provider. So only a request that
+	// shows it came from the public origin is answered from either; any other
+	// asks the provider itself, with its own headers, and the provider decides.
+	describe("the same-origin gate in front of the session cache", () => {
+		const PUBLIC = "https://admin.example";
+		const FOREIGN: CallerContext = { ...CALLER, origin: "https://elsewhere.example", secFetchSite: "same-origin" };
+		const NO_SIGNAL: CallerContext = { ...CALLER, origin: null, secFetchSite: null };
+
+		it.each([
+			{ label: "a foreign Origin", caller: FOREIGN },
+			{ label: "neither Origin nor Sec-Fetch-Site", caller: NO_SIGNAL },
+			{ label: "Sec-Fetch-Site: cross-site", caller: { ...NO_SIGNAL, secFetchSite: "cross-site" } },
+		])("does not serve a cached grant to a request with $label: the provider is asked, with that request's own headers", async ({ caller }) => {
+			const { deps, logger, grantClient } = makeDeps({ publicOrigin: PUBLIC });
+			deps.tokenCache.set(keyFor("s1"), "tok-cached", Date.now() + 60_000);
+			grantClient.exchange.mockRejectedValueOnce(
+				new SessionGrantError("session_unauthorized", 401, "provider reported the session is invalid or expired"),
+			);
+
+			const outcome = await decideInjection(inputs({ cookieHeader: "sid=s1", caller }), deps);
+
+			expect(outcome).toMatchObject({ kind: "respond", status: 401, body: { error: "session_required" } });
+			expect(grantClient.exchange).toHaveBeenCalledWith({ sessionCookieValue: "s1", requestId: "rid-1", caller });
+			expect(eventsOf(logger.debug)).not.toContain("injection.cache_hit");
+			expect(fieldsOf(logger.info)).toContainEqual(
+				expect.objectContaining({ event: "injection.grant_fetch", sameOrigin: false }),
+			);
+		});
+
+		it.each([
+			{ label: "an Origin equal to publicOrigin", caller: { ...CALLER, origin: PUBLIC, secFetchSite: null } },
+			{ label: "Sec-Fetch-Site: same-origin and no Origin", caller: CALLER },
+		])("serves a cached grant to a request with $label", async ({ caller }) => {
+			const { deps, grantClient } = makeDeps({ publicOrigin: PUBLIC });
+			deps.tokenCache.set(keyFor("s1"), "tok-cached", Date.now() + 60_000);
+
+			const outcome = await decideInjection(inputs({ cookieHeader: "sid=s1", caller }), deps);
+
+			expect(outcome).toEqual({ kind: "inject", token: "tok-cached" });
+			expect(grantClient.exchange).not.toHaveBeenCalled();
+		});
+
+		it("does not serve a cached grant to an Origin while publicOrigin is unset", async () => {
+			const { deps, grantClient } = makeDeps({ publicOrigin: null });
+			deps.tokenCache.set(keyFor("s1"), "tok-cached", Date.now() + 60_000);
+			grantClient.exchange.mockResolvedValueOnce(grant("tok-own"));
+
+			const caller = { ...CALLER, origin: PUBLIC };
+			expect(await decideInjection(inputs({ cookieHeader: "sid=s1", caller }), deps)).toEqual({
+				kind: "inject",
+				token: "tok-own",
+			});
+			expect(grantClient.exchange).toHaveBeenCalledTimes(1);
+		});
+
+		it("does not join a same-origin request's flight in progress", async () => {
+			const { deps, grantClient } = makeDeps({ publicOrigin: PUBLIC });
+			let release: ((value: SessionGrantResult) => void) | null = null;
+			grantClient.exchange.mockReturnValueOnce(
+				new Promise<SessionGrantResult>((resolve) => {
+					release = resolve;
+				}),
+			);
+			grantClient.exchange.mockRejectedValueOnce(
+				new SessionGrantError("session_unauthorized", 401, "provider reported the session is invalid or expired"),
+			);
+
+			const sameOrigin = decideInjection(inputs({ cookieHeader: "sid=s1", requestId: "rid-a" }), deps);
+			const foreign = decideInjection(
+				inputs({ cookieHeader: "sid=s1", requestId: "rid-b", caller: FOREIGN }),
+				deps,
+			);
+			await new Promise((resolve) => setTimeout(resolve, 0));
+			(release as ((value: SessionGrantResult) => void) | null)?.(grant("tok-shared"));
+
+			expect(await sameOrigin).toEqual({ kind: "inject", token: "tok-shared" });
+			expect(await foreign).toMatchObject({ kind: "respond", status: 401 });
+			expect(grantClient.exchange).toHaveBeenCalledTimes(2);
+			expect(grantClient.exchange).toHaveBeenLastCalledWith({
+				sessionCookieValue: "s1",
+				requestId: "rid-b",
+				caller: FOREIGN,
+			});
+		});
+
+		it("does not cache a grant the provider gave a request that did not show it was same-origin", async () => {
+			const { deps, grantClient } = makeDeps({ publicOrigin: PUBLIC });
+			grantClient.exchange.mockResolvedValueOnce(grant("tok-own"));
+
+			expect(await decideInjection(inputs({ cookieHeader: "sid=s1", caller: NO_SIGNAL }), deps)).toEqual({
+				kind: "inject",
+				token: "tok-own",
+			});
+			expect(deps.tokenCache.get(keyFor("s1"))).toBeNull();
+		});
+
+		it("logs grant_fetch with sameOrigin: true for a request it admitted", async () => {
+			const { deps, logger, grantClient } = makeDeps({ publicOrigin: PUBLIC });
+			grantClient.exchange.mockResolvedValueOnce(grant("tok-1"));
+
+			await decideInjection(inputs({ cookieHeader: "sid=s1" }), deps);
+
+			expect(fieldsOf(logger.info)).toContainEqual(
+				expect.objectContaining({ event: "injection.grant_fetch", sameOrigin: true }),
+			);
 		});
 	});
 

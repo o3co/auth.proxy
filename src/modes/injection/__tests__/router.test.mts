@@ -82,6 +82,7 @@ const makeConfig = (
 			sessionCookieName: "sid",
 			stripInboundAuthorization: false,
 			trustedProxies: [],
+			publicOrigin: null,
 			tokenCache: { ttlSeconds: 60, maxEntries: 100, safetyMarginSeconds: 5 },
 			timeoutMs: 5000,
 			exchange: { enabled: false },
@@ -113,6 +114,12 @@ const okGrantResponse = (accessToken = "grant-tok", expiresIn: number | null = 1
 		token_type: "Bearer",
 		...(expiresIn !== null ? { expires_in: expiresIn } : {}),
 	});
+
+/**
+ * What a browser sends on a fetch from this proxy's own pages, the requests the
+ * session cache and the flight table answer (`origin-gate.mts`).
+ */
+const SAME_ORIGIN = { "Sec-Fetch-Site": "same-origin" };
 
 type LogField = Record<string, unknown>;
 // Every Logger method shares one signature, so a debug spy fits this type too.
@@ -169,13 +176,53 @@ describe("injection router", () => {
 		fetchMock.mockResolvedValueOnce(okGrantResponse("tok-1"));
 		const app = mountApp(makeConfig(upstream.baseURL));
 
-		await request(app).get("/any").set("Cookie", "sid=s1");
-		await request(app).get("/any").set("Cookie", "sid=s1");
+		await request(app).get("/any").set("Cookie", "sid=s1").set(SAME_ORIGIN);
+		await request(app).get("/any").set("Cookie", "sid=s1").set(SAME_ORIGIN);
 
 		expect(fetchMock).toHaveBeenCalledTimes(1);
 		expect(upstream.received).toHaveLength(2);
 		expect(upstream.received[0].headers.authorization).toBe("Bearer tok-1");
 		expect(upstream.received[1].headers.authorization).toBe("Bearer tok-1");
+	});
+
+	// A cache hit never reaches the provider, whose session grant refuses a
+	// request it cannot see came from its own origin. So the cache answers only
+	// a request that shows it came from publicOrigin; any other asks the
+	// provider, with its own Origin, and gets the provider's answer.
+	describe("the same-origin gate in front of the session cache", () => {
+		const PUBLIC = "https://admin.example";
+		const refused = () =>
+			jsonResponse(401, { error: "invalid_request", error_description: "cross-origin session grant" });
+
+		it.each([
+			{ label: "a foreign Origin", headers: { Origin: "https://elsewhere.example", "Sec-Fetch-Site": "cross-site" } },
+			{ label: "no Origin and no Sec-Fetch-Site", headers: {} },
+		])("does not hand the cached grant to a request with $label: the provider is asked and its refusal answered", async ({ headers }) => {
+			fetchMock.mockResolvedValueOnce(okGrantResponse("tok-1")).mockResolvedValueOnce(refused());
+			const app = mountApp(makeConfig(upstream.baseURL, { publicOrigin: PUBLIC }));
+
+			await request(app).get("/any").set("Cookie", "sid=s1").set("Origin", PUBLIC);
+			const res = await request(app).get("/any").set("Cookie", "sid=s1").set(headers);
+
+			expect(fetchMock).toHaveBeenCalledTimes(2);
+			const sent = (fetchMock.mock.calls[1][1] as RequestInit).headers as Record<string, string>;
+			expect(sent.Origin).toBe((headers as Record<string, string>).Origin);
+			expect(res.status).toBe(401);
+			expect(res.body.error).toBe("session_required");
+			expect(upstream.received).toHaveLength(1);
+		});
+
+		it("hands the cached grant to a request whose Origin is publicOrigin", async () => {
+			fetchMock.mockResolvedValueOnce(okGrantResponse("tok-1"));
+			const app = mountApp(makeConfig(upstream.baseURL, { publicOrigin: PUBLIC }));
+
+			await request(app).post("/any").set("Cookie", "sid=s1").set("Origin", PUBLIC);
+			const res = await request(app).post("/any").set("Cookie", "sid=s1").set("Origin", PUBLIC);
+
+			expect(res.status).toBe(204);
+			expect(fetchMock).toHaveBeenCalledTimes(1);
+			expect(upstream.received[1].headers.authorization).toBe("Bearer tok-1");
+		});
 	});
 
 	it("coalesces concurrent requests with the same cookie into one provider call", async () => {
@@ -189,9 +236,9 @@ describe("injection router", () => {
 
 		try {
 			const inflight = Promise.all([
-				request(baseURL).get("/a").set("Cookie", "sid=s1"),
-				request(baseURL).get("/b").set("Cookie", "sid=s1"),
-				request(baseURL).get("/c").set("Cookie", "sid=s1"),
+				request(baseURL).get("/a").set("Cookie", "sid=s1").set(SAME_ORIGIN),
+				request(baseURL).get("/b").set("Cookie", "sid=s1").set(SAME_ORIGIN),
+				request(baseURL).get("/c").set("Cookie", "sid=s1").set(SAME_ORIGIN),
 			]);
 			await joined;
 			grantControl.resolve?.(okGrantResponse("tok-shared"));
@@ -249,7 +296,7 @@ describe("injection router", () => {
 			if (arrived === 2) waiterJoined();
 		});
 		const get = (path: string) => {
-			const req = http.request({ host: "127.0.0.1", port, path, headers: { Cookie: "sid=s1" } });
+			const req = http.request({ host: "127.0.0.1", port, path, headers: { Cookie: "sid=s1", ...SAME_ORIGIN } });
 			// Resolves with null on a reset rather than rejecting: destroying the
 			// socket is the point, and an unhandled rejection would fail the run
 			// for the thing under test.
@@ -590,16 +637,16 @@ describe("injection router", () => {
 			.mockResolvedValueOnce(okGrantResponse("tok-2", 120));
 		const app = mountApp(makeConfig(upstream.baseURL));
 
-		await request(app).get("/any").set("Cookie", "sid=s1");
+		await request(app).get("/any").set("Cookie", "sid=s1").set(SAME_ORIGIN);
 		expect(upstream.received[0].headers.authorization).toBe("Bearer tok-1");
 
 		vi.setSystemTime(Date.now() + 30_000);
-		await request(app).get("/any").set("Cookie", "sid=s1");
+		await request(app).get("/any").set("Cookie", "sid=s1").set(SAME_ORIGIN);
 		expect(upstream.received[1].headers.authorization).toBe("Bearer tok-1");
 		expect(fetchMock).toHaveBeenCalledTimes(1);
 
 		vi.setSystemTime(Date.now() + 30_000);
-		await request(app).get("/any").set("Cookie", "sid=s1");
+		await request(app).get("/any").set("Cookie", "sid=s1").set(SAME_ORIGIN);
 		expect(upstream.received[2].headers.authorization).toBe("Bearer tok-2");
 		expect(fetchMock).toHaveBeenCalledTimes(2);
 	});
@@ -619,13 +666,13 @@ describe("injection router", () => {
 			.mockResolvedValueOnce(okGrantResponse("tok-2", 20));
 		const app = mountApp(makeConfig(upstream.baseURL));
 
-		await request(app).get("/any").set("Cookie", "sid=s1");
+		await request(app).get("/any").set("Cookie", "sid=s1").set(SAME_ORIGIN);
 		vi.setSystemTime(requestedAt + 14_000);
-		await request(app).get("/any").set("Cookie", "sid=s1");
+		await request(app).get("/any").set("Cookie", "sid=s1").set(SAME_ORIGIN);
 		expect(fetchMock).toHaveBeenCalledTimes(1);
 
 		vi.setSystemTime(requestedAt + 16_000);
-		await request(app).get("/any").set("Cookie", "sid=s1");
+		await request(app).get("/any").set("Cookie", "sid=s1").set(SAME_ORIGIN);
 		expect(fetchMock).toHaveBeenCalledTimes(2);
 		expect(upstream.received[2].headers.authorization).toBe("Bearer tok-2");
 	});
@@ -641,8 +688,8 @@ describe("injection router", () => {
 			.mockResolvedValueOnce(okGrantResponse("tok-2", 20));
 		const app = mountApp(makeConfig(upstream.baseURL));
 
-		await request(app).get("/any").set("Cookie", "sid=s1");
-		await request(app).get("/any").set("Cookie", "sid=s1");
+		await request(app).get("/any").set("Cookie", "sid=s1").set(SAME_ORIGIN);
+		await request(app).get("/any").set("Cookie", "sid=s1").set(SAME_ORIGIN);
 
 		expect(fetchMock).toHaveBeenCalledTimes(2);
 		expect(upstream.received[1].headers.authorization).toBe("Bearer tok-2");
@@ -829,7 +876,7 @@ describe("injection router", () => {
 		const app = express();
 		app.use(createRouter({ config, deps: { tokenCache, grantClient } }));
 
-		const res = await request(app).get("/any").set("Cookie", "sid=s1");
+		const res = await request(app).get("/any").set("Cookie", "sid=s1").set(SAME_ORIGIN);
 
 		expect(res.status).toBe(204);
 		expect(upstream.received[0].headers.authorization).toBe("Bearer tok-seeded");
@@ -848,7 +895,7 @@ describe("injection router", () => {
 		const app = express();
 		app.use(createRouter({ config, deps: { singleFlight } }));
 
-		const res = await request(app).get("/any").set("Cookie", "sid=s1");
+		const res = await request(app).get("/any").set("Cookie", "sid=s1").set(SAME_ORIGIN);
 
 		expect(res.status).toBe(204);
 		expect(upstream.received[0].headers.authorization).toBe("Bearer tok-flight");

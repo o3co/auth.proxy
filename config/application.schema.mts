@@ -77,6 +77,23 @@ const isIntrospectionUrl = (value: string): boolean => {
 };
 
 /**
+ * An http(s) origin and nothing else: `scheme://host[:port]`, optionally with
+ * a bare trailing slash, and no userinfo, path, query or fragment.
+ */
+const isHttpOrigin = (value: string): boolean => {
+	if (!URL.canParse(value)) return false;
+	const parsed = new URL(value);
+	return (
+		(parsed.protocol === "http:" || parsed.protocol === "https:") &&
+		parsed.username === "" &&
+		parsed.password === "" &&
+		(parsed.pathname === "" || parsed.pathname === "/") &&
+		!parsed.search &&
+		!parsed.hash
+	);
+};
+
+/**
  * A boolean that survives the HOCON -> environment round trip: `parseFile`
  * substitutes an environment override as a string, so both the literal
  * `false` and the string `"false"` must mean false. Anything that is neither
@@ -404,23 +421,10 @@ export const AppConfigSchema = z.object({
 				providerOrigin: z
 					.string()
 					.url()
-					.refine(
-						(u) => {
-							const parsed = new URL(u);
-							return (
-								(parsed.protocol === "http:" || parsed.protocol === "https:") &&
-								parsed.username === "" &&
-								parsed.password === "" &&
-								(parsed.pathname === "" || parsed.pathname === "/") &&
-								!parsed.search &&
-								!parsed.hash
-							);
-						},
-						{
-							message:
-								"providerOrigin must be an http(s) origin only (scheme://host[:port]), no userinfo/path/query/fragment",
-						},
-					),
+					.refine(isHttpOrigin, {
+						message:
+							"providerOrigin must be an http(s) origin only (scheme://host[:port]), no userinfo/path/query/fragment",
+					}),
 				clientId: z.string().min(1),
 				/**
 				 * Unset, the proxy is a public client for the session grant, sending
@@ -452,6 +456,25 @@ export const AppConfigSchema = z.object({
 				stripInboundAuthorization: strictBoolean(
 					"auth.injection.stripInboundAuthorization",
 				),
+				/**
+				 * The origin browsers reach this proxy at. A request whose `Origin`
+				 * equals it may be answered from the session cache
+				 * (`modes/injection/origin-gate.mts`). Held as a browser serialises
+				 * `Origin` — scheme and host lower-cased, no default port, no
+				 * trailing slash — so the gate compares strings.
+				 */
+				publicOrigin: optionalString().transform((value, ctx): string | null => {
+					if (value === null) return null;
+					if (!isHttpOrigin(value)) {
+						ctx.addIssue({
+							code: "custom",
+							message:
+								"auth.injection.publicOrigin must be an http(s) origin only (scheme://host[:port]), no userinfo/path/query/fragment",
+						});
+						return z.NEVER;
+					}
+					return new URL(value).origin;
+				}),
 				/**
 				 * The proxies in front of this one whose `X-Forwarded-For` and
 				 * `X-Forwarded-Proto` it believes when it tells the provider where a
