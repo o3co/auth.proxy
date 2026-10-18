@@ -2,7 +2,7 @@
 
 Last updated: 2026-10-18
 
-Injection mode turns a session cookie into the outbound `Authorization: Bearer` header. With the exchange enabled, it does the same for an external JWT. The root README describes the wire behaviour under [Injection mode](../../../README.md#injection-mode-authmode--injection), [Cache behavior](../../../README.md#cache-behavior), [Scope boundary](../../../README.md#scope-boundary), [CSRF responsibility boundary](../../../README.md#csrf-responsibility-boundary), [Cookie forwarding](../../../README.md#cookie-forwarding) and [External credential exchange](../../../README.md#external-credential-exchange-authinjectionexchange). The boundary review behind this directory is [#95](https://github.com/o3co/auth.proxy/issues/95).
+Injection mode turns a session cookie into the outbound `Authorization: Bearer` header. With the exchange enabled, it does the same for an external JWT. The root README describes the wire behaviour under [Injection mode](../../../README.md#injection-mode-authmode--injection), [Cache behavior](../../../README.md#cache-behavior), [Scope boundary](../../../README.md#scope-boundary), [CSRF responsibility boundary](../../../README.md#csrf-responsibility-boundary), [Cookie forwarding](../../../README.md#cookie-forwarding), [Calling auth.provider 0.18's session grant](../../../README.md#calling-authprovider-018s-session-grant) and [External credential exchange](../../../README.md#external-credential-exchange-authinjectionexchange). The boundary review behind this directory is [#95](https://github.com/o3co/auth.proxy/issues/95).
 
 ## Responsibility
 
