@@ -35,6 +35,7 @@
  */
 
 import { z } from "zod";
+import { parseAddressRange } from "../src/address-range.mjs";
 import { parseByteSize } from "../src/byte-size.mjs";
 import { type ClientKey, ClientKeyError, parseClientKey } from "../src/oauth/private-key-jwt.mjs";
 
@@ -450,6 +451,20 @@ export const AppConfigSchema = z.object({
 				 */
 				stripInboundAuthorization: strictBoolean(
 					"auth.injection.stripInboundAuthorization",
+				),
+				/**
+				 * The proxies in front of this one whose `X-Forwarded-For` and
+				 * `X-Forwarded-Proto` it believes when it tells the provider where a
+				 * browser request came from (`modes/injection/request-source.mts`).
+				 * Each entry is an IP address or an address/prefix range; empty
+				 * believes none.
+				 */
+				trustedProxies: whitespaceSeparatedList("auth.injection.trustedProxies").refine(
+					(entries) => entries.every((entry) => parseAddressRange(entry) !== null),
+					{
+						message:
+							"auth.injection.trustedProxies entries must be IP addresses or address/prefix ranges (10.0.0.0/8, 192.0.2.1, fd00::/8), with no port or host name",
+					},
 				),
 				tokenCache: z
 					.object({

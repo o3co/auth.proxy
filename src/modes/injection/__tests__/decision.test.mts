@@ -24,6 +24,7 @@ import {
 } from "../decision.mjs";
 import { exchangeCacheKey } from "../exchange.mjs";
 import {
+	type CallerContext,
 	SessionGrantError,
 	type SessionGrantErrorCode,
 	type SessionGrantResult,
@@ -41,6 +42,7 @@ const baseCfg: InjectionCfg = {
 	scope: "api",
 	sessionCookieName: "sid",
 	stripInboundAuthorization: false,
+	trustedProxies: [],
 	tokenCache: { ttlSeconds: 60, maxEntries: 100, safetyMarginSeconds: 5 },
 	timeoutMs: 5000,
 	exchange: { enabled: false },
@@ -67,10 +69,19 @@ const makeDeps = (
 	return { deps, logger, grantClient };
 };
 
+/** A same-origin browser request, as the router hands it over. */
+const CALLER: CallerContext = {
+	origin: null,
+	secFetchSite: "same-origin",
+	address: "203.0.113.7",
+	protocol: "https",
+};
+
 const inputs = (overrides: Partial<InjectionInputs> = {}): InjectionInputs => ({
 	requestId: "rid-1",
 	cookieHeader: undefined,
 	authorization: undefined,
+	caller: CALLER,
 	...overrides,
 });
 
@@ -407,7 +418,7 @@ describe("decideInjection", () => {
 			const outcome = await decideInjection(inputs({ cookieHeader: "sid=s1" }), deps);
 			expect(outcome).toEqual<InjectionOutcome>({ kind: "inject", token: "tok-1" });
 			expect(grantClient.exchange).toHaveBeenCalledTimes(1);
-			expect(grantClient.exchange).toHaveBeenCalledWith({ sessionCookieValue: "s1", requestId: "rid-1" });
+			expect(grantClient.exchange).toHaveBeenCalledWith({ sessionCookieValue: "s1", requestId: "rid-1", caller: CALLER });
 			expect(eventsOf(logger.info)).toEqual(["injection.grant_fetch", "injection.grant_success"]);
 			expect(fieldsOf(logger.info)[1]).toMatchObject({ expiresIn: 120 });
 		});
@@ -485,7 +496,7 @@ describe("decideInjection", () => {
 			grantClient.exchange.mockResolvedValueOnce(grant("tok-good"));
 			const outcome = await decideInjection(inputs({ cookieHeader: "sid=bad,val; sid=good" }), deps);
 			expect(outcome).toEqual({ kind: "inject", token: "tok-good" });
-			expect(grantClient.exchange).toHaveBeenCalledWith({ sessionCookieValue: "good", requestId: "rid-1" });
+			expect(grantClient.exchange).toHaveBeenCalledWith({ sessionCookieValue: "good", requestId: "rid-1", caller: CALLER });
 			expect(fieldsOf(logger.warn)).toEqual([
 				expect.objectContaining({ event: "injection.cookie_rejected", reason: "grammar", action: "fallback" }),
 			]);

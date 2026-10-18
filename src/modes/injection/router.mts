@@ -22,7 +22,9 @@
  * `createRouter` builds the session path's cache, flight table and grant
  * client and — with the exchange on — the exchange's context, client, cache
  * and flight table, or takes them from `deps`; the exchange context is always
- * derived from config, never supplied.
+ * derived from config, never supplied, and so is the request source the
+ * session grant reports the browser's address and scheme from
+ * (`auth.injection.trustedProxies`).
  */
 
 import type { NextFunction, Request, Response } from "express";
@@ -44,7 +46,8 @@ import {
 	exchangeContext,
 } from "./exchange.mjs";
 import { createJwtBearerClient } from "./jwt-bearer-client.mjs";
-import { createSessionGrantClient } from "./session-grant-client.mjs";
+import { createRequestSource, type RequestSource } from "./request-source.mjs";
+import { type CallerContext, createSessionGrantClient } from "./session-grant-client.mjs";
 import { stageRefusals } from "./stage-refusals.mjs";
 import { createTokenCache } from "./token-cache.mjs";
 
@@ -82,8 +85,24 @@ const requireExchange = (exchange: ExchangeDeps | null): ExchangeDeps => {
 	return exchange;
 };
 
+/** A header the browser sent, as received; `null` when it sent none. */
+const received = (value: string | string[] | undefined): string | null =>
+	typeof value === "string" ? value : null;
+
 /**
- * Reads the three headers, lets `decideInjection` decide — and, on its
+ * The browser request as the session grant tells the provider about it: its
+ * own `Origin` and `Sec-Fetch-Site`, untouched, and the address and scheme
+ * this proxy vouches for. The client's own `X-Forwarded-*` count only through
+ * `requestSource`, which believes them from a trusted proxy alone.
+ */
+const callerOf = (req: Request, requestSource: (req: Request) => RequestSource): CallerContext => ({
+	origin: received(req.headers.origin),
+	secFetchSite: received(req.headers["sec-fetch-site"]),
+	...requestSource(req),
+});
+
+/**
+ * Reads the request, lets `decideInjection` decide — and, on its
  * `exchange` hand-off, `decideExchange` — then applies the outcome.
  *
  * `inject` and `forward_stripped` act on `req.headers` before the upstream
@@ -93,13 +112,18 @@ const requireExchange = (exchange: ExchangeDeps | null): ExchangeDeps => {
  * know throws rather than leaving the request unanswered and the socket held.
  */
 const injectionMiddleware =
-	(deps: InjectionDeps, exchange: ExchangeDeps | null) =>
+	(
+		deps: InjectionDeps,
+		exchange: ExchangeDeps | null,
+		requestSource: (req: Request) => RequestSource,
+	) =>
 	async (req: Request, res: Response, next: NextFunction): Promise<void> => {
 		const decided = await decideInjection(
 			{
 				requestId: (req.headers["x-request-id"] as string | undefined) ?? "",
 				cookieHeader: req.headers.cookie,
 				authorization: req.headers.authorization,
+				caller: callerOf(req, requestSource),
 			},
 			deps,
 		);
@@ -231,7 +255,7 @@ export const createRouter = ({
 			next();
 		})
 		.use(createBodyLimitGuard({ limitBytes, refusals }))
-		.use(injectionMiddleware(deps, exchange))
+		.use(injectionMiddleware(deps, exchange, createRequestSource(cfg.trustedProxies)))
 		.use(createUpstreamProxy(config))
 		.use(createErrorHandler({ limitBytes, refusals }));
 

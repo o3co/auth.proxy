@@ -1,6 +1,6 @@
 # `src/modes/injection`
 
-Last updated: 2026-10-01
+Last updated: 2026-10-18
 
 Injection mode turns a session cookie into the outbound `Authorization: Bearer` header. With the exchange enabled, it does the same for an external JWT. The root README describes the wire behaviour under [Injection mode](../../../README.md#injection-mode-authmode--injection), [Cache behavior](../../../README.md#cache-behavior), [Scope boundary](../../../README.md#scope-boundary), [CSRF responsibility boundary](../../../README.md#csrf-responsibility-boundary), [Cookie forwarding](../../../README.md#cookie-forwarding) and [External credential exchange](../../../README.md#external-credential-exchange-authinjectionexchange). The boundary review behind this directory is [#95](https://github.com/o3co/auth.proxy/issues/95).
 
@@ -12,6 +12,7 @@ Injection mode turns a session cookie into the outbound `Authorization: Bearer` 
 - turning a session cookie, or with the exchange enabled an inbound assertion, into the outbound `Authorization`;
 - the two token clients and their error codes;
 - the token caches, with their keys and expiry;
+- what the session grant tells the provider about the browser request it is made for — its `Origin`, `Sec-Fetch-Site`, address and scheme;
 - what is logged about each request on this path.
 
 **Does not own:**
@@ -69,6 +70,7 @@ Injection mode turns a session cookie into the outbound `Authorization: Bearer` 
 
    Each code maps to exactly one log event and level — except `request_failed`, at info for a `4xx` and at error otherwise — and a code the union does not declare is logged rather than dropped. Pinned by [`decision.test.mts`](__tests__/decision.test.mts), [`exchange-decision.test.mts`](__tests__/exchange-decision.test.mts), [`router.test.mts`](__tests__/router.test.mts), [`exchange-router.test.mts`](__tests__/exchange-router.test.mts) and the two client tests.
 10. **The router owns only what it builds.** `createRouter({ config, deps })` refuses any mode other than `"injection"`. For each dependency, it takes what the caller supplied under `deps` or `deps.exchange`, and builds the rest. `deps.exchange` is refused while the exchange is disabled. Anything the router built lives in its closure until process exit, and nothing clears it; anything the caller supplied remains the caller's. Pinned by [`router.test.mts`](__tests__/router.test.mts) and [`exchange-router.test.mts`](__tests__/exchange-router.test.mts). That shutdown leaves the caches untouched is not tested.
+11. **The session grant says whose request it is, and invents nothing.** It carries the browser's own `Origin` and `Sec-Fetch-Site` exactly as received, and neither when the browser sent none: filling one in would vouch, to the provider's same-origin check, for a request the browser did not vouch for. `X-Forwarded-For` and `X-Forwarded-Proto` are set whole, never appended to, from what [`request-source.mts`](request-source.mts) vouches for: the socket's peer and scheme, or — only from a peer in `auth.injection.trustedProxies` — the address found by walking `X-Forwarded-For` from the right to the first hop outside that list, and a single `X-Forwarded-Proto` value of `http` or `https`. A client's own `X-Forwarded-*` reach the provider through nothing else. The exchange carries none of these. Pinned by [`request-source.test.mts`](__tests__/request-source.test.mts), [`session-grant-client.test.mts`](__tests__/session-grant-client.test.mts), [`session-grant-client-wire.test.mts`](__tests__/session-grant-client-wire.test.mts), [`router.test.mts`](__tests__/router.test.mts) and [`app-injection.test.mts`](../../__tests__/app-injection.test.mts).
 
 ## Log events
 
@@ -118,8 +120,8 @@ Pinned by [`decision.test.mts`](__tests__/decision.test.mts), [`exchange-decisio
 
 ## Dependencies
 
-- **Within `src/`:** [`router/upstream.mts`](../../router/upstream.mts), `router/body-limit.mts`, `router/error-handler.mts` and the `ModeRefusals` contract in `router/refusal.mts`, which [`stage-refusals.mts`](stage-refusals.mts) implements, `express/requestId.mts`, [`oauth/client-authentication.mts`](../../oauth/client-authentication.mts) (the exchange's client authentication, and the session grant's when it holds a key; the key's type from `oauth/private-key-jwt.mts`), and the root modules `single-flight.mts`, `response-body.mts` and `logger.mts`. Only the router takes the logger singleton; the decisions see just the `Logger` type.
+- **Within `src/`:** [`router/upstream.mts`](../../router/upstream.mts), `router/body-limit.mts`, `router/error-handler.mts` and the `ModeRefusals` contract in `router/refusal.mts`, which [`stage-refusals.mts`](stage-refusals.mts) implements, `express/requestId.mts`, [`oauth/client-authentication.mts`](../../oauth/client-authentication.mts) (the exchange's client authentication, and the session grant's when it holds a key; the key's type from `oauth/private-key-jwt.mts`), and the root modules `single-flight.mts`, `response-body.mts`, `logger.mts` and `address-range.mts` (the `trustedProxies` grammar, which the schema reads too). Only the router takes the logger singleton; the decisions see just the `Logger` type.
 - **Outside `src/`:** `config/application.schema.mts`, as types only.
-- **Packages:** `express` and `node:crypto`.
+- **Packages:** `express`, `node:crypto` and `node:net`.
 - **Never imported:** `src/modes/validation`, which in turn never imports this directory. This mode does not use `express/bearer.mts`, because the exchange parses `Authorization` with its own grammar.
 - **Inside the directory:** no import cycles, and neither token client imports the other. What they share lives in `token-endpoint.mts` and `provider-error.mts` (#95 F19).

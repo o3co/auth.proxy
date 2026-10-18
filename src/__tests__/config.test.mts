@@ -384,6 +384,51 @@ describe("proxy config — injection mode", () => {
 		});
 	});
 
+	// The peers whose X-Forwarded-For / X-Forwarded-Proto the proxy believes
+	// when it tells the provider where a browser request came from. Empty, the
+	// default, believes none: the socket's peer and scheme are forwarded.
+	describe("trustedProxies", () => {
+		const injectionEnv = (extra: Record<string, string> = {}) => ({
+			AUTH_MODE: "injection",
+			INJECTION_CLIENT_ID: "my-spa",
+			INJECTION_SCOPE: "api",
+			...extra,
+		});
+		const trustedProxiesOf = (env: Record<string, string>, extraConf = "") => {
+			const text = `${readFileSync(confPath, "utf8")}\n${extraConf}\n`;
+			const config = validate(parseString(text, { env: injectionEnv(env) }), AppConfigSchema);
+			if (config.auth.mode !== "injection") throw new Error("narrow");
+			return config.auth.injection.trustedProxies;
+		};
+
+		it("defaults to none", () => {
+			expect(trustedProxiesOf({})).toEqual([]);
+		});
+
+		it("reads a whitespace-separated list of addresses and ranges from INJECTION_TRUSTED_PROXIES", () => {
+			expect(trustedProxiesOf({ INJECTION_TRUSTED_PROXIES: "10.0.0.0/8  192.0.2.1 fd00::/8" })).toEqual([
+				"10.0.0.0/8",
+				"192.0.2.1",
+				"fd00::/8",
+			]);
+		});
+
+		it("reads a HOCON list", () => {
+			expect(trustedProxiesOf({}, 'auth.injection.trustedProxies = ["10.0.0.0/8", "::1"]')).toEqual([
+				"10.0.0.0/8",
+				"::1",
+			]);
+		});
+
+		it("refuses an entry that is not an IP address or an address/prefix, naming the key", () => {
+			for (const value of ["proxy.internal", "10.0.0.0/33", "10.0.0.1:80"]) {
+				expect(() => trustedProxiesOf({ INJECTION_TRUSTED_PROXIES: value }), value).toThrow(
+					/auth\.injection\.trustedProxies/,
+				);
+			}
+		});
+	});
+
 	// The external credential exchange is opt-in inside injection mode.
 	// Disabled, it parses to `{ enabled: false }` and nothing else is used,
 	// though every field is still validated; enabled, the proxy authenticates to

@@ -1,6 +1,6 @@
 # `src`
 
-Last updated: 2026-10-01
+Last updated: 2026-10-18
 
 The whole proxy process. Wire behaviour is in the [root README](../README.md); each directory that owns a contract has its own README. The boundary review behind this file is [#95](https://github.com/o3co/auth.proxy/issues/95).
 
@@ -40,7 +40,7 @@ Code both modes need sits outside `modes/`, because neither mode may import the 
 
 - `modes/*` may import the `src/` root's shared modules, `express/`, `oauth/`, `router/` except the healthcheck, and `config/`. Neither mode imports the other.
 - Nothing under `express/`, `oauth/`, `router/` or `config/` imports a mode, and the root's shared modules import no mode. In production code, only `app-internal.mts` imports a mode, to select its router.
-- `express/` and `oauth/` import nothing else in `src/`. `config/` imports `oauth/private-key-jwt.mts`, to read a client key at boot, and `byte-size.mts`, to read `http.bodyLimitSize`.
+- `express/` and `oauth/` import nothing else in `src/`. `config/` imports `oauth/private-key-jwt.mts`, to read a client key at boot, `byte-size.mts`, to read `http.bodyLimitSize`, and `address-range.mts`, to read `auth.injection.trustedProxies` with the grammar the injection mode builds its trust list from.
 - The test support in `__tests__/` that is not itself a test is imported by tests only, never by production code: the fake provider ([`fake-provider.mts`](__tests__/fake-provider.mts)), a local `node:http` server the provider clients reach through the real `fetch`, and the controlled provider timeout beside it (#143); and, for the composition tests, the entry point run in a child process ([`app-process.mts`](__tests__/app-process.mts), with the preload [`child-preload.mts`](__tests__/child-preload.mts)) and a recording upstream ([`recording-upstream.mts`](__tests__/recording-upstream.mts)) (#144); and a client that sends a chunked body ([`post-chunked.mts`](__tests__/post-chunked.mts)).
 
 ## Invariants

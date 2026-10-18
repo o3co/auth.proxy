@@ -1,6 +1,6 @@
 # auth.proxy
 
-Last updated: 2026-10-01
+Last updated: 2026-10-18
 
 [![CI](https://github.com/o3co/auth.proxy/actions/workflows/ci.yml/badge.svg)](https://github.com/o3co/auth.proxy/actions/workflows/ci.yml)
 [![codecov](https://codecov.io/gh/o3co/auth.proxy/graph/badge.svg)](https://codecov.io/gh/o3co/auth.proxy)
@@ -434,6 +434,7 @@ Injection mode:
 | `INJECTION_SCOPE` | **Required.** OAuth `scope` string (space-separated). |
 | `INJECTION_SESSION_COOKIE_NAME` | Session cookie name (default: `connect.sid`). Must be an RFC 6265 `cookie-name` (RFC 9110 token) — whitespace, `=` or other separators fail at startup. |
 | `INJECTION_STRIP_INBOUND_AUTHORIZATION` | `"true"` / `"false"` (default: `false`). Drop an inbound `Authorization` header on a request the proxy did not mint a token for. Any other value fails at startup. See [Inbound Authorization headers](#inbound-authorization-headers). |
+| `INJECTION_TRUSTED_PROXIES` | The proxies in front of this one whose `X-Forwarded-For` and `X-Forwarded-Proto` it believes when it tells the provider, on the session grant, where a browser request came from: a whitespace-separated list of IP addresses and `address/prefix` ranges (default: empty = none; the socket's peer and scheme are sent). A port or a host name fails at startup. List the load balancer or ingress that terminates TLS in front of this proxy, or the provider sees `http`. |
 | `INJECTION_TOKEN_CACHE_TTL_SEC` | Token cache TTL in seconds (default: 60). Applies to the session and exchange caches alike. |
 | `INJECTION_TOKEN_CACHE_MAX_ENTRIES` | Token cache max entries (default: 10000), for each of the session and exchange caches. |
 | `INJECTION_TOKEN_CACHE_SAFETY_MARGIN_SEC` | Clock-drift safety margin in seconds (default: 5). Applies to both caches. |

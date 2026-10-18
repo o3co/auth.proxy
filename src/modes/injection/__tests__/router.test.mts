@@ -81,6 +81,7 @@ const makeConfig = (
 			scope: "api",
 			sessionCookieName: "sid",
 			stripInboundAuthorization: false,
+			trustedProxies: [],
 			tokenCache: { ttlSeconds: 60, maxEntries: 100, safetyMarginSeconds: 5 },
 			timeoutMs: 5000,
 			exchange: { enabled: false },
@@ -417,6 +418,59 @@ describe("injection router", () => {
 		expect(headers.Cookie).toBe("sid=s1");
 	});
 
+	describe("what the session grant says about the browser's request", () => {
+		const providerHeaders = (): Record<string, string> =>
+			(fetchMock.mock.calls[0][1] as RequestInit).headers as Record<string, string>;
+		/** supertest reaches the app over loopback, on a dual-stack listener or not. */
+		const LOOPBACK = /^(::ffff:)?127\.0\.0\.1$/;
+
+		it("forwards the browser's Origin and Sec-Fetch-Site as received, and overwrites the client's X-Forwarded-For and X-Forwarded-Proto", async () => {
+			fetchMock.mockResolvedValueOnce(okGrantResponse("tok-ok"));
+			const app = mountApp(makeConfig(upstream.baseURL));
+
+			await request(app)
+				.get("/any")
+				.set("Cookie", "sid=s1")
+				.set("Origin", "https://elsewhere.example")
+				.set("Sec-Fetch-Site", "cross-site")
+				.set("X-Forwarded-For", "198.51.100.66")
+				.set("X-Forwarded-Proto", "https");
+
+			const headers = providerHeaders();
+			expect(headers.Origin).toBe("https://elsewhere.example");
+			expect(headers["Sec-Fetch-Site"]).toBe("cross-site");
+			expect(headers["X-Forwarded-For"]).toMatch(LOOPBACK);
+			expect(headers["X-Forwarded-Proto"]).toBe("http");
+		});
+
+		it("sends no Origin or Sec-Fetch-Site the browser did not send", async () => {
+			fetchMock.mockResolvedValueOnce(okGrantResponse("tok-ok"));
+			const app = mountApp(makeConfig(upstream.baseURL));
+
+			await request(app).get("/any").set("Cookie", "sid=s1");
+
+			const headers = providerHeaders();
+			expect(Object.keys(headers)).not.toContain("Origin");
+			expect(Object.keys(headers)).not.toContain("Sec-Fetch-Site");
+			expect(headers["X-Forwarded-For"]).toMatch(LOOPBACK);
+		});
+
+		it("behind a front proxy listed in trustedProxies, forwards the browser's address and scheme that proxy reported", async () => {
+			fetchMock.mockResolvedValueOnce(okGrantResponse("tok-ok"));
+			const app = mountApp(makeConfig(upstream.baseURL, { trustedProxies: ["127.0.0.0/8"] }));
+
+			await request(app)
+				.get("/any")
+				.set("Cookie", "sid=s1")
+				.set("X-Forwarded-For", "198.51.100.66, 203.0.113.9")
+				.set("X-Forwarded-Proto", "https");
+
+			const headers = providerHeaders();
+			expect(headers["X-Forwarded-For"]).toBe("203.0.113.9");
+			expect(headers["X-Forwarded-Proto"]).toBe("https");
+		});
+	});
+
 	it("logs injection.no_cookie at debug when the session cookie is absent", async () => {
 		const debugSpy = vi.spyOn(logger, "debug");
 		const warnSpy = vi.spyOn(logger, "warn");
@@ -748,6 +802,12 @@ describe("injection router", () => {
 		expect(grantClient.exchange).toHaveBeenCalledWith({
 			sessionCookieValue: "s1",
 			requestId: expect.any(String),
+			caller: {
+				origin: null,
+				secFetchSite: null,
+				address: expect.stringMatching(/127\.0\.0\.1$/),
+				protocol: "http",
+			},
 		});
 		expect(eventsOf(injected.info)).toContain("injection.grant_success");
 		// The same vocabulary as every other line, in both modes.

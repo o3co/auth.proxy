@@ -33,6 +33,7 @@ import {
 	extractCookie,
 } from "./cookie-extractor.mjs";
 import {
+	type CallerContext,
 	SESSION_GRANT_TYPE,
 	type SessionGrantClient,
 	type SessionGrantClientConfig,
@@ -129,12 +130,14 @@ export interface InjectionDeps {
 	logger: Logger;
 }
 
-/** The three header values the decision reads — plain strings, no request object. */
+/** What the decision reads of a request — plain values, no request object. */
 export interface InjectionInputs {
 	/** As normalised by `express/requestId`; `""` when that middleware is not mounted first. */
 	requestId: string;
 	cookieHeader: string | undefined;
 	authorization: string | undefined;
+	/** The browser request as the session grant tells the provider about it. */
+	caller: CallerContext;
 }
 
 /** Why a request goes upstream without the proxy having minted anything. */
@@ -254,7 +257,7 @@ const UNKNOWN_SESSION_FAILURE: SessionFailureLine = {
  * applies the outcome.
  */
 export const decideInjection = async (
-	{ requestId, cookieHeader, authorization }: InjectionInputs,
+	{ requestId, cookieHeader, authorization, caller }: InjectionInputs,
 	deps: InjectionDeps,
 ): Promise<InjectionOutcome> => {
 	const { tokenCache, singleFlight, grantClient, cfg, exchangeEnabled, logger } = deps;
@@ -365,6 +368,7 @@ export const decideInjection = async (
 			const result = await grantClient.exchange({
 				sessionCookieValue,
 				requestId,
+				caller,
 			});
 			const expiresAt = computeCacheExpiresAt({
 				requestedAt,
