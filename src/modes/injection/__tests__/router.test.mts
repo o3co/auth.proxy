@@ -471,7 +471,7 @@ describe("injection router", () => {
 		/** supertest reaches the app over loopback, on a dual-stack listener or not. */
 		const LOOPBACK = /^(::ffff:)?127\.0\.0\.1$/;
 
-		it("forwards the browser's Origin and Sec-Fetch-Site as received, and overwrites the client's X-Forwarded-For and X-Forwarded-Proto", async () => {
+		it("forwards the browser's Origin, Sec-Fetch-Site and Referer as received, and overwrites the client's X-Forwarded-For and X-Forwarded-Proto", async () => {
 			fetchMock.mockResolvedValueOnce(okGrantResponse("tok-ok"));
 			const app = mountApp(makeConfig(upstream.baseURL));
 
@@ -480,17 +480,19 @@ describe("injection router", () => {
 				.set("Cookie", "sid=s1")
 				.set("Origin", "https://elsewhere.example")
 				.set("Sec-Fetch-Site", "cross-site")
+				.set("Referer", "https://elsewhere.example/page")
 				.set("X-Forwarded-For", "198.51.100.66")
 				.set("X-Forwarded-Proto", "https");
 
 			const headers = providerHeaders();
 			expect(headers.Origin).toBe("https://elsewhere.example");
 			expect(headers["Sec-Fetch-Site"]).toBe("cross-site");
+			expect(headers.Referer).toBe("https://elsewhere.example/page");
 			expect(headers["X-Forwarded-For"]).toMatch(LOOPBACK);
 			expect(headers["X-Forwarded-Proto"]).toBe("http");
 		});
 
-		it("sends no Origin or Sec-Fetch-Site the browser did not send", async () => {
+		it("sends no Origin, Sec-Fetch-Site or Referer the browser did not send", async () => {
 			fetchMock.mockResolvedValueOnce(okGrantResponse("tok-ok"));
 			const app = mountApp(makeConfig(upstream.baseURL));
 
@@ -499,6 +501,7 @@ describe("injection router", () => {
 			const headers = providerHeaders();
 			expect(Object.keys(headers)).not.toContain("Origin");
 			expect(Object.keys(headers)).not.toContain("Sec-Fetch-Site");
+			expect(Object.keys(headers)).not.toContain("Referer");
 			expect(headers["X-Forwarded-For"]).toMatch(LOOPBACK);
 		});
 
@@ -852,6 +855,7 @@ describe("injection router", () => {
 			caller: {
 				origin: null,
 				secFetchSite: null,
+				referer: null,
 				address: expect.stringMatching(/127\.0\.0\.1$/),
 				protocol: "http",
 			},

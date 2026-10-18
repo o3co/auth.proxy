@@ -911,8 +911,8 @@ describe.each(SETUPS)("the app in injection mode, $name", (setup) => {
 
 // The provider decides the session grant's same-origin check and its request
 // source from what the session grant carries (README, Calling
-// auth.provider's session grant): the browser's own Origin and Sec-Fetch-Site, as
-// received, and the proxy's own X-Forwarded-For / X-Forwarded-Proto.
+// auth.provider's session grant): the browser's own Origin, Sec-Fetch-Site and
+// Referer, as received, and the proxy's own X-Forwarded-For / X-Forwarded-Proto.
 describe("the app in injection mode, telling the provider about the browser's request", () => {
 	let direct: ProxyProcess;
 	let behindProxy: ProxyProcess;
@@ -930,7 +930,7 @@ describe("the app in injection mode, telling the provider about the browser's re
 	const reachedProvider = (requestId: string) =>
 		fake.requests.filter((request) => request.headers["x-request-id"] === requestId).map((request) => request.headers);
 
-	it("forwards Origin and Sec-Fetch-Site as sent, and its own X-Forwarded-For / -Proto over the client's", async () => {
+	it("forwards Origin, Sec-Fetch-Site and Referer as sent, and its own X-Forwarded-For / -Proto over the client's", async () => {
 		const requestId = "injection-caller-direct";
 		fake.respond(TOKEN_PATH, issued("minted-caller-direct"));
 
@@ -941,6 +941,7 @@ describe("the app in injection mode, telling the provider about the browser's re
 				cookie: "sid=sess-caller-direct",
 				origin: "https://elsewhere.example",
 				"sec-fetch-site": "cross-site",
+				referer: "https://elsewhere.example/page",
 				"x-forwarded-for": "198.51.100.66",
 				"x-forwarded-proto": "https",
 			},
@@ -951,13 +952,14 @@ describe("the app in injection mode, telling the provider about the browser's re
 			expect.objectContaining({
 				origin: "https://elsewhere.example",
 				"sec-fetch-site": "cross-site",
+				referer: "https://elsewhere.example/page",
 				"x-forwarded-for": "127.0.0.1",
 				"x-forwarded-proto": "http",
 			}),
 		]);
 	});
 
-	it("sends no Origin or Sec-Fetch-Site the browser did not send", async () => {
+	it("sends no Origin, Sec-Fetch-Site or Referer the browser did not send", async () => {
 		const requestId = "injection-caller-absent";
 		fake.respond(TOKEN_PATH, issued("minted-caller-absent"));
 
@@ -966,6 +968,7 @@ describe("the app in injection mode, telling the provider about the browser's re
 		const [headers] = reachedProvider(requestId);
 		expect(headers).not.toHaveProperty("origin");
 		expect(headers).not.toHaveProperty("sec-fetch-site");
+		expect(headers).not.toHaveProperty("referer");
 	});
 
 	it("behind a proxy in INJECTION_TRUSTED_PROXIES, forwards the browser's address and scheme that proxy reported", async () => {

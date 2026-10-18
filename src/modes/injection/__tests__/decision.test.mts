@@ -74,6 +74,7 @@ const makeDeps = (
 const CALLER: CallerContext = {
 	origin: null,
 	secFetchSite: "same-origin",
+	referer: null,
 	address: "203.0.113.7",
 	protocol: "https",
 };

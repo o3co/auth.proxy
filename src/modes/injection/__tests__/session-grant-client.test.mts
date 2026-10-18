@@ -19,6 +19,7 @@ const baseCfg = {
 const CALLER: CallerContext = {
 	origin: null,
 	secFetchSite: null,
+	referer: null,
 	address: "203.0.113.7",
 	protocol: "https",
 };
@@ -171,15 +172,22 @@ describe("createSessionGrantClient.exchange", () => {
 			expect(headers["Sec-Fetch-Site"]).toBe("cross-site");
 		});
 
+		// The provider falls back to Referer where a request carries no Origin.
+		it("forwards the browser's Referer exactly as received", async () => {
+			const headers = await sent({ ...CALLER, referer: "https://admin.example/orders?page=2" });
+			expect(headers.Referer).toBe("https://admin.example/orders?page=2");
+		});
+
 		it("forwards an empty Origin as the empty value it was", async () => {
 			const headers = await sent({ ...CALLER, origin: "" });
 			expect(headers.Origin).toBe("");
 		});
 
-		it("sends no Origin and no Sec-Fetch-Site when the browser sent none", async () => {
+		it("sends no Origin, Sec-Fetch-Site or Referer when the browser sent none", async () => {
 			const headers = await sent(CALLER);
 			expect(Object.keys(headers)).not.toContain("Origin");
 			expect(Object.keys(headers)).not.toContain("Sec-Fetch-Site");
+			expect(Object.keys(headers)).not.toContain("Referer");
 		});
 
 		it("sets X-Forwarded-For and X-Forwarded-Proto to the address and scheme it was given", async () => {

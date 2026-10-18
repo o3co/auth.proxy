@@ -91,13 +91,14 @@ const received = (value: string | string[] | undefined): string | null =>
 
 /**
  * The browser request as the session grant tells the provider about it: its
- * own `Origin` and `Sec-Fetch-Site`, untouched, and the address and scheme
+ * own `Origin`, `Sec-Fetch-Site` and `Referer`, untouched, and the address and scheme
  * this proxy vouches for. The client's own `X-Forwarded-*` count only through
  * `requestSource`, which believes them from a trusted proxy alone.
  */
 const callerOf = (req: Request, requestSource: (req: Request) => RequestSource): CallerContext => ({
 	origin: received(req.headers.origin),
 	secFetchSite: received(req.headers["sec-fetch-site"]),
+	referer: received(req.headers.referer),
 	...requestSource(req),
 });
 

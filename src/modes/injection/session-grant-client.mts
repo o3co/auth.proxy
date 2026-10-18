@@ -18,7 +18,7 @@
  * The token-endpoint client for the session grant: one
  * `POST {providerOrigin}/oauth/token` per call with `grant_type=session`,
  * `client_id` in the body, the session cookie as the only cookie, and no
- * `Authorization`. The browser's `Origin` and `Sec-Fetch-Site` go with it as
+ * `Authorization`. The browser's `Origin`, `Sec-Fetch-Site` and `Referer` go with it as
  * received, and `X-Forwarded-For` / `X-Forwarded-Proto` say where the browser
  * request came from ({@link CallerContext}). Without a client key the proxy is a public client; with
  * one it is a confidential client, and a new `private_key_jwt` client
@@ -101,6 +101,8 @@ export interface CallerContext {
 	origin: string | null;
 	/** The browser's `Sec-Fetch-Site`, exactly as received; `null` when it sent none. */
 	secFetchSite: string | null;
+	/** The browser's `Referer`, exactly as received; `null` when it sent none. The provider reads it where there is no `Origin`. */
+	referer: string | null;
 	/** The browser's address as this proxy vouches for it (`request-source.mts`); `null` when unknown. */
 	address: string | null;
 	/** The scheme of the browser's request as this proxy vouches for it. */
@@ -121,16 +123,17 @@ export interface SessionGrantClient {
 }
 
 /**
- * The headers that say whose request this is. `Origin` and `Sec-Fetch-Site`
- * are the browser's own, sent only when it sent them: filling one in would
- * vouch, to the provider's same-origin check, for a request the browser did
- * not vouch for. `X-Forwarded-For` and `X-Forwarded-Proto` are this proxy's
+ * The headers that say whose request this is. `Origin`, `Sec-Fetch-Site` and
+ * `Referer` are the browser's own, sent only when it sent them: filling one in
+ * would vouch, to the provider's same-origin check, for a request the browser
+ * did not vouch for. `X-Forwarded-For` and `X-Forwarded-Proto` are this proxy's
  * statement, set whole; nothing the client sent under those names is passed
  * on.
  */
 const callerHeaders = (caller: CallerContext): Record<string, string> => ({
 	...(caller.origin !== null ? { Origin: caller.origin } : {}),
 	...(caller.secFetchSite !== null ? { "Sec-Fetch-Site": caller.secFetchSite } : {}),
+	...(caller.referer !== null ? { Referer: caller.referer } : {}),
 	...(caller.address !== null ? { "X-Forwarded-For": caller.address } : {}),
 	"X-Forwarded-Proto": caller.protocol,
 });
