@@ -53,6 +53,15 @@ const buildTrustList = (trustedProxies: readonly string[]): net.BlockList => {
 	return list;
 };
 
+/**
+ * The entries that trust every address of their family (`0.0.0.0/0`, `::/0`):
+ * with one, any client can tell the provider any address and scheme it likes.
+ * The router warns about them when it is built. Entries it cannot read are
+ * left to `createRequestSource`, which refuses them.
+ */
+export const trustAllEntries = (trustedProxies: readonly string[]): string[] =>
+	trustedProxies.filter((entry) => parseAddressRange(entry)?.prefix === 0);
+
 export const createRequestSource = (
 	trustedProxies: readonly string[],
 ): ((req: IncomingMessage) => RequestSource) => {

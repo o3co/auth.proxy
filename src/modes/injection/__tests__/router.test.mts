@@ -519,6 +519,28 @@ describe("injection router", () => {
 			expect(headers["X-Forwarded-For"]).toBe("203.0.113.9");
 			expect(headers["X-Forwarded-Proto"]).toBe("https");
 		});
+
+		// A /0 range trusts every peer, so any client can tell the provider any
+		// address and scheme it likes. Allowed — a deployment may know its only
+		// peers are proxies — but said out loud when the router is built.
+		it("warns once, at construction, when trustedProxies trusts every address", () => {
+			const warnSpy = vi.spyOn(logger, "warn");
+
+			createRouter({ config: makeConfig(upstream.baseURL, { trustedProxies: ["10.0.0.0/8", "0.0.0.0/0", "::/0"] }) });
+
+			const warned = loggedFields(warnSpy).filter(
+				(fields) => fields.event === "injection.trusted_proxies_trust_all",
+			);
+			expect(warned).toEqual([expect.objectContaining({ entries: ["0.0.0.0/0", "::/0"] })]);
+		});
+
+		it("does not warn about a trustedProxies list that names its proxies", () => {
+			const warnSpy = vi.spyOn(logger, "warn");
+
+			createRouter({ config: makeConfig(upstream.baseURL, { trustedProxies: ["10.0.0.0/8", "fd00::/8"] }) });
+
+			expect(eventsOf(warnSpy)).not.toContain("injection.trusted_proxies_trust_all");
+		});
 	});
 
 	it("logs injection.no_cookie at debug when the session cookie is absent", async () => {

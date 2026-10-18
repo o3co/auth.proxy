@@ -10,7 +10,7 @@
  */
 import type { IncomingMessage } from "node:http";
 import { describe, expect, it } from "vitest";
-import { createRequestSource } from "../request-source.mjs";
+import { createRequestSource, trustAllEntries } from "../request-source.mjs";
 
 interface FakeRequest {
 	peer?: string;
@@ -117,6 +117,16 @@ describe("createRequestSource", () => {
 
 		it("is the socket's when the peer is not trusted", () => {
 			expect(sourceOf(TRUSTED, { peer: "198.51.100.7", forwardedProto: "https" }).protocol).toBe("http");
+		});
+	});
+
+	describe("trustAllEntries", () => {
+		it("names the entries that trust every address of their family", () => {
+			expect(trustAllEntries(["10.0.0.0/8", "0.0.0.0/0", "::/0", "::1"])).toEqual(["0.0.0.0/0", "::/0"]);
+		});
+
+		it("is empty for a list that names its proxies", () => {
+			expect(trustAllEntries(["10.0.0.0/8", "192.0.2.1"])).toEqual([]);
 		});
 	});
 

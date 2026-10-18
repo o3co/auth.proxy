@@ -46,7 +46,7 @@ import {
 	exchangeContext,
 } from "./exchange.mjs";
 import { createJwtBearerClient } from "./jwt-bearer-client.mjs";
-import { createRequestSource, type RequestSource } from "./request-source.mjs";
+import { createRequestSource, type RequestSource, trustAllEntries } from "./request-source.mjs";
 import { type CallerContext, createSessionGrantClient } from "./session-grant-client.mjs";
 import { stageRefusals } from "./stage-refusals.mjs";
 import { createTokenCache } from "./token-cache.mjs";
@@ -228,6 +228,16 @@ export const createRouter = ({
 	const router = express.Router();
 	const logger = overrides.logger ?? defaultLogger;
 	const refusals = stageRefusals(logger);
+	const requestSource = createRequestSource(cfg.trustedProxies);
+	const trustAll = trustAllEntries(cfg.trustedProxies);
+	if (trustAll.length > 0) {
+		// Allowed, since a deployment may know its only peers are proxies, but
+		// said once at boot: every client's X-Forwarded-* now reach the provider.
+		logger.warn(
+			{ event: "injection.trusted_proxies_trust_all", entries: trustAll },
+			"auth.injection.trustedProxies trusts every address: any client can set the X-Forwarded-For and X-Forwarded-Proto the session grant sends",
+		);
+	}
 	const exchange = cfg.exchange.enabled
 		? buildExchangeDeps(cfg, cfg.exchange, overrides.exchange ?? {}, logger)
 		: null;
@@ -256,7 +266,7 @@ export const createRouter = ({
 			next();
 		})
 		.use(createBodyLimitGuard({ limitBytes, refusals }))
-		.use(injectionMiddleware(deps, exchange, createRequestSource(cfg.trustedProxies)))
+		.use(injectionMiddleware(deps, exchange, requestSource))
 		.use(createUpstreamProxy(config))
 		.use(createErrorHandler({ limitBytes, refusals }));
 
