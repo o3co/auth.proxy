@@ -1,6 +1,6 @@
 # auth.proxy
 
-Last updated: 2026-10-01
+Last updated: 2026-10-18
 
 [![CI](https://github.com/o3co/auth.proxy/actions/workflows/ci.yml/badge.svg)](https://github.com/o3co/auth.proxy/actions/workflows/ci.yml)
 [![codecov](https://codecov.io/gh/o3co/auth.proxy/graph/badge.svg)](https://codecov.io/gh/o3co/auth.proxy)
@@ -125,7 +125,7 @@ Flow:
 
 1. Extracts the session cookie named in `auth.injection.sessionCookieName`.
 2. If absent, forwards the request unchanged (the service layer decides whether authentication is required). A cookie that is present but refused (see [Cookie forwarding](#cookie-forwarding)) is forwarded the same way, but logged.
-3. On cache hit, injects the cached Bearer and forwards.
+3. On cache hit, injects the cached Bearer and forwards — only for a request that showed it is same-origin (see [Cache behavior](#cache-behavior)).
 4. On cache miss, exchanges the cookie for an access token via the provider's `POST /oauth/token` with `grant_type=session`. Concurrent misses on the same cookie coalesce into a single provider call (single-flight).
 5. Injects `Authorization: Bearer <token>` and forwards upstream.
 
@@ -136,6 +136,7 @@ Opt-in, injection mode can also exchange an external credential presented as `Au
 - In-memory, per-instance. Restart and horizontal scale-out produce cold caches. Peak provider load during rollout ≈ `instance count × active sessions`.
 - TTL: `min(auth.injection.tokenCache.ttlSeconds, provider.expires_in) - safetyMarginSeconds`, counted from the instant the grant request was sent — not from the response, so a slow provider cannot push an entry past the token's expiry. Default 60s minus 5s safety margin. A grant whose response arrives after that point is not cached.
 - Every cache miss spends from a rate-limit bucket the whole instance shares — see [Provider rate limiting](#provider-rate-limiting) before lowering the TTL.
+- **Only a same-origin request is answered from the cache.** The provider holds the session grant to a same-origin check, and a cache hit never reaches the provider. So the cache, and a grant another request is already making, answer only a request whose `Origin` equals `auth.injection.publicOrigin` (`INJECTION_PUBLIC_ORIGIN`), or that has no `Origin` and says `Sec-Fetch-Site: same-origin` — and in either case sends no `Sec-Fetch-Site` other than `same-origin`; while `publicOrigin` is unset, only the second kind. Any other request with the session cookie — a foreign or missing `Origin`, a top-level navigation, a client that sends neither header — calls the provider itself, with its own headers, and gets the provider's answer: `401 session_required` from a provider that refuses it. Its grant is not cached. Such requests are logged `injection.grant_fetch` with `sameOrigin: false`, and each one spends from the rate-limit bucket.
 
 #### Revocation and the access-token lifetime
 
@@ -179,7 +180,7 @@ grant into a `GET` with no body, which a token endpoint answers `405`.
 
 #### CSRF responsibility boundary
 
-The proxy is a transparent augmentation layer. It injects the Bearer but does NOT enforce CSRF. Combine with `SameSite=Lax` cookies, same-origin deployment, and CSRF protection in the upstream service. Being transparent cuts the other way too — see [Inbound Authorization headers](#inbound-authorization-headers).
+The proxy is a transparent augmentation layer. It injects the Bearer but does NOT enforce CSRF. It only keeps its token cache from skipping the provider's own same-origin check on the session grant (see [Cache behavior](#cache-behavior)): a request that does not show it is same-origin is never served a cached token. Combine with `SameSite=Lax` cookies, same-origin deployment, and CSRF protection in the upstream service. Being transparent cuts the other way too — see [Inbound Authorization headers](#inbound-authorization-headers).
 
 #### Inbound Authorization headers
 
@@ -204,6 +205,15 @@ A refused cookie is not silent. A header that does not carry the cookie at all i
 When the header carries the same name more than once (RFC 6265 section 5.4 lets a user agent send two same-name pairs, ordered by path and then creation time), the first well-formed pair is used. A malformed pair before it is skipped and logged as `injection.cookie_rejected` with `action: "fallback"`; only when every same-name pair is malformed is the request forwarded without a minted `Authorization`, logged with `action: "forward"` — or `action: "forward_stripped"` when `stripInboundAuthorization` is on and there was an inbound header to remove. `action` is the outcome's own name on both this line and `injection.no_cookie`, so a query keyed on `"forward"` alone does not see the stripped requests. `sid=bad,val; sid=good` and `sid=good; sid=bad,val` both exchange `good`.
 
 The cookie name itself is checked at startup: `auth.injection.sessionCookieName` must be an RFC 6265 `cookie-name` (an RFC 9110 `token`: one or more of `` !#$%&'*+-.^_`|~ ``, digits and letters). A name containing whitespace, `=` or another separator is a configuration error naming the key, because the name is interpolated into the same outbound `Cookie` header.
+
+#### Calling auth.provider's session grant
+
+auth.provider v0.18.0-rc.1 or later refuses a session grant (`401`, answered here as `401 session_required`) unless the browser request it is made for passes its same-origin check, and it takes that request's address and scheme from `X-Forwarded-For` and `X-Forwarded-Proto` when the peer sending them — this proxy — is one it trusts. Behind this proxy:
+
+- **The BFF and the provider share one origin.** Browsers reach this proxy and the provider at the same origin, the provider's `http.public-origin`; a load balancer or ingress routes the provider's paths to it and the rest here. Set `INJECTION_PUBLIC_ORIGIN` to that origin: only a request whose `Origin` equals it, or that has no `Origin` and says `Sec-Fetch-Site: same-origin`, is answered from the token cache (see [Cache behavior](#cache-behavior)). Any other request calls the provider and gets its answer, so a top-level navigation or a cross-site request with the session cookie is refused the way the provider refuses it.
+- **What this proxy sends.** It forwards the browser's `Origin`, `Sec-Fetch-Site` and `Referer` exactly as received, and never fills them in when the browser sent none. It overwrites `X-Forwarded-For` and `X-Forwarded-Proto` with what it saw itself: the address and scheme of its own peer, or, from a peer listed in `INJECTION_TRUSTED_PROXIES`, what that proxy reported. List the load balancer that terminates TLS in front of this proxy there: otherwise the provider is told `http`, and with secure cookies it refuses the grant.
+- **List this proxy's address, or its subnet's CIDR, in the provider's `http.trusted-proxies`**, so the provider believes the `X-Forwarded-*` this proxy sets. This proxy sends exactly one address in `X-Forwarded-For`, which the provider's default `http.proxy-hops` of 1 covers.
+- **Keep the provider's port reachable only through the proxy or the load balancer.** Anything that can reach the provider from an address it trusts can tell it any `X-Forwarded-For` it likes.
 
 #### External credential exchange (`auth.injection.exchange`)
 
@@ -434,6 +444,8 @@ Injection mode:
 | `INJECTION_SCOPE` | **Required.** OAuth `scope` string (space-separated). |
 | `INJECTION_SESSION_COOKIE_NAME` | Session cookie name (default: `connect.sid`). Must be an RFC 6265 `cookie-name` (RFC 9110 token) — whitespace, `=` or other separators fail at startup. |
 | `INJECTION_STRIP_INBOUND_AUTHORIZATION` | `"true"` / `"false"` (default: `false`). Drop an inbound `Authorization` header on a request the proxy did not mint a token for. Any other value fails at startup. See [Inbound Authorization headers](#inbound-authorization-headers). |
+| `INJECTION_PUBLIC_ORIGIN` | The origin browsers reach this proxy at, `scheme://host[:port]` (optional; no path, query, fragment or userinfo, or the proxy does not start). A request whose `Origin` equals it may be answered from the session token cache. Unset, only a request without `Origin` that says `Sec-Fetch-Site: same-origin` can be. See [Calling auth.provider's session grant](#calling-authproviders-session-grant). |
+| `INJECTION_TRUSTED_PROXIES` | The proxies in front of this one whose `X-Forwarded-For` and `X-Forwarded-Proto` it believes when it tells the provider, on the session grant, where a browser request came from: a whitespace-separated list of IP addresses and `address/prefix` ranges (default: empty = none; the socket's peer and scheme are sent). A port, an IPv6 zone ID or a host name fails at startup; `0.0.0.0/0` or `::/0`, which trusts every client's headers, starts with a warning (`injection.trusted_proxies_trust_all`). List the load balancer or ingress that terminates TLS in front of this proxy, or the provider sees `http`. See [Calling auth.provider's session grant](#calling-authproviders-session-grant). |
 | `INJECTION_TOKEN_CACHE_TTL_SEC` | Token cache TTL in seconds (default: 60). Applies to the session and exchange caches alike. |
 | `INJECTION_TOKEN_CACHE_MAX_ENTRIES` | Token cache max entries (default: 10000), for each of the session and exchange caches. |
 | `INJECTION_TOKEN_CACHE_SAFETY_MARGIN_SEC` | Clock-drift safety margin in seconds (default: 5). Applies to both caches. |

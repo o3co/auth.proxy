@@ -384,6 +384,85 @@ describe("proxy config — injection mode", () => {
 		});
 	});
 
+	// The origin browsers reach this proxy at: a request whose Origin is this
+	// one may be answered from the session cache. Unset, only
+	// `Sec-Fetch-Site: same-origin` without an Origin can be.
+	describe("publicOrigin", () => {
+		const publicOriginOf = (value?: string) => {
+			const env: Record<string, string> = {
+				AUTH_MODE: "injection",
+				INJECTION_CLIENT_ID: "my-spa",
+				INJECTION_SCOPE: "api",
+				...(value === undefined ? {} : { INJECTION_PUBLIC_ORIGIN: value }),
+			};
+			const config = validate(parseFile(confPath, { env }), AppConfigSchema);
+			if (config.auth.mode !== "injection") throw new Error("narrow");
+			return config.auth.injection.publicOrigin;
+		};
+
+		it("is unset by default, and when INJECTION_PUBLIC_ORIGIN is empty", () => {
+			expect(publicOriginOf()).toBeNull();
+			expect(publicOriginOf("")).toBeNull();
+		});
+
+		it("reads an origin, in the form a browser's Origin header serialises it", () => {
+			expect(publicOriginOf("https://admin.example")).toBe("https://admin.example");
+			expect(publicOriginOf("https://Admin.Example:443/")).toBe("https://admin.example");
+			expect(publicOriginOf("http://localhost:8080")).toBe("http://localhost:8080");
+		});
+
+		it("refuses anything but an http(s) origin, naming the key", () => {
+			for (const value of ["admin.example", "https://admin.example/app", "https://admin.example?x", "ftp://admin.example", "https://u:p@admin.example"]) {
+				expect(() => publicOriginOf(value), value).toThrow(/auth\.injection\.publicOrigin/);
+			}
+		});
+	});
+
+	// The peers whose X-Forwarded-For / X-Forwarded-Proto the proxy believes
+	// when it tells the provider where a browser request came from. Empty, the
+	// default, believes none: the socket's peer and scheme are forwarded.
+	describe("trustedProxies", () => {
+		const injectionEnv = (extra: Record<string, string> = {}) => ({
+			AUTH_MODE: "injection",
+			INJECTION_CLIENT_ID: "my-spa",
+			INJECTION_SCOPE: "api",
+			...extra,
+		});
+		const trustedProxiesOf = (env: Record<string, string>, extraConf = "") => {
+			const text = `${readFileSync(confPath, "utf8")}\n${extraConf}\n`;
+			const config = validate(parseString(text, { env: injectionEnv(env) }), AppConfigSchema);
+			if (config.auth.mode !== "injection") throw new Error("narrow");
+			return config.auth.injection.trustedProxies;
+		};
+
+		it("defaults to none", () => {
+			expect(trustedProxiesOf({})).toEqual([]);
+		});
+
+		it("reads a whitespace-separated list of addresses and ranges from INJECTION_TRUSTED_PROXIES", () => {
+			expect(trustedProxiesOf({ INJECTION_TRUSTED_PROXIES: "10.0.0.0/8  192.0.2.1 fd00::/8" })).toEqual([
+				"10.0.0.0/8",
+				"192.0.2.1",
+				"fd00::/8",
+			]);
+		});
+
+		it("reads a HOCON list", () => {
+			expect(trustedProxiesOf({}, 'auth.injection.trustedProxies = ["10.0.0.0/8", "::1"]')).toEqual([
+				"10.0.0.0/8",
+				"::1",
+			]);
+		});
+
+		it("refuses an entry that is not an IP address or an address/prefix, naming the key", () => {
+			for (const value of ["proxy.internal", "10.0.0.0/33", "10.0.0.1:80", "fe80::1%eth0"]) {
+				expect(() => trustedProxiesOf({ INJECTION_TRUSTED_PROXIES: value }), value).toThrow(
+					/auth\.injection\.trustedProxies/,
+				);
+			}
+		});
+	});
+
 	// The external credential exchange is opt-in inside injection mode.
 	// Disabled, it parses to `{ enabled: false }` and nothing else is used,
 	// though every field is still validated; enabled, the proxy authenticates to

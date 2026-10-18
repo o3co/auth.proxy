@@ -18,7 +18,9 @@
  * The token-endpoint client for the session grant: one
  * `POST {providerOrigin}/oauth/token` per call with `grant_type=session`,
  * `client_id` in the body, the session cookie as the only cookie, and no
- * `Authorization`. Without a client key the proxy is a public client; with
+ * `Authorization`. The browser's `Origin`, `Sec-Fetch-Site` and `Referer` go with it as
+ * received, and `X-Forwarded-For` / `X-Forwarded-Proto` say where the browser
+ * request came from ({@link CallerContext}). Without a client key the proxy is a public client; with
  * one it is a confidential client, and a new `private_key_jwt` client
  * assertion goes in the body with the `client_id`. No retry, no redirect
  * followed, and only a `200` is success (RFC 6749 section 5.1).
@@ -89,6 +91,24 @@ export interface SessionGrantClientConfig {
 	providerIssuer?: string | null;
 }
 
+/**
+ * The browser request the grant is asked for, as the provider needs to see it:
+ * the provider decides its same-origin check from `origin` and `secFetchSite`,
+ * and its request source from `address` and `protocol`.
+ */
+export interface CallerContext {
+	/** The browser's `Origin`, exactly as received; `null` when it sent none. */
+	origin: string | null;
+	/** The browser's `Sec-Fetch-Site`, exactly as received; `null` when it sent none. */
+	secFetchSite: string | null;
+	/** The browser's `Referer`, exactly as received; `null` when it sent none. The provider reads it where there is no `Origin`. */
+	referer: string | null;
+	/** The browser's address as this proxy vouches for it (`request-source.mts`); `null` when unknown. */
+	address: string | null;
+	/** The scheme of the browser's request as this proxy vouches for it. */
+	protocol: "http" | "https";
+}
+
 export interface SessionGrantClient {
 	/**
 	 * No signal parameter, deliberately: the only cancellation is
@@ -98,8 +118,25 @@ export interface SessionGrantClient {
 	exchange(args: {
 		sessionCookieValue: string;
 		requestId: string;
+		caller: CallerContext;
 	}): Promise<SessionGrantResult>;
 }
+
+/**
+ * The headers that say whose request this is. `Origin`, `Sec-Fetch-Site` and
+ * `Referer` are the browser's own, sent only when it sent them: filling one in
+ * would vouch, to the provider's same-origin check, for a request the browser
+ * did not vouch for. `X-Forwarded-For` and `X-Forwarded-Proto` are this proxy's
+ * statement, set whole; nothing the client sent under those names is passed
+ * on.
+ */
+const callerHeaders = (caller: CallerContext): Record<string, string> => ({
+	...(caller.origin !== null ? { Origin: caller.origin } : {}),
+	...(caller.secFetchSite !== null ? { "Sec-Fetch-Site": caller.secFetchSite } : {}),
+	...(caller.referer !== null ? { Referer: caller.referer } : {}),
+	...(caller.address !== null ? { "X-Forwarded-For": caller.address } : {}),
+	"X-Forwarded-Proto": caller.protocol,
+});
 
 export const createSessionGrantClient = (
 	cfg: SessionGrantClientConfig,
@@ -116,7 +153,7 @@ export const createSessionGrantClient = (
 			: "provider rejected the proxy's client (client_id)";
 
 	return {
-		async exchange({ sessionCookieValue, requestId }) {
+		async exchange({ sessionCookieValue, requestId, caller }) {
 			// A new assertion per call: the provider accepts each `jti` once.
 			const client =
 				clientKey !== null && providerIssuer !== null
@@ -136,6 +173,7 @@ export const createSessionGrantClient = (
 				resp = await fetch(url, {
 					method: "POST",
 					headers: {
+						...callerHeaders(caller),
 						"Content-Type": "application/x-www-form-urlencoded",
 						// Both halves are grammar-checked before they get here: the name by
 						// the Zod schema at boot, the value by extractCookie.

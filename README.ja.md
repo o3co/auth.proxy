@@ -1,6 +1,6 @@
 # auth.proxy
 
-最終更新: 2026-10-01
+最終更新: 2026-10-18
 
 [![CI](https://github.com/o3co/auth.proxy/actions/workflows/ci.yml/badge.svg)](https://github.com/o3co/auth.proxy/actions/workflows/ci.yml)
 [![codecov](https://codecov.io/gh/o3co/auth.proxy/graph/badge.svg)](https://codecov.io/gh/o3co/auth.proxy)
@@ -120,7 +120,7 @@ JWT ローカル検証との比較:
 
 1. `auth.injection.sessionCookieName` で指定されたセッションクッキーを抽出。
 2. クッキーがない場合はリクエストをそのまま転送（認証が必要かどうかはサービス層が判断）。クッキーはあるが拒否された場合（[クッキー転送](#クッキー転送)を参照）も同じく転送するが、ログに残す。
-3. キャッシュヒット時は、キャッシュした Bearer を注入して転送。
+3. キャッシュヒット時は、キャッシュした Bearer を注入して転送。ただし同一オリジンだと示したリクエストに限る（[キャッシュ動作](#キャッシュ動作)を参照）。
 4. キャッシュミス時は、`grant_type=session` でプロバイダーの `POST /oauth/token` を呼び出してアクセストークンを取得。同一クッキーの並行ミスは 1 回のプロバイダー呼び出しに集約（single-flight）。
 5. `Authorization: Bearer <token>` を注入してアップストリームに転送。
 
@@ -131,6 +131,7 @@ JWT ローカル検証との比較:
 - インメモリ、インスタンス単位。再起動やスケールアウト時はキャッシュがコールドになる。ロールアウト時のピーク負荷 ≈ `インスタンス数 × アクティブセッション数`。
 - TTL: `min(auth.injection.tokenCache.ttlSeconds, provider.expires_in) - safetyMarginSeconds`。レスポンス到着時ではなくグラントリクエストを送った時点から数えるので、プロバイダーの応答が遅くてもエントリがトークンの有効期限を越えることはない。デフォルト 60 秒 − 5 秒の安全マージン。その時点より後にレスポンスが届いたグラントはキャッシュしない。
 - キャッシュミスは、インスタンス全体で共有するレート制限バケットを消費する。TTL を下げる前に[プロバイダーのレート制限](#プロバイダーのレート制限)を読むこと。
+- **キャッシュから答えるのは同一オリジンのリクエストだけ。** プロバイダーはセッショングラントに同一オリジン検査を課すが、キャッシュヒットはプロバイダーに届かない。そのため、キャッシュと、別のリクエストが実行中のグラントが答えるのは、`Origin` が `auth.injection.publicOrigin`（`INJECTION_PUBLIC_ORIGIN`）と一致するリクエストか、`Origin` がなく `Sec-Fetch-Site: same-origin` を送ったリクエストに限る。どちらの場合も `same-origin` 以外の `Sec-Fetch-Site` を送っていないこと。`publicOrigin` が未設定なら後者だけ。それ以外のセッションクッキー付きリクエスト（他オリジンの `Origin`、`Origin` なし、トップレベルのナビゲーション、どちらのヘッダーも送らないクライアント）は、自分のヘッダーで自らプロバイダーを呼び、プロバイダーの答えを受け取る。プロバイダーが拒否すれば `401 session_required`。そのグラントはキャッシュしない。こうしたリクエストは `injection.grant_fetch` に `sameOrigin: false` 付きでログに残り、1 件ごとにレート制限バケットを消費する。
 
 #### アクセストークンの寿命と失効
 
@@ -160,7 +161,7 @@ UserSession の追跡が設定されている場合、プロバイダーの `ses
 
 #### CSRF の責務境界
 
-プロキシは透過的な付加レイヤー。Bearer を注入するが、CSRF は強制しない。`SameSite=Lax` クッキー、同一オリジンデプロイ、アップストリームサービス側の CSRF 保護と組み合わせて使用する。「透過的」であることは逆方向にも効く — [受信 Authorization ヘッダー](#受信-authorization-ヘッダー)を参照。
+プロキシは透過的な付加レイヤー。Bearer を注入するが、CSRF は強制しない。トークンキャッシュがセッショングラントに対するプロバイダー自身の同一オリジン検査を飛ばさないようにするだけ（[キャッシュ動作](#キャッシュ動作)を参照）で、同一オリジンだと示さないリクエストにキャッシュ済みトークンを渡すことはない。`SameSite=Lax` クッキー、同一オリジンデプロイ、アップストリームサービス側の CSRF 保護と組み合わせて使用する。「透過的」であることは逆方向にも効く — [受信 Authorization ヘッダー](#受信-authorization-ヘッダー)を参照。
 
 #### 受信 Authorization ヘッダー
 
@@ -185,6 +186,15 @@ UserSession の追跡が設定されている場合、プロバイダーの `ses
 ヘッダーに同じ名前が複数回現れる場合（RFC 6265 5.4 節により、ユーザーエージェントは同名のペアを 2 つ、パス順・作成時刻順に送ることがある）、最初の正しい形のペアを使う。その前にある不正なペアはスキップし、`action: "fallback"` 付きの `injection.cookie_rejected` としてログする。同名ペアがすべて不正な場合に限り、リクエストはプロキシが発行した `Authorization` なしで転送され、`action: "forward"` でログされる — `stripInboundAuthorization` が有効で削除すべき受信ヘッダーがあった場合は `action: "forward_stripped"`。`action` はこの行でも `injection.no_cookie` でも結果そのものの名前なので、`"forward"` だけをキーにしたクエリには削除されたリクエストは現れない。`sid=bad,val; sid=good` と `sid=good; sid=bad,val` はどちらも `good` を交換する。
 
 クッキー名自体は起動時に検査する: `auth.injection.sessionCookieName` は RFC 6265 の `cookie-name`（RFC 9110 の `token`: `` !#$%&'*+-.^_`|~ ``、数字、英字の 1 文字以上）でなければならない。空白・`=`・その他のセパレータを含む名前は、そのキーを名指しする設定エラーになる。名前は同じ送出 `Cookie` ヘッダーに埋め込まれるからである。
+
+#### auth.provider のセッショングラントを呼ぶ
+
+v0.18.0-rc.1 以降の auth.provider は、セッショングラントの対象となるブラウザーのリクエストが同一オリジン検査を通らない限り、そのグラントを拒否する（`401`。このプロキシは `401 session_required` で答える）。また、送ってきた接続元（このプロキシ）を信頼している場合に限り、そのリクエストのアドレスとスキームを `X-Forwarded-For` と `X-Forwarded-Proto` から読む。このプロキシの背後では:
+
+- **BFF とプロバイダーは 1 つのオリジンを共有する。** ブラウザーはこのプロキシとプロバイダーに同じオリジン（プロバイダーの `http.public-origin`）で到達する。ロードバランサーやイングレスがプロバイダーのパスをプロバイダーへ、それ以外をこのプロキシへ振り分ける。`INJECTION_PUBLIC_ORIGIN` にそのオリジンを設定する。トークンキャッシュから答えるのは、`Origin` がこれと一致するリクエストか、`Origin` がなく `Sec-Fetch-Site: same-origin` を送ったリクエストだけ（[キャッシュ動作](#キャッシュ動作)を参照）。それ以外のリクエストはプロバイダーを呼んでその答えを受け取るので、セッションクッキー付きのトップレベルのナビゲーションやクロスサイトのリクエストは、プロバイダーが拒否するとおりに拒否される。
+- **このプロキシが送るもの。** ブラウザーの `Origin`、`Sec-Fetch-Site`、`Referer` は受け取ったとおりに転送し、ブラウザーが送らなかったときに補うことはない。`X-Forwarded-For` と `X-Forwarded-Proto` は自分が見たもので上書きする。自分の接続元のアドレスとスキーム、または `INJECTION_TRUSTED_PROXIES` に列挙した接続元からなら、そのプロキシが報告したもの。このプロキシの前で TLS を終端するロードバランサーをそこに列挙する。列挙しないとプロバイダーには `http` と伝わり、セキュアクッキーの構成ではグラントを拒否する。
+- **このプロキシのアドレス、またはそのサブネットの CIDR をプロバイダーの `http.trusted-proxies` に列挙する。** そうするとプロバイダーは、このプロキシが設定した `X-Forwarded-*` を信じる。このプロキシが `X-Forwarded-For` に入れるアドレスは常に 1 つなので、プロバイダーの `http.proxy-hops` のデフォルト 1 で足りる。
+- **プロバイダーのポートには、プロキシかロードバランサーを経由してしか到達できないようにする。** プロバイダーが信頼するアドレスから到達できるものは、任意の `X-Forwarded-For` を名乗れる。
 
 #### 外部クレデンシャル交換（`auth.injection.exchange`）
 
@@ -415,6 +425,8 @@ make docker       # ランタイムイメージのビルド
 | `INJECTION_SCOPE` | **必須。** OAuth `scope` 文字列（スペース区切り）。 |
 | `INJECTION_SESSION_COOKIE_NAME` | セッションクッキー名（デフォルト: `connect.sid`）。RFC 6265 `cookie-name`（RFC 9110 token）であること — 空白・`=`・その他のセパレータは起動時に失敗する。 |
 | `INJECTION_STRIP_INBOUND_AUTHORIZATION` | `"true"` / `"false"`（デフォルト: `false`）。プロキシがトークンを発行しなかったリクエストの受信 `Authorization` ヘッダーを削除する。それ以外の値は起動時に失敗する。[受信 Authorization ヘッダー](#受信-authorization-ヘッダー)を参照。 |
+| `INJECTION_PUBLIC_ORIGIN` | ブラウザーがこのプロキシに到達するオリジン、`scheme://host[:port]`（任意。パス・クエリ・フラグメント・userinfo があると起動しない）。`Origin` がこれと一致するリクエストはセッショントークンキャッシュから答えられる。未設定なら、`Origin` がなく `Sec-Fetch-Site: same-origin` を送ったリクエストだけ。[auth.provider のセッショングラントを呼ぶ](#authprovider-のセッショングラントを呼ぶ)を参照。 |
+| `INJECTION_TRUSTED_PROXIES` | セッショングラントでブラウザーのリクエストの出どころをプロバイダーに伝えるとき、このプロキシが `X-Forwarded-For` と `X-Forwarded-Proto` を信じる前段のプロキシ。IP アドレスと `アドレス/プレフィックス` の範囲を空白区切りで並べる（デフォルト: 空 = なし。ソケットの接続元とスキームを送る）。ポート、IPv6 のゾーン ID、ホスト名は起動時に失敗する。すべてのクライアントのヘッダーを信じる `0.0.0.0/0` や `::/0` は、警告（`injection.trusted_proxies_trust_all`）を出して起動する。このプロキシの前で TLS を終端するロードバランサーやイングレスを列挙する。列挙しないとプロバイダーには `http` と伝わる。[auth.provider のセッショングラントを呼ぶ](#authprovider-のセッショングラントを呼ぶ)を参照。 |
 | `INJECTION_TOKEN_CACHE_TTL_SEC` | トークンキャッシュ TTL（秒、デフォルト: 60）。セッションキャッシュと交換キャッシュの両方に適用。 |
 | `INJECTION_TOKEN_CACHE_MAX_ENTRIES` | トークンキャッシュ最大エントリ数（デフォルト: 10000）。セッションキャッシュと交換キャッシュそれぞれに適用。 |
 | `INJECTION_TOKEN_CACHE_SAFETY_MARGIN_SEC` | クロックドリフト安全マージン（秒、デフォルト: 5）。両方のキャッシュに適用。 |

@@ -782,14 +782,14 @@ describe.each(SETUPS)("the app in injection mode, $name", (setup) => {
 		});
 	}
 
-	it("answers a repeat of the session cookie from the cache: no provider call, the same token injected", async () => {
+	it("answers a same-origin repeat of the session cookie from the cache: no provider call, the same token injected", async () => {
 		const [first, second] = [`injection-${SETUPS.indexOf(setup)}-cache-1`, `injection-${SETUPS.indexOf(setup)}-cache-2`];
 		fake.respond(TOKEN_PATH, issued("minted-cached"));
-		const cookie = "sid=sess-cached";
+		const headers = { cookie: "sid=sess-cached", "sec-fetch-site": "same-origin" };
 
-		expect((await send(proxy.origin, { path: RESOURCE, headers: { "x-request-id": first, cookie } })).status).toBe(200);
+		expect((await send(proxy.origin, { path: RESOURCE, headers: { "x-request-id": first, ...headers } })).status).toBe(200);
 		fake.respond(TOKEN_PATH, json(500, { error: "must_not_be_asked" }));
-		const res = await send(proxy.origin, { path: RESOURCE, headers: { "x-request-id": second, cookie } });
+		const res = await send(proxy.origin, { path: RESOURCE, headers: { "x-request-id": second, ...headers } });
 
 		expect(res.status).toBe(200);
 		expect(grantsFor(first)).toEqual([sessionGrant("sess-cached")]);
@@ -798,6 +798,32 @@ describe.each(SETUPS)("the app in injection mode, $name", (setup) => {
 			bearer("minted-cached"),
 		);
 		expect(await proxy.linesFor(second)).toMatchObject([INCOMING, line("injection.cache_hit", "debug")]);
+	});
+
+	// A cache hit never reaches the provider, whose session grant refuses a
+	// request it cannot see came from its own origin.
+	it.each([
+		{ label: "a foreign Origin", extra: { origin: "https://elsewhere.example", "sec-fetch-site": "cross-site" } },
+		{ label: "neither Origin nor Sec-Fetch-Site", extra: {} },
+	])("asks the provider, not the cache, for a request with $label, and answers its refusal", async ({ label, extra }) => {
+		const tag = label.replace(/\W+/g, "-");
+		const [first, second] = [`injection-${SETUPS.indexOf(setup)}-gate-${tag}-1`, `injection-${SETUPS.indexOf(setup)}-gate-${tag}-2`];
+		const cookie = `sid=sess-gate-${tag}`;
+		fake.respond(TOKEN_PATH, issued("minted-gate"));
+
+		await send(proxy.origin, { path: RESOURCE, headers: { "x-request-id": first, cookie, "sec-fetch-site": "same-origin" } });
+		fake.respond(TOKEN_PATH, json(401, { error: "invalid_request" }));
+		const res = await send(proxy.origin, { path: RESOURCE, headers: { "x-request-id": second, cookie, ...extra } });
+
+		expect(res.status).toBe(401);
+		expect(res.json()).toEqual(SESSION_REFUSED_401);
+		expect(grantsFor(second)).toEqual([sessionGrant(`sess-gate-${tag}`)]);
+		expect(upstream.receivedFor(second)).toEqual([]);
+		expect(await proxy.linesFor(second)).toMatchObject([
+			INCOMING,
+			line("injection.grant_fetch", "info", { sameOrigin: false }),
+			failed("injection.session_unauthorized", "info"),
+		]);
 	});
 
 	it("forwards a POST body intact once the session cookie is exchanged", async () => {
@@ -880,6 +906,88 @@ describe.each(SETUPS)("the app in injection mode, $name", (setup) => {
 		for (const logged of aboutRequests) {
 			expect(logged).toMatchObject({ requestId: expect.any(String), event: expect.stringMatching(/^injection\./) });
 		}
+	});
+});
+
+// The provider decides the session grant's same-origin check and its request
+// source from what the session grant carries (README, Calling
+// auth.provider's session grant): the browser's own Origin, Sec-Fetch-Site and
+// Referer, as received, and the proxy's own X-Forwarded-For / X-Forwarded-Proto.
+describe("the app in injection mode, telling the provider about the browser's request", () => {
+	let direct: ProxyProcess;
+	let behindProxy: ProxyProcess;
+
+	beforeAll(async () => {
+		[direct, behindProxy] = await Promise.all([
+			startProxy(sessionEnv(), upstream),
+			startProxy({ ...sessionEnv(), INJECTION_TRUSTED_PROXIES: "127.0.0.1" }, upstream),
+		]);
+	});
+	afterAll(async () => {
+		await Promise.all([direct?.stop(), behindProxy?.stop()]);
+	});
+
+	const reachedProvider = (requestId: string) =>
+		fake.requests.filter((request) => request.headers["x-request-id"] === requestId).map((request) => request.headers);
+
+	it("forwards Origin, Sec-Fetch-Site and Referer as sent, and its own X-Forwarded-For / -Proto over the client's", async () => {
+		const requestId = "injection-caller-direct";
+		fake.respond(TOKEN_PATH, issued("minted-caller-direct"));
+
+		const res = await send(direct.origin, {
+			path: RESOURCE,
+			headers: {
+				"x-request-id": requestId,
+				cookie: "sid=sess-caller-direct",
+				origin: "https://elsewhere.example",
+				"sec-fetch-site": "cross-site",
+				referer: "https://elsewhere.example/page",
+				"x-forwarded-for": "198.51.100.66",
+				"x-forwarded-proto": "https",
+			},
+		});
+
+		expect(res.status).toBe(200);
+		expect(reachedProvider(requestId)).toEqual([
+			expect.objectContaining({
+				origin: "https://elsewhere.example",
+				"sec-fetch-site": "cross-site",
+				referer: "https://elsewhere.example/page",
+				"x-forwarded-for": "127.0.0.1",
+				"x-forwarded-proto": "http",
+			}),
+		]);
+	});
+
+	it("sends no Origin, Sec-Fetch-Site or Referer the browser did not send", async () => {
+		const requestId = "injection-caller-absent";
+		fake.respond(TOKEN_PATH, issued("minted-caller-absent"));
+
+		await send(direct.origin, { path: RESOURCE, headers: { "x-request-id": requestId, cookie: "sid=sess-caller-absent" } });
+
+		const [headers] = reachedProvider(requestId);
+		expect(headers).not.toHaveProperty("origin");
+		expect(headers).not.toHaveProperty("sec-fetch-site");
+		expect(headers).not.toHaveProperty("referer");
+	});
+
+	it("behind a proxy in INJECTION_TRUSTED_PROXIES, forwards the browser's address and scheme that proxy reported", async () => {
+		const requestId = "injection-caller-trusted";
+		fake.respond(TOKEN_PATH, issued("minted-caller-trusted"));
+
+		await send(behindProxy.origin, {
+			path: RESOURCE,
+			headers: {
+				"x-request-id": requestId,
+				cookie: "sid=sess-caller-trusted",
+				"x-forwarded-for": "198.51.100.66, 203.0.113.9",
+				"x-forwarded-proto": "https",
+			},
+		});
+
+		expect(reachedProvider(requestId)).toEqual([
+			expect.objectContaining({ "x-forwarded-for": "203.0.113.9", "x-forwarded-proto": "https" }),
+		]);
 	});
 });
 

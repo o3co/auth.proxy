@@ -26,6 +26,7 @@ import { controlledTimeout, timeoutAfterResponseHeaders } from "../../../__tests
 import { CLIENT_ASSERTION_TYPE, parseClientKey } from "../../../oauth/private-key-jwt.mjs";
 import { MAX_ERROR_BODY_BYTES } from "../provider-error.mjs";
 import {
+	type CallerContext,
 	createSessionGrantClient,
 	type SessionGrantClientConfig,
 	SessionGrantError,
@@ -36,6 +37,8 @@ const PATH = "/oauth/token";
 const COOKIE_VALUE = "sess-5b2d";
 const ISSUER = "https://auth.example.test";
 const KEY_PAIR = generateKeyPairSync("ed25519");
+/** A browser request that sent neither `Origin` nor `Sec-Fetch-Site`, as the proxy saw it. */
+const CALLER: CallerContext = { origin: null, secFetchSite: null, referer: null, address: "203.0.113.7", protocol: "https" };
 /** A confidential session-grant client: the proxy signs a client assertion. */
 const WITH_KEY: Partial<SessionGrantClientConfig> = {
 	clientKey: parseClientKey({ ...KEY_PAIR.privateKey.export({ format: "jwk" }), kid: "bff-1" }),
@@ -71,7 +74,7 @@ describe("createSessionGrantClient on the wire", () => {
 		});
 
 	const exchange = (overrides: Partial<SessionGrantClientConfig> = {}) =>
-		client(overrides).exchange({ sessionCookieValue: COOKIE_VALUE, requestId: "rid-4e8b" });
+		client(overrides).exchange({ sessionCookieValue: COOKIE_VALUE, requestId: "rid-4e8b", caller: CALLER });
 
 	/** The rejection, which must be a `SessionGrantError`. */
 	const refusal = async (promise: Promise<unknown>): Promise<SessionGrantError> => {
@@ -114,6 +117,39 @@ describe("createSessionGrantClient on the wire", () => {
 				grant_type: "session",
 				client_id: "proxy-client",
 				scope: "openid profile",
+			});
+		});
+
+		// `fetch` adds request headers of its own (`sec-fetch-mode`,
+		// `user-agent`); what it must not add is an Origin, a Sec-Fetch-Site or a
+		// Referer the browser did not send, and what it must not drop is one it did.
+		it("the browser's Origin, Sec-Fetch-Site and Referer only when it sent them, and the proxy's X-Forwarded-For and X-Forwarded-Proto", async () => {
+			fake.respond(PATH, json(200, { access_token: "at-1", token_type: "Bearer" }));
+
+			await exchange();
+			await client().exchange({
+				sessionCookieValue: COOKIE_VALUE,
+				requestId: "rid-4e8b",
+				caller: {
+					origin: "https://admin.example",
+					secFetchSite: "same-origin",
+					referer: "https://admin.example/orders",
+					address: "::1",
+					protocol: "http",
+				},
+			});
+
+			const [without, withSignals] = fake.requests.map((req) => req.headers);
+			expect(without).not.toHaveProperty("origin");
+			expect(without).not.toHaveProperty("sec-fetch-site");
+			expect(without).not.toHaveProperty("referer");
+			expect(without).toMatchObject({ "x-forwarded-for": "203.0.113.7", "x-forwarded-proto": "https" });
+			expect(withSignals).toMatchObject({
+				origin: "https://admin.example",
+				"sec-fetch-site": "same-origin",
+				referer: "https://admin.example/orders",
+				"x-forwarded-for": "::1",
+				"x-forwarded-proto": "http",
 			});
 		});
 

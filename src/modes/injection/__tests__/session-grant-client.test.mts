@@ -1,6 +1,7 @@
 import { afterEach, beforeEach, describe, expect, it, vi } from "vitest";
 import { MAX_ERROR_BODY_BYTES } from "../provider-error.mjs";
 import {
+	type CallerContext,
 	createSessionGrantClient,
 	SessionGrantError,
 } from "../session-grant-client.mjs";
@@ -12,6 +13,15 @@ const baseCfg = {
 	scope: "api.read api.write",
 	sessionCookieName: "sid",
 	timeoutMs: 5000,
+};
+
+/** A browser request that sent neither `Origin` nor `Sec-Fetch-Site`, as the proxy saw it. */
+const CALLER: CallerContext = {
+	origin: null,
+	secFetchSite: null,
+	referer: null,
+	address: "203.0.113.7",
+	protocol: "https",
 };
 
 const jsonResponse = (
@@ -72,6 +82,7 @@ describe("createSessionGrantClient.exchange", () => {
 		const result = await client.exchange({
 			sessionCookieValue: "cookie-abc",
 			requestId: "req-1",
+			caller: CALLER,
 		});
 
 		expect(result).toEqual({ accessToken: "tok-123", expiresIn: 120 });
@@ -82,7 +93,7 @@ describe("createSessionGrantClient.exchange", () => {
 			jsonResponse(200, { access_token: "tok", token_type: "Bearer" }),
 		);
 		const client = createSessionGrantClient(baseCfg);
-		await client.exchange({ sessionCookieValue: "cookie-abc", requestId: "req-1" });
+		await client.exchange({ sessionCookieValue: "cookie-abc", requestId: "req-1", caller: CALLER });
 
 		expect(fetchMock).toHaveBeenCalledTimes(1);
 		expect(getFetchCallUrl(fetchMock)).toBe("http://provider.example/oauth/token");
@@ -97,7 +108,7 @@ describe("createSessionGrantClient.exchange", () => {
 			...baseCfg,
 			providerOrigin: "http://provider.example/",
 		});
-		await client.exchange({ sessionCookieValue: "cookie-abc", requestId: "req-1" });
+		await client.exchange({ sessionCookieValue: "cookie-abc", requestId: "req-1", caller: CALLER });
 
 		expect(getFetchCallUrl(fetchMock)).toBe("http://provider.example/oauth/token");
 	});
@@ -107,7 +118,7 @@ describe("createSessionGrantClient.exchange", () => {
 			jsonResponse(200, { access_token: "tok", token_type: "Bearer" }),
 		);
 		const client = createSessionGrantClient(baseCfg);
-		await client.exchange({ sessionCookieValue: "cookie-abc", requestId: "req-1" });
+		await client.exchange({ sessionCookieValue: "cookie-abc", requestId: "req-1", caller: CALLER });
 
 		const body = getFetchCallInit(fetchMock).body as string;
 		const params = new URLSearchParams(body);
@@ -121,13 +132,15 @@ describe("createSessionGrantClient.exchange", () => {
 			jsonResponse(200, { access_token: "tok", token_type: "Bearer" }),
 		);
 		const client = createSessionGrantClient(baseCfg);
-		await client.exchange({ sessionCookieValue: "cookie-abc", requestId: "req-1" });
+		await client.exchange({ sessionCookieValue: "cookie-abc", requestId: "req-1", caller: CALLER });
 
 		const headers = getFetchCallHeaders(fetchMock);
 		expect(Object.keys(headers).sort()).toEqual([
 			"Accept",
 			"Content-Type",
 			"Cookie",
+			"X-Forwarded-For",
+			"X-Forwarded-Proto",
 			"X-Request-Id",
 		]);
 		expect(headers["Content-Type"]).toBe("application/x-www-form-urlencoded");
@@ -137,13 +150,66 @@ describe("createSessionGrantClient.exchange", () => {
 		expect(headers.Authorization).toBeUndefined();
 	});
 
+	// The provider decides the session grant's same-origin check and its
+	// request source from what the browser sent and where it came from. The
+	// browser's own Origin and Sec-Fetch-Site go as received — never filled in
+	// when it sent none, which would vouch for a request the browser did not
+	// vouch for — and the address and scheme are the proxy's own statement.
+	describe("what it says about the browser's request", () => {
+		const sent = async (caller: CallerContext): Promise<Record<string, string>> => {
+			fetchMock.mockResolvedValueOnce(jsonResponse(200, { access_token: "tok", token_type: "Bearer" }));
+			await createSessionGrantClient(baseCfg).exchange({ sessionCookieValue: "cookie-abc", requestId: "r", caller });
+			return getFetchCallHeaders(fetchMock);
+		};
+
+		it("forwards the browser's Origin and Sec-Fetch-Site exactly as received", async () => {
+			const headers = await sent({
+				...CALLER,
+				origin: "https://Admin.Example:8443",
+				secFetchSite: "cross-site",
+			});
+			expect(headers.Origin).toBe("https://Admin.Example:8443");
+			expect(headers["Sec-Fetch-Site"]).toBe("cross-site");
+		});
+
+		// The provider falls back to Referer where a request carries no Origin.
+		it("forwards the browser's Referer exactly as received", async () => {
+			const headers = await sent({ ...CALLER, referer: "https://admin.example/orders?page=2" });
+			expect(headers.Referer).toBe("https://admin.example/orders?page=2");
+		});
+
+		it("forwards an empty Origin as the empty value it was", async () => {
+			const headers = await sent({ ...CALLER, origin: "" });
+			expect(headers.Origin).toBe("");
+		});
+
+		it("sends no Origin, Sec-Fetch-Site or Referer when the browser sent none", async () => {
+			const headers = await sent(CALLER);
+			expect(Object.keys(headers)).not.toContain("Origin");
+			expect(Object.keys(headers)).not.toContain("Sec-Fetch-Site");
+			expect(Object.keys(headers)).not.toContain("Referer");
+		});
+
+		it("sets X-Forwarded-For and X-Forwarded-Proto to the address and scheme it was given", async () => {
+			const headers = await sent({ ...CALLER, address: "2001:db8::5", protocol: "http" });
+			expect(headers["X-Forwarded-For"]).toBe("2001:db8::5");
+			expect(headers["X-Forwarded-Proto"]).toBe("http");
+		});
+
+		it("sends no X-Forwarded-For when it has no address", async () => {
+			const headers = await sent({ ...CALLER, address: null });
+			expect(Object.keys(headers)).not.toContain("X-Forwarded-For");
+			expect(headers["X-Forwarded-Proto"]).toBe("https");
+		});
+	});
+
 	it("passes configured timeout as AbortSignal.timeout", async () => {
 		fetchMock.mockResolvedValueOnce(
 			jsonResponse(200, { access_token: "tok", token_type: "Bearer" }),
 		);
 		const timeoutSpy = vi.spyOn(AbortSignal, "timeout");
 		const client = createSessionGrantClient({ ...baseCfg, timeoutMs: 1234 });
-		await client.exchange({ sessionCookieValue: "cookie-abc", requestId: "req-1" });
+		await client.exchange({ sessionCookieValue: "cookie-abc", requestId: "req-1", caller: CALLER });
 
 		expect(timeoutSpy).toHaveBeenCalledWith(1234);
 		const init = getFetchCallInit(fetchMock);
@@ -156,7 +222,7 @@ describe("createSessionGrantClient.exchange", () => {
 		);
 		const client = createSessionGrantClient(baseCfg);
 
-		const result = await client.exchange({ sessionCookieValue: "c", requestId: "r" });
+		const result = await client.exchange({ sessionCookieValue: "c", requestId: "r", caller: CALLER });
 
 		expect(result).toEqual({ accessToken: "tok-no-exp", expiresIn: null });
 	});
@@ -166,7 +232,7 @@ describe("createSessionGrantClient.exchange", () => {
 		const client = createSessionGrantClient(baseCfg);
 
 		await expect(
-			client.exchange({ sessionCookieValue: "c", requestId: "r" }),
+			client.exchange({ sessionCookieValue: "c", requestId: "r", caller: CALLER }),
 		).rejects.toMatchObject({
 			code: "provider_invalid_response",
 			status: 502,
@@ -180,7 +246,7 @@ describe("createSessionGrantClient.exchange", () => {
 		const client = createSessionGrantClient(baseCfg);
 
 		await expect(
-			client.exchange({ sessionCookieValue: "c", requestId: "r" }),
+			client.exchange({ sessionCookieValue: "c", requestId: "r", caller: CALLER }),
 		).rejects.toMatchObject({
 			code: "provider_invalid_response",
 			status: 502,
@@ -195,7 +261,7 @@ describe("createSessionGrantClient.exchange", () => {
 		const client = createSessionGrantClient(baseCfg);
 
 		await expect(
-			client.exchange({ sessionCookieValue: "c", requestId: "r" }),
+			client.exchange({ sessionCookieValue: "c", requestId: "r", caller: CALLER }),
 		).rejects.toMatchObject({
 			code: "provider_invalid_response",
 			status: 502,
@@ -215,7 +281,7 @@ describe("createSessionGrantClient.exchange", () => {
 		const client = createSessionGrantClient(baseCfg);
 
 		await expect(
-			client.exchange({ sessionCookieValue: "c", requestId: "r" }),
+			client.exchange({ sessionCookieValue: "c", requestId: "r", caller: CALLER }),
 		).rejects.toMatchObject({
 			code: "provider_invalid_response",
 			status: 502,
@@ -232,7 +298,7 @@ describe("createSessionGrantClient.exchange", () => {
 		const client = createSessionGrantClient(baseCfg);
 
 		await expect(
-			client.exchange({ sessionCookieValue: "c", requestId: "r" }),
+			client.exchange({ sessionCookieValue: "c", requestId: "r", caller: CALLER }),
 		).rejects.toMatchObject({
 			code: "provider_invalid_response",
 			status: 502,
@@ -251,6 +317,7 @@ describe("createSessionGrantClient.exchange", () => {
 		await createSessionGrantClient(baseCfg).exchange({
 			sessionCookieValue: "c",
 			requestId: "r",
+			caller: CALLER,
 		});
 
 		expect((fetchMock.mock.calls[0][1] as RequestInit).redirect).toBe("manual");
@@ -269,7 +336,7 @@ describe("createSessionGrantClient.exchange", () => {
 			const client = createSessionGrantClient(baseCfg);
 
 			await expect(
-				client.exchange({ sessionCookieValue: "c", requestId: "r" }),
+				client.exchange({ sessionCookieValue: "c", requestId: "r", caller: CALLER }),
 			).rejects.toMatchObject({
 				code: "provider_config_error",
 				status: 502,
@@ -310,7 +377,7 @@ describe("createSessionGrantClient.exchange", () => {
 		fetchMock.mockResolvedValueOnce(resp);
 
 		await expect(
-			createSessionGrantClient(baseCfg).exchange({ sessionCookieValue: "session-value-1", requestId: "r" }),
+			createSessionGrantClient(baseCfg).exchange({ sessionCookieValue: "session-value-1", requestId: "r", caller: CALLER }),
 		).rejects.toMatchObject({ code });
 
 		expect(wasCancelled()).toBe(true);
@@ -335,7 +402,7 @@ describe("createSessionGrantClient.exchange", () => {
 		);
 
 		await expect(
-			createSessionGrantClient(baseCfg).exchange({ sessionCookieValue: "session-value-1", requestId: "r" }),
+			createSessionGrantClient(baseCfg).exchange({ sessionCookieValue: "session-value-1", requestId: "r", caller: CALLER }),
 		).rejects.toMatchObject({ code: "provider_unavailable", status: 502 });
 	});
 
@@ -346,7 +413,7 @@ describe("createSessionGrantClient.exchange", () => {
 		fetchMock.mockResolvedValueOnce(resp);
 
 		await expect(
-			createSessionGrantClient(baseCfg).exchange({ sessionCookieValue: "session-value-1", requestId: "r" }),
+			createSessionGrantClient(baseCfg).exchange({ sessionCookieValue: "session-value-1", requestId: "r", caller: CALLER }),
 		).rejects.toMatchObject({ code: "provider_unavailable", status: 502 });
 	});
 
@@ -360,6 +427,7 @@ describe("createSessionGrantClient.exchange", () => {
 			return createSessionGrantClient(baseCfg).exchange({
 				sessionCookieValue: "session-value-1",
 				requestId: "r",
+				caller: CALLER,
 			});
 		};
 
@@ -397,7 +465,7 @@ describe("createSessionGrantClient.exchange", () => {
 			);
 
 			await expect(
-				createSessionGrantClient(baseCfg).exchange({ sessionCookieValue: "session-value-1", requestId: "r" }),
+				createSessionGrantClient(baseCfg).exchange({ sessionCookieValue: "session-value-1", requestId: "r", caller: CALLER }),
 			).rejects.toMatchObject({ code: "provider_config_error", retryAfter: "30" });
 		});
 
@@ -432,7 +500,7 @@ describe("createSessionGrantClient.exchange", () => {
 			);
 
 			await expect(
-				createSessionGrantClient(baseCfg).exchange({ sessionCookieValue: "session-value-1", requestId: "r" }),
+				createSessionGrantClient(baseCfg).exchange({ sessionCookieValue: "session-value-1", requestId: "r", caller: CALLER }),
 			).rejects.toMatchObject({ code: "session_unauthorized", status: 401 });
 		});
 
@@ -453,7 +521,7 @@ describe("createSessionGrantClient.exchange", () => {
 		const client = createSessionGrantClient(baseCfg);
 
 		await expect(
-			client.exchange({ sessionCookieValue: "c", requestId: "r" }),
+			client.exchange({ sessionCookieValue: "c", requestId: "r", caller: CALLER }),
 		).rejects.toMatchObject({
 			code: "session_unauthorized",
 			status: 401,
@@ -468,7 +536,7 @@ describe("createSessionGrantClient.exchange", () => {
 		const client = createSessionGrantClient(baseCfg);
 
 		await expect(
-			client.exchange({ sessionCookieValue: "c", requestId: "r" }),
+			client.exchange({ sessionCookieValue: "c", requestId: "r", caller: CALLER }),
 		).rejects.toMatchObject({
 			code: "session_unauthorized",
 			status: 401,
@@ -481,7 +549,7 @@ describe("createSessionGrantClient.exchange", () => {
 			error: "invalid_grant", error_description: "session_invalid",
 		}, { "Retry-After": "30" }));
 		const client = createSessionGrantClient(baseCfg);
-		await expect(client.exchange({ sessionCookieValue: "stale-cookie", requestId: "r" }))
+		await expect(client.exchange({ sessionCookieValue: "stale-cookie", requestId: "r", caller: CALLER }))
 			.rejects.toMatchObject({ code: "session_unauthorized", status: 401, retryAfter: "30" });
 	});
 
@@ -495,7 +563,7 @@ describe("createSessionGrantClient.exchange", () => {
 		const client = createSessionGrantClient(baseCfg);
 
 		await expect(
-			client.exchange({ sessionCookieValue: "session-value-1", requestId: "r" }),
+			client.exchange({ sessionCookieValue: "session-value-1", requestId: "r", caller: CALLER }),
 		).rejects.toMatchObject({
 			code: "provider_config_error",
 			status: 502,
@@ -515,7 +583,7 @@ describe("createSessionGrantClient.exchange", () => {
 		const client = createSessionGrantClient(baseCfg);
 
 		await expect(
-			client.exchange({ sessionCookieValue: "c", requestId: "r" }),
+			client.exchange({ sessionCookieValue: "c", requestId: "r", caller: CALLER }),
 		).rejects.toMatchObject({
 			code: "provider_config_error",
 			status: 502,
@@ -528,7 +596,7 @@ describe("createSessionGrantClient.exchange", () => {
 		const client = createSessionGrantClient(baseCfg);
 
 		await expect(
-			client.exchange({ sessionCookieValue: "c", requestId: "r" }),
+			client.exchange({ sessionCookieValue: "c", requestId: "r", caller: CALLER }),
 		).rejects.toMatchObject({
 			code: "provider_config_error",
 			status: 502,
@@ -554,7 +622,7 @@ describe("createSessionGrantClient.exchange", () => {
 				jsonResponse(400, { error: "invalid_scope", error_description }),
 			);
 			await expect(
-				client().exchange({ sessionCookieValue: "cookie-abc", requestId: "r" }),
+				client().exchange({ sessionCookieValue: "cookie-abc", requestId: "r", caller: CALLER }),
 				String(error_description),
 			).rejects.toMatchObject({
 				code: "provider_config_error",
@@ -569,7 +637,7 @@ describe("createSessionGrantClient.exchange", () => {
 			jsonResponse(400, { error: "invalid_grant", pad: "a".repeat(20_000) }),
 		);
 		await expect(
-			client().exchange({ sessionCookieValue: "c", requestId: "r" }),
+			client().exchange({ sessionCookieValue: "c", requestId: "r", caller: CALLER }),
 		).rejects.toMatchObject({
 			code: "provider_config_error",
 			message: "provider rejected proxy configuration (client_id or scope)",
@@ -581,7 +649,7 @@ describe("createSessionGrantClient.exchange", () => {
 		const client = createSessionGrantClient(baseCfg);
 
 		await expect(
-			client.exchange({ sessionCookieValue: "c", requestId: "r" }),
+			client.exchange({ sessionCookieValue: "c", requestId: "r", caller: CALLER }),
 		).rejects.toMatchObject({
 			code: "provider_unavailable",
 			status: 502,
@@ -595,7 +663,7 @@ describe("createSessionGrantClient.exchange", () => {
 		const client = createSessionGrantClient(baseCfg);
 
 		await expect(
-			client.exchange({ sessionCookieValue: "c", requestId: "r" }),
+			client.exchange({ sessionCookieValue: "c", requestId: "r", caller: CALLER }),
 		).rejects.toMatchObject({
 			code: "provider_unavailable",
 			status: 502,
@@ -609,7 +677,7 @@ describe("createSessionGrantClient.exchange", () => {
 		const client = createSessionGrantClient(baseCfg);
 
 		await expect(
-			client.exchange({ sessionCookieValue: "c", requestId: "r" }),
+			client.exchange({ sessionCookieValue: "c", requestId: "r", caller: CALLER }),
 		).rejects.toMatchObject({
 			code: "provider_unavailable",
 			status: 502,
@@ -628,7 +696,7 @@ describe("createSessionGrantClient.exchange", () => {
 		);
 
 		await expect(
-			client().exchange({ sessionCookieValue: "c", requestId: "r" }),
+			client().exchange({ sessionCookieValue: "c", requestId: "r", caller: CALLER }),
 		).rejects.toMatchObject({
 			code: "provider_unavailable",
 			status: 502,
@@ -640,7 +708,7 @@ describe("createSessionGrantClient.exchange", () => {
 		fetchMock.mockResolvedValueOnce(new Response(null, { status }));
 
 		await expect(
-			client().exchange({ sessionCookieValue: "c", requestId: "r" }),
+			client().exchange({ sessionCookieValue: "c", requestId: "r", caller: CALLER }),
 		).rejects.toMatchObject({
 			code: "provider_unavailable",
 			status: 502,
@@ -653,7 +721,7 @@ describe("createSessionGrantClient.exchange", () => {
 		const client = createSessionGrantClient(baseCfg);
 
 		await expect(
-			client.exchange({ sessionCookieValue: "c", requestId: "r" }),
+			client.exchange({ sessionCookieValue: "c", requestId: "r", caller: CALLER }),
 		).rejects.toMatchObject({ code: "provider_unavailable", status: 502, retryAfter: null });
 	});
 });
