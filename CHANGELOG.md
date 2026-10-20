@@ -12,8 +12,10 @@ refuses a session grant unless the browser request it is made for passes its
 same-origin check, and takes the request's address and scheme from
 `X-Forwarded-For` and `X-Forwarded-Proto` sent by a proxy it trusts. In 0.8.0
 the session grant carried only the session cookie and `X-Request-Id`, so
-behind this proxy such a provider answered every grant `401` (here
-`401 session_required`). The README's "Calling auth.provider's session grant"
+behind this proxy such a provider refused every grant: `401` for the missing
+same-origin evidence (here `401 session_required`), or, when it trusted the
+proxy, `503` for the missing `X-Forwarded-For` (here
+`502 provider_unavailable`). The README's "Calling auth.provider's session grant"
 lists what to configure on both sides. In short: set
 `INJECTION_PUBLIC_ORIGIN`, list the load balancer in front of this proxy in
 `INJECTION_TRUSTED_PROXIES`, and list only the injection-mode proxies in the
@@ -85,7 +87,8 @@ One change below is breaking, marked **BREAKING**.
   While `INJECTION_PUBLIC_ORIGIN` is unset, any request with an `Origin` or
   with a `Referer` naming an origin — which browsers send by default — misses
   the cache, so nearly every browser request spends from the provider's
-  per-source budget, and a provider `429` reaches the caller as a 5xx.
+  per-source budget, and a provider `429` reaches the caller as
+  `502 provider_unavailable`, with the provider's `Retry-After`.
   **Action:** set `INJECTION_PUBLIC_ORIGIN`, and list the TLS-terminating load
   balancer in `INJECTION_TRUSTED_PROXIES`. Expect top-level navigations and
   non-browser cookie clients to call the provider on every request; a
