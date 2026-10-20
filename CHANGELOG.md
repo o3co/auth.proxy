@@ -5,6 +5,98 @@ All notable changes to this project are documented in this file.
 The format is based on [Keep a Changelog](https://keepachangelog.com/en/1.1.0/),
 and this project adheres to [Semantic Versioning](https://semver.org/spec/v2.0.0.html).
 
+## [0.9.0] — 2026-10-20
+
+Injection mode works with auth.provider v0.18.0-rc.1 or later. That provider
+refuses a session grant unless the browser request it is made for passes its
+same-origin check, and takes the request's address and scheme from
+`X-Forwarded-For` and `X-Forwarded-Proto` sent by a proxy it trusts. In 0.8.0
+the session grant carried only the session cookie and `X-Request-Id`, so
+behind this proxy such a provider answered every grant `401` (here
+`401 session_required`). The README's "Calling auth.provider's session grant"
+lists what to configure on both sides. In short: set
+`INJECTION_PUBLIC_ORIGIN`, list the load balancer in front of this proxy in
+`INJECTION_TRUSTED_PROXIES`, and list only the injection-mode proxies in the
+provider's `http.trusted-proxies`.
+
+### Added
+
+- **Provider calls say where the request came from (#176, #178).** The
+  session grant and the external credential exchange set `X-Forwarded-For`
+  (when the address is known) and `X-Forwarded-Proto` whole, never appending
+  to what the client sent: the socket's peer and scheme, or, from a peer
+  listed in the new `INJECTION_TRUSTED_PROXIES`
+  (`auth.injection.trustedProxies`), the address found by walking
+  `X-Forwarded-For` from the right to the first hop outside the list, and a
+  single `http`/`https` `X-Forwarded-Proto`. The list is whitespace-separated
+  IP addresses and `address/prefix` ranges, empty by default; a port, an IPv6
+  zone ID or a host name fails at boot. A single entry that trusts every IPv4
+  or every IPv6 address (`0.0.0.0/0`, `::/0`, `::ffff:0:0/96`, `::/80`, …)
+  boots with the warning `injection.trusted_proxies_trust_all`: with it, any
+  browser on the session grant and any client of the exchange can choose the
+  address the provider counts its rate limit against. Several entries that
+  only together cover everything are not detected. A provider that lists this
+  proxy in `http.trusted-proxies` now counts its per-source limits by the
+  browser's or the exchange client's source instead of by the proxy.
+  **Action:** list the load balancer or ingress that terminates TLS in front
+  of this proxy in `INJECTION_TRUSTED_PROXIES` (behind CloudFront and an ALB,
+  both the ALB's subnet and CloudFront's origin-facing ranges); otherwise the
+  proxy sees `http`, the session cache answers nothing (see Changed), and a
+  provider with secure cookies refuses the grant. On the provider, list only
+  the injection-mode proxies' addresses in `http.trusted-proxies`: a
+  validation-mode proxy, or a client, inside a listed range reaches the
+  provider with no `X-Forwarded-For`, which the provider answers `503` on
+  per-source rate-limited routes (here `502`). The proxy sends exactly one
+  address in `X-Forwarded-For`, which the provider's default
+  `http.proxy-hops` of 1 covers.
+- **The session grant forwards the browser's own `Origin`, `Sec-Fetch-Site`
+  and `Referer` (#176).** Exactly as received, and none of them when the
+  browser sent none. The exchange sends none of them.
+- **`INJECTION_PUBLIC_ORIGIN` (`auth.injection.publicOrigin`) (#176, #178).**
+  The origin browsers reach this proxy at, the same as the provider's
+  `http.public-origin`: `scheme://host[:port]` with scheme `http` or `https`,
+  optionally one trailing `/`, stored with scheme and host lower-cased and
+  the default port dropped. Any other form — a path, query, fragment or
+  userinfo, even one that normalises away — fails at boot naming the key. It
+  decides which requests the session token cache may answer (see Changed).
+  Optional, but unset it effectively turns the session cache off, and boot
+  warns once with `injection.public_origin_unset`.
+
+### Changed
+
+One change below is breaking, marked **BREAKING**.
+
+- **BREAKING: only a request that shows it is same-origin is answered from
+  the session token cache (#176, #178).** A cache hit, or a grant another
+  request is already making, never reaches the provider, so it would skip the
+  provider's same-origin check. The cache and the in-flight grants now answer
+  only a request that passes the provider's check as far as the proxy can
+  see it: the scheme the proxy vouches for equals `INJECTION_PUBLIC_ORIGIN`'s
+  (`https` while it is unset); `Origin` and the origin of `Referer`, when
+  present, equal `INJECTION_PUBLIC_ORIGIN` (`Origin: null` keeps the request
+  out); `Sec-Fetch-Site`, when present, is `same-origin`; and the request
+  either has that `Origin` or sends `Sec-Fetch-Site: same-origin`. Any other
+  request with the session cookie — a foreign or missing `Origin`, a foreign
+  `Referer`, a top-level navigation (`Sec-Fetch-Site: none`, including typed
+  URLs and bookmarks), a client that sends neither header — calls the
+  provider itself with its own headers, gets the provider's answer, and its
+  grant is neither cached nor shared with concurrent requests.
+  `injection.grant_fetch` carries `sameOrigin` (`false` for such a request).
+  While `INJECTION_PUBLIC_ORIGIN` is unset, any request with an `Origin` or
+  with a `Referer` naming an origin — which browsers send by default — misses
+  the cache, so nearly every browser request spends from the provider's
+  per-source budget, and a provider `429` reaches the caller as a 5xx.
+  **Action:** set `INJECTION_PUBLIC_ORIGIN`, and list the TLS-terminating load
+  balancer in `INJECTION_TRUSTED_PROXIES`. Expect top-level navigations and
+  non-browser cookie clients to call the provider on every request; a
+  provider that checks origin answers them `401 session_required`.
+- **The token clients receive the request's source (#176, #178).** A custom
+  session grant client passed to the injection router through `deps` now
+  receives `caller` (`CallerContext`), and a custom exchange client receives
+  `source`; each must send the corresponding headers to work with a provider
+  that checks origin or trusts this proxy.
+- **Dependencies.** `express` `^5.3.0`, `pino` `^10.4.0`, `zod` `^4.6.6`.
+
 ## [0.8.0] — 2026-10-01
 
 ### Added
