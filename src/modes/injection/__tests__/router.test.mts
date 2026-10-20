@@ -60,6 +60,12 @@ const injectionOf = (config: AppConfig) => {
 	return config.auth.injection;
 };
 
+/**
+ * The origin the router's tests reach it at. Plain http, as supertest's socket
+ * is, so a request over it can satisfy the same-origin gate's scheme check.
+ */
+const PUBLIC_ORIGIN = "http://admin.example";
+
 const makeConfig = (
 	upstreamBaseURL: string,
 	injectionOverrides: Partial<Extract<AppConfig["auth"], { mode: "injection" }>["injection"]> = {},
@@ -82,7 +88,7 @@ const makeConfig = (
 			sessionCookieName: "sid",
 			stripInboundAuthorization: false,
 			trustedProxies: [],
-			publicOrigin: null,
+			publicOrigin: PUBLIC_ORIGIN,
 			tokenCache: { ttlSeconds: 60, maxEntries: 100, safetyMarginSeconds: 5 },
 			timeoutMs: 5000,
 			exchange: { enabled: false },
@@ -117,7 +123,8 @@ const okGrantResponse = (accessToken = "grant-tok", expiresIn: number | null = 1
 
 /**
  * What a browser sends on a fetch from this proxy's own pages, the requests the
- * session cache and the flight table answer (`origin-gate.mts`).
+ * session cache and the flight table answer (`origin-gate.mts`) — over the
+ * scheme of `PUBLIC_ORIGIN`.
  */
 const SAME_ORIGIN = { "Sec-Fetch-Site": "same-origin" };
 
@@ -190,13 +197,14 @@ describe("injection router", () => {
 	// a request that shows it came from publicOrigin; any other asks the
 	// provider, with its own Origin, and gets the provider's answer.
 	describe("the same-origin gate in front of the session cache", () => {
-		const PUBLIC = "https://admin.example";
+		const PUBLIC = PUBLIC_ORIGIN;
 		const refused = () =>
 			jsonResponse(401, { error: "invalid_request", error_description: "cross-origin session grant" });
 
 		it.each([
 			{ label: "a foreign Origin", headers: { Origin: "https://elsewhere.example", "Sec-Fetch-Site": "cross-site" } },
 			{ label: "no Origin and no Sec-Fetch-Site", headers: {} },
+			{ label: "a Referer on another origin", headers: { "Sec-Fetch-Site": "same-origin", Referer: "https://elsewhere.example/page" } },
 		])("does not hand the cached grant to a request with $label: the provider is asked and its refusal answered", async ({ headers }) => {
 			fetchMock.mockResolvedValueOnce(okGrantResponse("tok-1")).mockResolvedValueOnce(refused());
 			const app = mountApp(makeConfig(upstream.baseURL, { publicOrigin: PUBLIC }));
@@ -218,6 +226,35 @@ describe("injection router", () => {
 
 			await request(app).post("/any").set("Cookie", "sid=s1").set("Origin", PUBLIC);
 			const res = await request(app).post("/any").set("Cookie", "sid=s1").set("Origin", PUBLIC);
+
+			expect(res.status).toBe(204);
+			expect(fetchMock).toHaveBeenCalledTimes(1);
+			expect(upstream.received[1].headers.authorization).toBe("Bearer tok-1");
+		});
+
+		it("neither caches nor shares a grant for a request over another scheme than publicOrigin's", async () => {
+			fetchMock.mockResolvedValueOnce(okGrantResponse("tok-1")).mockResolvedValueOnce(okGrantResponse("tok-2"));
+			const httpsOrigin = "https://admin.example";
+			const app = mountApp(makeConfig(upstream.baseURL, { publicOrigin: httpsOrigin }));
+
+			await request(app).get("/any").set("Cookie", "sid=s1").set("Origin", httpsOrigin);
+			const res = await request(app).get("/any").set("Cookie", "sid=s1").set("Origin", httpsOrigin);
+
+			expect(fetchMock).toHaveBeenCalledTimes(2);
+			expect(upstream.received[1].headers.authorization).toBe("Bearer tok-2");
+			expect(res.status).toBe(204);
+		});
+
+		it("answers from the cache over the https a trusted front proxy reports", async () => {
+			fetchMock.mockResolvedValueOnce(okGrantResponse("tok-1"));
+			const httpsOrigin = "https://admin.example";
+			const app = mountApp(
+				makeConfig(upstream.baseURL, { publicOrigin: httpsOrigin, trustedProxies: ["127.0.0.0/8"] }),
+			);
+			const browser = { Cookie: "sid=s1", Origin: httpsOrigin, "X-Forwarded-Proto": "https" };
+
+			await request(app).get("/any").set(browser);
+			const res = await request(app).get("/any").set(browser);
 
 			expect(res.status).toBe(204);
 			expect(fetchMock).toHaveBeenCalledTimes(1);

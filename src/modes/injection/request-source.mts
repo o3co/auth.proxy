@@ -4,9 +4,10 @@
 /**
  * Where a browser request came from, as this proxy can vouch for it:
  * `createRequestSource` builds, from `auth.injection.trustedProxies`, the
- * function that reads a request's address and scheme. The session grant
- * forwards them to the provider as `X-Forwarded-For` and `X-Forwarded-Proto`,
- * so they are this proxy's own statement, never a client's claim passed on.
+ * function that reads a request's address and scheme, and `forwardedHeaders`
+ * says them to the provider as `X-Forwarded-For` and `X-Forwarded-Proto` on
+ * the session grant and the exchange alike, so they are this proxy's own
+ * statement, never a client's claim passed on.
  *
  * The address starts at the socket's peer. Only while the address in hand is a
  * trusted proxy is the hop it reported believed: `X-Forwarded-For` is walked
@@ -25,7 +26,7 @@
 
 import type { IncomingMessage } from "node:http";
 import net from "node:net";
-import { ipVersion, parseAddressRange } from "../../address-range.mjs";
+import { type AddressRange, ipVersion, parseAddressRange } from "../../address-range.mjs";
 
 export type RequestProtocol = "http" | "https";
 
@@ -53,14 +54,42 @@ const buildTrustList = (trustedProxies: readonly string[]): net.BlockList => {
 	return list;
 };
 
+/** The first IPv4-mapped IPv6 address: an IPv6 range of prefix 96 or shorter that holds it holds them all. */
+const FIRST_IPV4_MAPPED = "::ffff:0:0";
+
+/** Whether `range` holds every address of a family. */
+const trustsAll = (range: AddressRange): boolean => {
+	if (range.prefix === 0) return true;
+	if (range.family === "ipv4" || range.prefix > 96) return false;
+	// An IPv4 address is checked against an IPv6 range as its IPv4-mapped form.
+	const one = new net.BlockList();
+	one.addSubnet(range.address, range.prefix, "ipv6");
+	return one.check(FIRST_IPV4_MAPPED, "ipv6");
+};
+
 /**
- * The entries that trust every address of their family (`0.0.0.0/0`, `::/0`):
- * with one, any client can tell the provider any address and scheme it likes.
- * The router warns about them when it is built. Entries it cannot read are
- * left to `createRequestSource`, which refuses them.
+ * The entries that, each on its own, trust every IPv4 address or every IPv6
+ * address (`0.0.0.0/0`, `::/0`, `::ffff:0:0/96`, any IPv6 range that holds
+ * `::ffff:0:0/96`): with one, any client can tell the provider any address and
+ * scheme it likes. The router warns about them when it is built. Several
+ * entries that cover a family only together are not named. Entries it cannot
+ * read are left to `createRequestSource`, which refuses them.
  */
 export const trustAllEntries = (trustedProxies: readonly string[]): string[] =>
-	trustedProxies.filter((entry) => parseAddressRange(entry)?.prefix === 0);
+	trustedProxies.filter((entry) => {
+		const range = parseAddressRange(entry);
+		return range !== null && trustsAll(range);
+	});
+
+/**
+ * The headers that tell the provider `source`: this proxy's own statement, set
+ * whole, so nothing a client sent under these names goes on. No
+ * `X-Forwarded-For` when the address is unknown.
+ */
+export const forwardedHeaders = (source: RequestSource): Record<string, string> => ({
+	...(source.address !== null ? { "X-Forwarded-For": source.address } : {}),
+	"X-Forwarded-Proto": source.protocol,
+});
 
 export const createRequestSource = (
 	trustedProxies: readonly string[],

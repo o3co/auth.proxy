@@ -23,7 +23,7 @@
  * client and — with the exchange on — the exchange's context, client, cache
  * and flight table, or takes them from `deps`; the exchange context is always
  * derived from config, never supplied, and so is the request source the
- * session grant reports the browser's address and scheme from
+ * session grant and the exchange report a request's address and scheme from
  * (`auth.injection.trustedProxies`).
  */
 
@@ -91,9 +91,10 @@ const received = (value: string | string[] | undefined): string | null =>
 
 /**
  * The browser request as the session grant tells the provider about it: its
- * own `Origin`, `Sec-Fetch-Site` and `Referer`, untouched, and the address and scheme
- * this proxy vouches for. The client's own `X-Forwarded-*` count only through
- * `requestSource`, which believes them from a trusted proxy alone.
+ * own `Origin`, `Sec-Fetch-Site` and `Referer`, untouched, and the address and
+ * scheme this proxy vouches for, which the exchange tells it too. The client's
+ * own `X-Forwarded-*` count only through `requestSource`, which believes them
+ * from a trusted proxy alone.
  */
 const callerOf = (req: Request, requestSource: (req: Request) => RequestSource): CallerContext => ({
 	origin: received(req.headers.origin),
@@ -233,9 +234,10 @@ export const createRouter = ({
 	if (trustAll.length > 0) {
 		// Allowed, since a deployment may know its only peers are proxies, but
 		// said once at boot: every client's X-Forwarded-* now reach the provider.
+		// Only an entry that covers a family on its own is caught.
 		logger.warn(
 			{ event: "injection.trusted_proxies_trust_all", entries: trustAll },
-			"auth.injection.trustedProxies trusts every address: any client can set the X-Forwarded-For and X-Forwarded-Proto the session grant sends",
+			"auth.injection.trustedProxies trusts every address: any client can set the X-Forwarded-For and X-Forwarded-Proto the session grant and the exchange send",
 		);
 	}
 	const exchange = cfg.exchange.enabled

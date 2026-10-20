@@ -25,6 +25,7 @@
 import { authenticateClient, type ClientAuthentication } from "../../oauth/client-authentication.mjs";
 import { discardBody, readBoundedJsonObject } from "../../response-body.mjs";
 import { MAX_ERROR_BODY_BYTES, sanitizeErrorCode } from "./provider-error.mjs";
+import { forwardedHeaders, type RequestSource } from "./request-source.mjs";
 import { buildTokenUrl, parseJsonBody } from "./token-endpoint.mjs";
 
 /** RFC 7523 section 2.1. */
@@ -93,7 +94,12 @@ export interface JwtBearerClient {
 	 * `AbortSignal.timeout(cfg.timeoutMs)`, and a caller's disconnect must not
 	 * abort an exchange other waiters are coalesced onto.
 	 */
-	exchange(args: { assertion: string; requestId: string }): Promise<JwtBearerResult>;
+	exchange(args: {
+		assertion: string;
+		requestId: string;
+		/** Where the request being exchanged for came from, as this proxy vouches for it. */
+		source: RequestSource;
+	}): Promise<JwtBearerResult>;
 }
 
 const NOT_PERMITTED: ReadonlySet<string> = new Set([
@@ -110,7 +116,12 @@ const NOT_PERMITTED: ReadonlySet<string> = new Set([
  * replay. Whether the assertion is trustworthy, for which client, scope and
  * audience, is the provider's decision; this client only maps the answer.
  *
- * Same origin, URL construction and timeout as the session grant client. With
+ * Same origin, URL construction and timeout as the session grant client, and
+ * the same `X-Forwarded-For` / `X-Forwarded-Proto` from the request source: a
+ * provider that trusts this proxy places the request by them, and cannot place
+ * one that carries none. No `Origin`, `Sec-Fetch-Site` or `Referer`: the
+ * exchange's credential is its `Authorization`, which a browser does not
+ * attach on its own, so there is no same-origin check to inform. With
  * a client secret it authenticates with `client_secret_basic`, and the body
  * carries no `client_id`; with a client key, a new client assertion and the
  * `client_id` go in the body and no `Authorization` header is sent. Redirects
@@ -122,7 +133,7 @@ export const createJwtBearerClient = (cfg: JwtBearerClientConfig): JwtBearerClie
 	const url = buildTokenUrl(cfg.providerOrigin);
 
 	return {
-		async exchange({ assertion, requestId }) {
+		async exchange({ assertion, requestId, source }) {
 			const client = await authenticateClient(cfg.credentials);
 			const params = new URLSearchParams({
 				grant_type: JWT_BEARER_GRANT_TYPE,
@@ -133,6 +144,7 @@ export const createJwtBearerClient = (cfg: JwtBearerClientConfig): JwtBearerClie
 			if (cfg.audience !== null) params.set("audience", cfg.audience);
 			if (cfg.resource !== null) params.set("resource", cfg.resource);
 			const headers: Record<string, string> = {
+				...forwardedHeaders(source),
 				"Content-Type": "application/x-www-form-urlencoded",
 				"X-Request-Id": requestId,
 				Accept: "application/json",

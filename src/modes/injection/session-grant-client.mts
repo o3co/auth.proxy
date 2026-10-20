@@ -51,6 +51,7 @@ import { authenticateClient } from "../../oauth/client-authentication.mjs";
 import type { ClientKey } from "../../oauth/private-key-jwt.mjs";
 import { discardBody, readBoundedJsonObject } from "../../response-body.mjs";
 import { MAX_ERROR_BODY_BYTES, sanitizeErrorDescription } from "./provider-error.mjs";
+import { forwardedHeaders, type RequestSource } from "./request-source.mjs";
 import { buildTokenUrl, parseJsonBody } from "./token-endpoint.mjs";
 
 /** The provider-specific grant this client submits, as the request says it. */
@@ -93,20 +94,17 @@ export interface SessionGrantClientConfig {
 
 /**
  * The browser request the grant is asked for, as the provider needs to see it:
- * the provider decides its same-origin check from `origin` and `secFetchSite`,
- * and its request source from `address` and `protocol`.
+ * the provider decides its same-origin check from `origin`, `secFetchSite`,
+ * `referer` and `protocol`, and its request source from `address` and
+ * `protocol` — the {@link RequestSource} this proxy vouches for.
  */
-export interface CallerContext {
+export interface CallerContext extends RequestSource {
 	/** The browser's `Origin`, exactly as received; `null` when it sent none. */
 	origin: string | null;
 	/** The browser's `Sec-Fetch-Site`, exactly as received; `null` when it sent none. */
 	secFetchSite: string | null;
-	/** The browser's `Referer`, exactly as received; `null` when it sent none. The provider reads it where there is no `Origin`. */
+	/** The browser's `Referer`, exactly as received; `null` when it sent none. The provider reads its origin beside `Origin`. */
 	referer: string | null;
-	/** The browser's address as this proxy vouches for it (`request-source.mts`); `null` when unknown. */
-	address: string | null;
-	/** The scheme of the browser's request as this proxy vouches for it. */
-	protocol: "http" | "https";
 }
 
 export interface SessionGrantClient {
@@ -127,15 +125,13 @@ export interface SessionGrantClient {
  * `Referer` are the browser's own, sent only when it sent them: filling one in
  * would vouch, to the provider's same-origin check, for a request the browser
  * did not vouch for. `X-Forwarded-For` and `X-Forwarded-Proto` are this proxy's
- * statement, set whole; nothing the client sent under those names is passed
- * on.
+ * statement ({@link forwardedHeaders}).
  */
 const callerHeaders = (caller: CallerContext): Record<string, string> => ({
 	...(caller.origin !== null ? { Origin: caller.origin } : {}),
 	...(caller.secFetchSite !== null ? { "Sec-Fetch-Site": caller.secFetchSite } : {}),
 	...(caller.referer !== null ? { Referer: caller.referer } : {}),
-	...(caller.address !== null ? { "X-Forwarded-For": caller.address } : {}),
-	"X-Forwarded-Proto": caller.protocol,
+	...forwardedHeaders(caller),
 });
 
 export const createSessionGrantClient = (

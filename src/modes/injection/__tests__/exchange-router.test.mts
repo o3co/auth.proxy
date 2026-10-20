@@ -173,6 +173,44 @@ describe("injection router — external credential exchange", () => {
 			expect(JSON.stringify(upstream.received[0])).not.toContain(assertion);
 		});
 
+		// A provider that lists this proxy in its trusted proxies places the
+		// request by these headers, and cannot place one that carries none.
+		it("tells the provider where the request came from, over what the client sent, and nothing of its origin", async () => {
+			fetchMock.mockResolvedValueOnce(okToken("issued-1"));
+			const app = mountApp(makeConfig(upstream.baseURL));
+
+			await request(app)
+				.get("/orders")
+				.set("Authorization", `Bearer ${makeAssertion()}`)
+				.set("X-Forwarded-For", "198.51.100.66")
+				.set("X-Forwarded-Proto", "https")
+				.set("Origin", "https://elsewhere.example")
+				.set("Referer", "https://elsewhere.example/page")
+				.set("Sec-Fetch-Site", "cross-site");
+
+			const { headers } = providerCall();
+			expect(headers["X-Forwarded-For"]).toMatch(/^(::ffff:)?127\.0\.0\.1$/);
+			expect(headers["X-Forwarded-Proto"]).toBe("http");
+			for (const name of ["Origin", "Sec-Fetch-Site", "Referer"]) {
+				expect(headers, name).not.toHaveProperty(name);
+			}
+		});
+
+		it("behind a front proxy listed in trustedProxies, tells the provider the address and scheme that proxy reported", async () => {
+			fetchMock.mockResolvedValueOnce(okToken("issued-1"));
+			const app = mountApp(makeConfig(upstream.baseURL, ENABLED, { trustedProxies: ["127.0.0.0/8"] }));
+
+			await request(app)
+				.get("/orders")
+				.set("Authorization", `Bearer ${makeAssertion()}`)
+				.set("X-Forwarded-For", "198.51.100.66, 203.0.113.9")
+				.set("X-Forwarded-Proto", "https");
+
+			const { headers } = providerCall();
+			expect(headers["X-Forwarded-For"]).toBe("203.0.113.9");
+			expect(headers["X-Forwarded-Proto"]).toBe("https");
+		});
+
 		it("sends the configured scope, audience and resource", async () => {
 			fetchMock.mockResolvedValueOnce(okToken("issued-1"));
 			const app = mountApp(
@@ -812,7 +850,11 @@ describe("injection router — external credential exchange", () => {
 			expect(res.status).toBe(204);
 			expect(upstream.received[0].headers.authorization).toBe("Bearer issued-injected");
 			expect(fetchMock).not.toHaveBeenCalled();
-			expect(client.exchange).toHaveBeenCalledWith({ assertion, requestId: expect.any(String) });
+			expect(client.exchange).toHaveBeenCalledWith({
+				assertion,
+				requestId: expect.any(String),
+				source: { address: expect.stringMatching(/^(::ffff:)?127\.0\.0\.1$/), protocol: "http" },
+			});
 		});
 
 		it("accepts an injected exchange token cache: a pre-seeded entry is served with no client or fetch call", async () => {

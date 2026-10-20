@@ -826,7 +826,12 @@ describe("decideInjection", () => {
 			);
 			expect(outcome).toEqual<InjectionOutcome>({
 				kind: "exchange",
-				args: { requestId: "rid-1", authorization: "Bearer any", sessionCookie },
+				args: {
+					requestId: "rid-1",
+					authorization: "Bearer any",
+					sessionCookie,
+					source: { address: CALLER.address, protocol: CALLER.protocol },
+				},
 			});
 			expect(grantClient.exchange).not.toHaveBeenCalled();
 			expect([logger.debug, logger.info, logger.warn, logger.error].flatMap(eventsOf)).toEqual([]);
@@ -836,7 +841,12 @@ describe("decideInjection", () => {
 			const { deps } = makeDeps({}, { exchangeEnabled: true });
 			expect(await decideInjection(inputs({ authorization: "" }), deps)).toEqual({
 				kind: "exchange",
-				args: { requestId: "rid-1", authorization: "", sessionCookie: "absent" },
+				args: {
+					requestId: "rid-1",
+					authorization: "",
+					sessionCookie: "absent",
+					source: { address: CALLER.address, protocol: CALLER.protocol },
+				},
 			});
 		});
 

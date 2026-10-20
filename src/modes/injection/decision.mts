@@ -33,6 +33,7 @@ import {
 	extractCookie,
 } from "./cookie-extractor.mjs";
 import { isSameOriginRequest } from "./origin-gate.mjs";
+import type { RequestSource } from "./request-source.mjs";
 import {
 	type CallerContext,
 	SESSION_GRANT_TYPE,
@@ -150,6 +151,8 @@ export interface ExchangeArgs {
 	authorization: string;
 	/** The session cookie's classification, so the handler can refuse two credentials at once. */
 	sessionCookie: CookieExtraction["kind"];
+	/** Where the request came from, as this proxy vouches for it; the exchange tells the provider. */
+	source: RequestSource;
 }
 
 /**
@@ -276,7 +279,12 @@ export const decideInjection = async (
 	if (exchangeEnabled && authorization !== undefined) {
 		return {
 			kind: "exchange",
-			args: { requestId, authorization, sessionCookie: extraction.kind },
+			args: {
+				requestId,
+				authorization,
+				sessionCookie: extraction.kind,
+				source: { address: caller.address, protocol: caller.protocol },
+			},
 		};
 	}
 
