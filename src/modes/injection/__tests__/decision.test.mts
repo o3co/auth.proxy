@@ -23,6 +23,7 @@ import {
 	sessionCacheKey,
 } from "../decision.mjs";
 import { exchangeCacheKey } from "../exchange.mjs";
+import { createSameOriginGate } from "../origin-gate.mjs";
 import {
 	type CallerContext,
 	SessionGrantError,
@@ -59,8 +60,10 @@ const makeDeps = (
 ) => {
 	const logger: FakeLogger & Logger = fakeLogger();
 	const grantClient = { exchange: vi.fn<() => Promise<SessionGrantResult>>() };
+	const cfg = { ...baseCfg, ...cfgOverrides };
 	const deps: InjectionDeps = {
-		cfg: { ...baseCfg, ...cfgOverrides },
+		cfg,
+		sameOriginGate: createSameOriginGate(cfg.publicOrigin),
 		tokenCache: createTokenCache({ maxEntries: 100 }),
 		singleFlight: createSingleFlight<string>(),
 		grantClient,

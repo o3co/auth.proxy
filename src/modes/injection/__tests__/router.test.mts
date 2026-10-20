@@ -245,6 +245,43 @@ describe("injection router", () => {
 			expect(res.status).toBe(204);
 		});
 
+		// A gate-refused request must not join a flight an admitted one
+		// started: it asks the provider itself while that flight is still open.
+		it("does not join an admitted request's flight with one over another scheme: it makes its own provider call", async () => {
+			const httpsOrigin = "https://admin.example";
+			const app = mountApp(
+				makeConfig(upstream.baseURL, { publicOrigin: httpsOrigin, trustedProxies: ["127.0.0.0/8"] }),
+			);
+			let release!: (response: Response) => void;
+			let asked!: () => void;
+			const firstCallMade = new Promise<void>((resolve) => {
+				asked = resolve;
+			});
+			fetchMock
+				.mockImplementationOnce(() => {
+					asked();
+					return new Promise<Response>((resolve) => {
+						release = resolve;
+					});
+				})
+				.mockResolvedValueOnce(okGrantResponse("tok-own"));
+
+			const admitted = request(app)
+				.get("/admitted")
+				.set({ Cookie: "sid=s1", Origin: httpsOrigin, "X-Forwarded-Proto": "https" })
+				.then((res) => res);
+			await firstCallMade;
+			const refused = await request(app).get("/refused").set({ Cookie: "sid=s1", Origin: httpsOrigin });
+
+			expect(refused.status).toBe(204);
+			expect(fetchMock).toHaveBeenCalledTimes(2);
+			expect(upstream.received.find((r) => r.url === "/refused")?.headers.authorization).toBe("Bearer tok-own");
+
+			release(okGrantResponse("tok-flight"));
+			expect((await admitted).status).toBe(204);
+			expect(upstream.received.find((r) => r.url === "/admitted")?.headers.authorization).toBe("Bearer tok-flight");
+		});
+
 		it("answers from the cache over the https a trusted front proxy reports", async () => {
 			fetchMock.mockResolvedValueOnce(okGrantResponse("tok-1"));
 			const httpsOrigin = "https://admin.example";
@@ -569,6 +606,25 @@ describe("injection router", () => {
 				(fields) => fields.event === "injection.trusted_proxies_trust_all",
 			);
 			expect(warned).toEqual([expect.objectContaining({ entries: ["0.0.0.0/0", "::/0"] })]);
+		});
+
+		// Browsers send a same-origin Referer by default, which names an origin:
+		// with no publicOrigin to compare it to, nearly every browser request
+		// misses the session cache and calls the provider.
+		it("warns once, at construction, when publicOrigin is unset", () => {
+			const warnSpy = vi.spyOn(logger, "warn");
+
+			createRouter({ config: makeConfig(upstream.baseURL, { publicOrigin: null }) });
+
+			expect(eventsOf(warnSpy).filter((event) => event === "injection.public_origin_unset")).toHaveLength(1);
+		});
+
+		it("does not warn about publicOrigin when it is set", () => {
+			const warnSpy = vi.spyOn(logger, "warn");
+
+			createRouter({ config: makeConfig(upstream.baseURL) });
+
+			expect(eventsOf(warnSpy)).not.toContain("injection.public_origin_unset");
 		});
 
 		it("does not warn about a trustedProxies list that names its proxies", () => {

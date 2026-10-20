@@ -8,7 +8,7 @@
  * reaches the provider.
  */
 import { describe, expect, it } from "vitest";
-import { isSameOriginRequest } from "../origin-gate.mjs";
+import { createSameOriginGate } from "../origin-gate.mjs";
 import type { CallerContext } from "../session-grant-client.mjs";
 
 const PUBLIC = "https://admin.example";
@@ -24,7 +24,16 @@ const caller = (signals: Partial<Signals>): Signals => ({
 	...signals,
 });
 
-describe("isSameOriginRequest", () => {
+/** The gate for `publicOrigin`, asked about one request. */
+const isSameOriginRequest = (signals: Signals, publicOrigin: string | null): boolean =>
+	createSameOriginGate(publicOrigin)(signals);
+
+describe("createSameOriginGate", () => {
+	// The public origin is read once, when the gate is built, not per request.
+	it("reads the public origin when it is built, refusing one that is not a URL", () => {
+		expect(() => createSameOriginGate("not an origin")).toThrow();
+	});
+
 	it("admits an Origin equal to the public origin", () => {
 		expect(isSameOriginRequest(caller({ origin: PUBLIC }), PUBLIC)).toBe(true);
 		expect(isSameOriginRequest(caller({ origin: PUBLIC, secFetchSite: "same-origin" }), PUBLIC)).toBe(true);

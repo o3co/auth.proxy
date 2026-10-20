@@ -32,7 +32,7 @@ import {
 	type CookieRejectReason,
 	extractCookie,
 } from "./cookie-extractor.mjs";
-import { isSameOriginRequest } from "./origin-gate.mjs";
+import type { SameOriginGate } from "./origin-gate.mjs";
 import type { RequestSource } from "./request-source.mjs";
 import {
 	type CallerContext,
@@ -127,6 +127,12 @@ export interface InjectionDeps {
 	tokenCache: TokenCache;
 	singleFlight: SingleFlight<string>;
 	grantClient: SessionGrantClient;
+	/**
+	 * The same-origin gate for `cfg.publicOrigin` (`createSameOriginGate`).
+	 * `createRouter` always builds it from the config, as it does the request
+	 * source, so it cannot disagree with `cfg`.
+	 */
+	sameOriginGate: SameOriginGate;
 	/** `auth.injection.exchange.enabled`: an inbound `Authorization` is handed off, never forwarded as received. */
 	exchangeEnabled: boolean;
 	logger: Logger;
@@ -264,7 +270,7 @@ export const decideInjection = async (
 	{ requestId, cookieHeader, authorization, caller }: InjectionInputs,
 	deps: InjectionDeps,
 ): Promise<InjectionOutcome> => {
-	const { tokenCache, singleFlight, grantClient, cfg, exchangeEnabled, logger } = deps;
+	const { tokenCache, singleFlight, grantClient, sameOriginGate, cfg, exchangeEnabled, logger } = deps;
 	const extraction = extractCookie(cookieHeader, cfg.sessionCookieName);
 
 	/**
@@ -352,7 +358,7 @@ export const decideInjection = async (
 	 * Any other asks the provider itself, with its own headers, and its grant is
 	 * neither cached nor shared (origin-gate.mts).
 	 */
-	const sameOrigin = isSameOriginRequest(caller, cfg.publicOrigin);
+	const sameOrigin = sameOriginGate(caller);
 	const cached = sameOrigin ? tokenCache.get(cacheKey) : null;
 
 	const inject = (token: string): InjectionOutcome => {

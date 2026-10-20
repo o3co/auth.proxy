@@ -2,9 +2,10 @@
 // SPDX-License-Identifier: Apache-2.0
 
 /**
- * The same-origin gate in front of the session cache: `isSameOriginRequest`
- * says whether a browser request showed that it came from this proxy's own
- * pages, the condition for answering it from the cache or from a flight
+ * The same-origin gate in front of the session cache: `createSameOriginGate`
+ * builds, once per router from `auth.injection.publicOrigin`, the function
+ * that says whether a browser request showed that it came from this proxy's
+ * own pages, the condition for answering it from the cache or from a flight
  * another request started.
  *
  * The provider holds a session grant to a same-origin check, and a cache hit
@@ -44,14 +45,24 @@ const refererOrigin = (referer: string | null): string | null => {
 	return origin === undefined || origin === "null" ? null : origin;
 };
 
-export const isSameOriginRequest = (
-	caller: Pick<CallerContext, "origin" | "secFetchSite" | "referer" | "protocol">,
-	publicOrigin: string | null,
-): boolean => {
-	const scheme = publicOrigin === null ? "https:" : new URL(publicOrigin).protocol;
-	if (`${caller.protocol}:` !== scheme) return false;
-	const named = [caller.origin, refererOrigin(caller.referer)].filter((origin) => origin !== null);
-	if (named.some((origin) => origin !== publicOrigin)) return false;
-	if (caller.secFetchSite !== null && caller.secFetchSite !== "same-origin") return false;
-	return (caller.origin !== null && caller.origin === publicOrigin) || caller.secFetchSite === "same-origin";
+/** What the gate reads of a request. */
+export type SameOriginSignals = Pick<CallerContext, "origin" | "secFetchSite" | "referer" | "protocol">;
+
+/** Whether a request may be answered from the session cache or a flight another request started. */
+export type SameOriginGate = (caller: SameOriginSignals) => boolean;
+
+/**
+ * The gate for `publicOrigin`, which is read here, once: its scheme is what
+ * every request's must be. Throws on a `publicOrigin` that is not a URL, which
+ * the schema has already refused.
+ */
+export const createSameOriginGate = (publicOrigin: string | null): SameOriginGate => {
+	const scheme = publicOrigin === null ? "https" : new URL(publicOrigin).protocol.slice(0, -1);
+	return (caller) => {
+		if (caller.protocol !== scheme) return false;
+		const named = [caller.origin, refererOrigin(caller.referer)].filter((origin) => origin !== null);
+		if (named.some((origin) => origin !== publicOrigin)) return false;
+		if (caller.secFetchSite !== null && caller.secFetchSite !== "same-origin") return false;
+		return (caller.origin !== null && caller.origin === publicOrigin) || caller.secFetchSite === "same-origin";
+	};
 };

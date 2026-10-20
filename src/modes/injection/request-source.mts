@@ -84,7 +84,9 @@ export const trustAllEntries = (trustedProxies: readonly string[]): string[] =>
 /**
  * The headers that tell the provider `source`: this proxy's own statement, set
  * whole, so nothing a client sent under these names goes on. No
- * `X-Forwarded-For` when the address is unknown.
+ * `X-Forwarded-For` when the address is unknown — the socket has no peer any
+ * more — and a provider that lists this proxy answers such a call `503`, which
+ * is acceptable: the caller it was for is gone.
  */
 export const forwardedHeaders = (source: RequestSource): Record<string, string> => ({
 	...(source.address !== null ? { "X-Forwarded-For": source.address } : {}),
