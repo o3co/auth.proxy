@@ -65,7 +65,11 @@ describe("createJwtBearerClient on the wire", () => {
 		});
 
 	const exchange = (overrides: Partial<JwtBearerClientConfig> = {}) =>
-		client(overrides).exchange({ assertion: ASSERTION, requestId: "rid-9d0f" });
+		client(overrides).exchange({
+			assertion: ASSERTION,
+			requestId: "rid-9d0f",
+			source: { address: "203.0.113.7", protocol: "https" },
+		});
 
 	/** The rejection, which must be a `JwtBearerError`. */
 	const refusal = async (promise: Promise<unknown>): Promise<JwtBearerError> => {
@@ -104,6 +108,8 @@ describe("createJwtBearerClient on the wire", () => {
 				`Basic ${Buffer.from("proxy-exchange:exchange-s3cret").toString("base64")}`,
 			);
 			expect(req.headers.cookie).toBeUndefined();
+			expect(req.headers["x-forwarded-for"]).toBe("203.0.113.7");
+			expect(req.headers["x-forwarded-proto"]).toBe("https");
 			expect(req.headers["x-request-id"]).toBe("rid-9d0f");
 			expect(req.headers.accept).toBe("application/json");
 			expect(Object.fromEntries(new URLSearchParams(req.body.toString("utf8")))).toEqual({

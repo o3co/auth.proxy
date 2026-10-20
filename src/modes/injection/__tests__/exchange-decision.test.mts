@@ -22,6 +22,7 @@ import {
 	exchangeContext,
 } from "../exchange.mjs";
 import {
+	type JwtBearerClient,
 	JwtBearerError,
 	type JwtBearerErrorCode,
 	type JwtBearerResult,
@@ -58,7 +59,7 @@ const makeAssertion = (claims: Record<string, unknown> = {}): string => {
 const fakeLogger = () => ({ debug: vi.fn(), info: vi.fn(), warn: vi.fn(), error: vi.fn() });
 type FakeLogger = ReturnType<typeof fakeLogger>;
 
-type Exchange = (args: { assertion: string; requestId: string }) => Promise<JwtBearerResult>;
+type Exchange = JwtBearerClient["exchange"];
 
 /** The overrides a test may ask for; the fakes it gets back are always the ones wired in. */
 const makeDeps = (
@@ -78,10 +79,14 @@ const makeDeps = (
 	return { deps, logger, client };
 };
 
+/** Where the request came from, as the router read it. */
+const SOURCE = { address: "203.0.113.7", protocol: "https" } as const;
+
 const args = (assertion: string, overrides: Partial<ExchangeArgs> = {}): ExchangeArgs => ({
 	requestId: "rid-1",
 	authorization: `Bearer ${assertion}`,
 	sessionCookie: "absent",
+	source: SOURCE,
 	...overrides,
 });
 
@@ -217,7 +222,7 @@ describe("decideExchange", () => {
 
 			const first = await decideExchange(args(assertion), deps);
 			expect(first).toEqual<ExchangeOutcome>({ kind: "inject", token: "issued-1" });
-			expect(client.exchange).toHaveBeenCalledWith({ assertion, requestId: "rid-1" });
+			expect(client.exchange).toHaveBeenCalledWith({ assertion, requestId: "rid-1", source: SOURCE });
 			expect(deps.tokenCache.get(exchangeCacheKey(deps.context, assertion))).toBe("issued-1");
 			expect(eventsOf(logger.info)).toContain("injection.exchange_fetch");
 			expect(fieldsOf(logger.info)).toContainEqual(

@@ -22,9 +22,10 @@
  * `createRouter` builds the session path's cache, flight table and grant
  * client and — with the exchange on — the exchange's context, client, cache
  * and flight table, or takes them from `deps`; the exchange context is always
- * derived from config, never supplied, and so is the request source the
- * session grant reports the browser's address and scheme from
- * (`auth.injection.trustedProxies`).
+ * derived from config, never supplied, and so are the request source the
+ * session grant and the exchange report a request's address and scheme from
+ * (`auth.injection.trustedProxies`) and the same-origin gate in front of the
+ * session cache (`auth.injection.publicOrigin`).
  */
 
 import type { NextFunction, Request, Response } from "express";
@@ -46,6 +47,7 @@ import {
 	exchangeContext,
 } from "./exchange.mjs";
 import { createJwtBearerClient } from "./jwt-bearer-client.mjs";
+import { createSameOriginGate } from "./origin-gate.mjs";
 import { createRequestSource, type RequestSource, trustAllEntries } from "./request-source.mjs";
 import { type CallerContext, createSessionGrantClient } from "./session-grant-client.mjs";
 import { stageRefusals } from "./stage-refusals.mjs";
@@ -91,9 +93,10 @@ const received = (value: string | string[] | undefined): string | null =>
 
 /**
  * The browser request as the session grant tells the provider about it: its
- * own `Origin`, `Sec-Fetch-Site` and `Referer`, untouched, and the address and scheme
- * this proxy vouches for. The client's own `X-Forwarded-*` count only through
- * `requestSource`, which believes them from a trusted proxy alone.
+ * own `Origin`, `Sec-Fetch-Site` and `Referer`, untouched, and the address and
+ * scheme this proxy vouches for, which the exchange tells it too. The client's
+ * own `X-Forwarded-*` count only through `requestSource`, which believes them
+ * from a trusted proxy alone.
  */
 const callerOf = (req: Request, requestSource: (req: Request) => RequestSource): CallerContext => ({
 	origin: received(req.headers.origin),
@@ -233,9 +236,19 @@ export const createRouter = ({
 	if (trustAll.length > 0) {
 		// Allowed, since a deployment may know its only peers are proxies, but
 		// said once at boot: every client's X-Forwarded-* now reach the provider.
+		// Only an entry that covers a family on its own is caught.
 		logger.warn(
 			{ event: "injection.trusted_proxies_trust_all", entries: trustAll },
-			"auth.injection.trustedProxies trusts every address: any client can set the X-Forwarded-For and X-Forwarded-Proto the session grant sends",
+			"auth.injection.trustedProxies trusts every address: any client can set the X-Forwarded-For and X-Forwarded-Proto the session grant and the exchange send",
+		);
+	}
+	if (cfg.publicOrigin === null) {
+		// Allowed, but said once at boot: browsers send a same-origin Referer
+		// by default, which names an origin the gate has nothing to compare to,
+		// so nearly every browser request misses the session cache.
+		logger.warn(
+			{ event: "injection.public_origin_unset" },
+			"auth.injection.publicOrigin is unset: browser requests that send a Referer are not answered from the session cache, and each calls the provider",
 		);
 	}
 	const exchange = cfg.exchange.enabled
@@ -247,6 +260,7 @@ export const createRouter = ({
 			overrides.tokenCache ?? createTokenCache({ maxEntries: cfg.tokenCache.maxEntries }),
 		singleFlight: overrides.singleFlight ?? createSingleFlight<string>(),
 		grantClient: overrides.grantClient ?? createSessionGrantClient(cfg),
+		sameOriginGate: createSameOriginGate(cfg.publicOrigin),
 		exchangeEnabled: exchange !== null,
 		logger,
 	};

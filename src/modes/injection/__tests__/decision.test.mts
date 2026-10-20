@@ -23,6 +23,7 @@ import {
 	sessionCacheKey,
 } from "../decision.mjs";
 import { exchangeCacheKey } from "../exchange.mjs";
+import { createSameOriginGate } from "../origin-gate.mjs";
 import {
 	type CallerContext,
 	SessionGrantError,
@@ -59,8 +60,10 @@ const makeDeps = (
 ) => {
 	const logger: FakeLogger & Logger = fakeLogger();
 	const grantClient = { exchange: vi.fn<() => Promise<SessionGrantResult>>() };
+	const cfg = { ...baseCfg, ...cfgOverrides };
 	const deps: InjectionDeps = {
-		cfg: { ...baseCfg, ...cfgOverrides },
+		cfg,
+		sameOriginGate: createSameOriginGate(cfg.publicOrigin),
 		tokenCache: createTokenCache({ maxEntries: 100 }),
 		singleFlight: createSingleFlight<string>(),
 		grantClient,
@@ -826,7 +829,12 @@ describe("decideInjection", () => {
 			);
 			expect(outcome).toEqual<InjectionOutcome>({
 				kind: "exchange",
-				args: { requestId: "rid-1", authorization: "Bearer any", sessionCookie },
+				args: {
+					requestId: "rid-1",
+					authorization: "Bearer any",
+					sessionCookie,
+					source: { address: CALLER.address, protocol: CALLER.protocol },
+				},
 			});
 			expect(grantClient.exchange).not.toHaveBeenCalled();
 			expect([logger.debug, logger.info, logger.warn, logger.error].flatMap(eventsOf)).toEqual([]);
@@ -836,7 +844,12 @@ describe("decideInjection", () => {
 			const { deps } = makeDeps({}, { exchangeEnabled: true });
 			expect(await decideInjection(inputs({ authorization: "" }), deps)).toEqual({
 				kind: "exchange",
-				args: { requestId: "rid-1", authorization: "", sessionCookie: "absent" },
+				args: {
+					requestId: "rid-1",
+					authorization: "",
+					sessionCookie: "absent",
+					source: { address: CALLER.address, protocol: CALLER.protocol },
+				},
 			});
 		});
 

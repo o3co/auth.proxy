@@ -3,14 +3,14 @@
 
 /**
  * Where a browser request came from, as this proxy can vouch for it
- * (`request-source.mts`): the address and the scheme the session grant
- * forwards to the provider as `X-Forwarded-For` and `X-Forwarded-Proto`.
+ * (`request-source.mts`): the address and the scheme the session grant and
+ * the exchange tell the provider as `X-Forwarded-For` and `X-Forwarded-Proto`.
  * A forwarded header counts only when the peer that sent it is one of
  * `auth.injection.trustedProxies`; anything else is the client's own claim.
  */
 import type { IncomingMessage } from "node:http";
 import { describe, expect, it } from "vitest";
-import { createRequestSource, trustAllEntries } from "../request-source.mjs";
+import { createRequestSource, forwardedHeaders, trustAllEntries } from "../request-source.mjs";
 
 interface FakeRequest {
 	peer?: string;
@@ -127,6 +127,37 @@ describe("createRequestSource", () => {
 
 		it("is empty for a list that names its proxies", () => {
 			expect(trustAllEntries(["10.0.0.0/8", "192.0.2.1"])).toEqual([]);
+		});
+
+		// An IPv4 address is checked against IPv6 entries as its IPv4-mapped
+		// form, so an IPv6 range that holds all of ::ffff:0:0/96 trusts every
+		// IPv4 client.
+		it("names an IPv6 entry whose range holds every IPv4-mapped address", () => {
+			const entries = ["::ffff:0:0/96", "::ffff:0.0.0.0/96", "::/80", "::/1", "::ffff:1.2.3.4/90"];
+			expect(trustAllEntries(entries)).toEqual(entries);
+		});
+
+		it("does not name an IPv6 entry that holds only part of the IPv4-mapped range, or none of it", () => {
+			expect(trustAllEntries(["::ffff:0:0/97", "::/81", "8000::/1", "fd00::/8", "::ffff:10.0.0.0/104"])).toEqual([]);
+		});
+
+		it("names an IPv4 /0 whatever address it is written with", () => {
+			expect(trustAllEntries(["10.0.0.0/0"])).toEqual(["10.0.0.0/0"]);
+		});
+	});
+
+	// The source as the provider is told it: set whole, so nothing a client
+	// sent under these names goes on.
+	describe("forwardedHeaders", () => {
+		it("says the address and the scheme", () => {
+			expect(forwardedHeaders({ address: "203.0.113.7", protocol: "https" })).toEqual({
+				"X-Forwarded-For": "203.0.113.7",
+				"X-Forwarded-Proto": "https",
+			});
+		});
+
+		it("says only the scheme when the address is unknown", () => {
+			expect(forwardedHeaders({ address: null, protocol: "http" })).toEqual({ "X-Forwarded-Proto": "http" });
 		});
 	});
 

@@ -94,6 +94,18 @@ const isHttpOrigin = (value: string): boolean => {
 };
 
 /**
+ * An http(s) origin as written: `scheme://host[:port]` and at most one trailing
+ * `/`, nothing else. Read before the URL parser, which would turn
+ * `https://h/a/..`, `https://h?`, `https://h#` or `https://@h` into the bare
+ * origin. The host is a bracketed IPv6 address or a run of characters that end
+ * no authority; the parser then has the last word on whether it is a host.
+ */
+const ORIGIN_AS_WRITTEN = /^https?:\/\/(?:\[[0-9a-f:.]+\]|[^\s\p{Cc}/?#@\\:[\]]+)(?::[0-9]{1,5})?\/?$/iu;
+
+const isHttpOriginAsWritten = (value: string): boolean =>
+	ORIGIN_AS_WRITTEN.test(value) && isHttpOrigin(value);
+
+/**
  * A boolean that survives the HOCON -> environment round trip: `parseFile`
  * substitutes an environment override as a string, so both the literal
  * `false` and the string `"false"` must mean false. Anything that is neither
@@ -459,17 +471,19 @@ export const AppConfigSchema = z.object({
 				/**
 				 * The origin browsers reach this proxy at. A request whose `Origin`
 				 * equals it may be answered from the session cache
-				 * (`modes/injection/origin-gate.mts`). Held as a browser serialises
-				 * `Origin` — scheme and host lower-cased, no default port, no
-				 * trailing slash — so the gate compares strings.
+				 * (`modes/injection/origin-gate.mts`). Written as
+				 * `scheme://host[:port]`, optionally with one trailing `/`, and
+				 * held as a browser serialises `Origin` — scheme and host
+				 * lower-cased, no default port, no trailing slash — so the gate
+				 * compares strings.
 				 */
 				publicOrigin: optionalString().transform((value, ctx): string | null => {
 					if (value === null) return null;
-					if (!isHttpOrigin(value)) {
+					if (!isHttpOriginAsWritten(value)) {
 						ctx.addIssue({
 							code: "custom",
 							message:
-								"auth.injection.publicOrigin must be an http(s) origin only (scheme://host[:port]), no userinfo/path/query/fragment",
+								"auth.injection.publicOrigin must be an http(s) origin written as scheme://host[:port], optionally with one trailing /, and nothing else",
 						});
 						return z.NEVER;
 					}

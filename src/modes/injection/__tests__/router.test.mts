@@ -60,6 +60,12 @@ const injectionOf = (config: AppConfig) => {
 	return config.auth.injection;
 };
 
+/**
+ * The origin the router's tests reach it at. Plain http, as supertest's socket
+ * is, so a request over it can satisfy the same-origin gate's scheme check.
+ */
+const PUBLIC_ORIGIN = "http://admin.example";
+
 const makeConfig = (
 	upstreamBaseURL: string,
 	injectionOverrides: Partial<Extract<AppConfig["auth"], { mode: "injection" }>["injection"]> = {},
@@ -82,7 +88,7 @@ const makeConfig = (
 			sessionCookieName: "sid",
 			stripInboundAuthorization: false,
 			trustedProxies: [],
-			publicOrigin: null,
+			publicOrigin: PUBLIC_ORIGIN,
 			tokenCache: { ttlSeconds: 60, maxEntries: 100, safetyMarginSeconds: 5 },
 			timeoutMs: 5000,
 			exchange: { enabled: false },
@@ -117,7 +123,8 @@ const okGrantResponse = (accessToken = "grant-tok", expiresIn: number | null = 1
 
 /**
  * What a browser sends on a fetch from this proxy's own pages, the requests the
- * session cache and the flight table answer (`origin-gate.mts`).
+ * session cache and the flight table answer (`origin-gate.mts`) — over the
+ * scheme of `PUBLIC_ORIGIN`.
  */
 const SAME_ORIGIN = { "Sec-Fetch-Site": "same-origin" };
 
@@ -190,13 +197,14 @@ describe("injection router", () => {
 	// a request that shows it came from publicOrigin; any other asks the
 	// provider, with its own Origin, and gets the provider's answer.
 	describe("the same-origin gate in front of the session cache", () => {
-		const PUBLIC = "https://admin.example";
+		const PUBLIC = PUBLIC_ORIGIN;
 		const refused = () =>
 			jsonResponse(401, { error: "invalid_request", error_description: "cross-origin session grant" });
 
 		it.each([
 			{ label: "a foreign Origin", headers: { Origin: "https://elsewhere.example", "Sec-Fetch-Site": "cross-site" } },
 			{ label: "no Origin and no Sec-Fetch-Site", headers: {} },
+			{ label: "a Referer on another origin", headers: { "Sec-Fetch-Site": "same-origin", Referer: "https://elsewhere.example/page" } },
 		])("does not hand the cached grant to a request with $label: the provider is asked and its refusal answered", async ({ headers }) => {
 			fetchMock.mockResolvedValueOnce(okGrantResponse("tok-1")).mockResolvedValueOnce(refused());
 			const app = mountApp(makeConfig(upstream.baseURL, { publicOrigin: PUBLIC }));
@@ -218,6 +226,72 @@ describe("injection router", () => {
 
 			await request(app).post("/any").set("Cookie", "sid=s1").set("Origin", PUBLIC);
 			const res = await request(app).post("/any").set("Cookie", "sid=s1").set("Origin", PUBLIC);
+
+			expect(res.status).toBe(204);
+			expect(fetchMock).toHaveBeenCalledTimes(1);
+			expect(upstream.received[1].headers.authorization).toBe("Bearer tok-1");
+		});
+
+		it("neither caches nor shares a grant for a request over another scheme than publicOrigin's", async () => {
+			fetchMock.mockResolvedValueOnce(okGrantResponse("tok-1")).mockResolvedValueOnce(okGrantResponse("tok-2"));
+			const httpsOrigin = "https://admin.example";
+			const app = mountApp(makeConfig(upstream.baseURL, { publicOrigin: httpsOrigin }));
+
+			await request(app).get("/any").set("Cookie", "sid=s1").set("Origin", httpsOrigin);
+			const res = await request(app).get("/any").set("Cookie", "sid=s1").set("Origin", httpsOrigin);
+
+			expect(fetchMock).toHaveBeenCalledTimes(2);
+			expect(upstream.received[1].headers.authorization).toBe("Bearer tok-2");
+			expect(res.status).toBe(204);
+		});
+
+		// A gate-refused request must not join a flight an admitted one
+		// started: it asks the provider itself while that flight is still open.
+		it("does not join an admitted request's flight with one over another scheme: it makes its own provider call", async () => {
+			const httpsOrigin = "https://admin.example";
+			const app = mountApp(
+				makeConfig(upstream.baseURL, { publicOrigin: httpsOrigin, trustedProxies: ["127.0.0.0/8"] }),
+			);
+			let release!: (response: Response) => void;
+			let asked!: () => void;
+			const firstCallMade = new Promise<void>((resolve) => {
+				asked = resolve;
+			});
+			fetchMock
+				.mockImplementationOnce(() => {
+					asked();
+					return new Promise<Response>((resolve) => {
+						release = resolve;
+					});
+				})
+				.mockResolvedValueOnce(okGrantResponse("tok-own"));
+
+			const admitted = request(app)
+				.get("/admitted")
+				.set({ Cookie: "sid=s1", Origin: httpsOrigin, "X-Forwarded-Proto": "https" })
+				.then((res) => res);
+			await firstCallMade;
+			const refused = await request(app).get("/refused").set({ Cookie: "sid=s1", Origin: httpsOrigin });
+
+			expect(refused.status).toBe(204);
+			expect(fetchMock).toHaveBeenCalledTimes(2);
+			expect(upstream.received.find((r) => r.url === "/refused")?.headers.authorization).toBe("Bearer tok-own");
+
+			release(okGrantResponse("tok-flight"));
+			expect((await admitted).status).toBe(204);
+			expect(upstream.received.find((r) => r.url === "/admitted")?.headers.authorization).toBe("Bearer tok-flight");
+		});
+
+		it("answers from the cache over the https a trusted front proxy reports", async () => {
+			fetchMock.mockResolvedValueOnce(okGrantResponse("tok-1"));
+			const httpsOrigin = "https://admin.example";
+			const app = mountApp(
+				makeConfig(upstream.baseURL, { publicOrigin: httpsOrigin, trustedProxies: ["127.0.0.0/8"] }),
+			);
+			const browser = { Cookie: "sid=s1", Origin: httpsOrigin, "X-Forwarded-Proto": "https" };
+
+			await request(app).get("/any").set(browser);
+			const res = await request(app).get("/any").set(browser);
 
 			expect(res.status).toBe(204);
 			expect(fetchMock).toHaveBeenCalledTimes(1);
@@ -532,6 +606,25 @@ describe("injection router", () => {
 				(fields) => fields.event === "injection.trusted_proxies_trust_all",
 			);
 			expect(warned).toEqual([expect.objectContaining({ entries: ["0.0.0.0/0", "::/0"] })]);
+		});
+
+		// Browsers send a same-origin Referer by default, which names an origin:
+		// with no publicOrigin to compare it to, nearly every browser request
+		// misses the session cache and calls the provider.
+		it("warns once, at construction, when publicOrigin is unset", () => {
+			const warnSpy = vi.spyOn(logger, "warn");
+
+			createRouter({ config: makeConfig(upstream.baseURL, { publicOrigin: null }) });
+
+			expect(eventsOf(warnSpy).filter((event) => event === "injection.public_origin_unset")).toHaveLength(1);
+		});
+
+		it("does not warn about publicOrigin when it is set", () => {
+			const warnSpy = vi.spyOn(logger, "warn");
+
+			createRouter({ config: makeConfig(upstream.baseURL) });
+
+			expect(eventsOf(warnSpy)).not.toContain("injection.public_origin_unset");
 		});
 
 		it("does not warn about a trustedProxies list that names its proxies", () => {

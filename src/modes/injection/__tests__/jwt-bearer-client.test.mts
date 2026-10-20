@@ -9,6 +9,7 @@ import {
 	type JwtBearerClientConfig,
 	JwtBearerError,
 } from "../jwt-bearer-client.mjs";
+import type { RequestSource } from "../request-source.mjs";
 import { MAX_TOKEN_BODY_BYTES } from "../token-endpoint.mjs";
 
 const baseCfg: JwtBearerClientConfig = {
@@ -21,6 +22,9 @@ const baseCfg: JwtBearerClientConfig = {
 };
 
 const ASSERTION = "eyJhbGciOiJSUzI1NiJ9.eyJpc3MiOiJpIn0.c2ln";
+
+/** Where the request being exchanged for came from, as the proxy vouches for it. */
+const SOURCE: RequestSource = { address: "203.0.113.7", protocol: "https" };
 
 const jsonResponse = (
 	status: number,
@@ -45,8 +49,8 @@ describe("createJwtBearerClient.exchange", () => {
 	const callParams = (index = 0): URLSearchParams =>
 		new URLSearchParams(callInit(index).body as string);
 
-	const exchange = (cfg: JwtBearerClientConfig = baseCfg) =>
-		createJwtBearerClient(cfg).exchange({ assertion: ASSERTION, requestId: "req-1" });
+	const exchange = (cfg: JwtBearerClientConfig = baseCfg, source: RequestSource = SOURCE) =>
+		createJwtBearerClient(cfg).exchange({ assertion: ASSERTION, requestId: "req-1", source });
 
 	beforeEach(() => {
 		fetchMock = vi.fn();
@@ -113,6 +117,8 @@ describe("createJwtBearerClient.exchange", () => {
 				"Accept",
 				"Authorization",
 				"Content-Type",
+				"X-Forwarded-For",
+				"X-Forwarded-Proto",
 				"X-Request-Id",
 			]);
 			expect(headers.Authorization).toBe(
@@ -121,6 +127,30 @@ describe("createJwtBearerClient.exchange", () => {
 			expect(headers["Content-Type"]).toBe("application/x-www-form-urlencoded");
 			expect(headers.Accept).toBe("application/json");
 			expect(headers["X-Request-Id"]).toBe("req-1");
+		});
+
+		// A provider that trusts this proxy reads the source from these, and
+		// cannot place a request from it that carries none. The exchange's
+		// credential is its Authorization, so no Origin, Sec-Fetch-Site or
+		// Referer goes with it.
+		it("says where the request came from in X-Forwarded-For and X-Forwarded-Proto, and nothing of its origin", async () => {
+			fetchMock.mockResolvedValueOnce(okResponse());
+			await exchange(baseCfg, { address: "2001:db8::5", protocol: "http" });
+
+			const headers = callHeaders();
+			expect(headers["X-Forwarded-For"]).toBe("2001:db8::5");
+			expect(headers["X-Forwarded-Proto"]).toBe("http");
+			for (const name of ["Origin", "Sec-Fetch-Site", "Referer"]) {
+				expect(headers, name).not.toHaveProperty(name);
+			}
+		});
+
+		it("sends no X-Forwarded-For when the address is unknown", async () => {
+			fetchMock.mockResolvedValueOnce(okResponse());
+			await exchange(baseCfg, { address: null, protocol: "https" });
+
+			expect(callHeaders()).not.toHaveProperty("X-Forwarded-For");
+			expect(callHeaders()["X-Forwarded-Proto"]).toBe("https");
 		});
 
 		it("percent-encodes reserved characters in the client credentials (RFC 6749 section 2.3.1)", async () => {

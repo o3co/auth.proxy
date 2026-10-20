@@ -74,6 +74,9 @@ const sessionEnv = (): Record<string, string> => ({
 	INJECTION_CLIENT_ID: "bff-spa",
 	INJECTION_SCOPE: "api read",
 	INJECTION_SESSION_COOKIE_NAME: "sid",
+	// Plain http, as the test's sockets are, so a same-origin request passes the
+	// same-origin gate's scheme check and may be answered from the cache.
+	INJECTION_PUBLIC_ORIGIN: "http://bff.example",
 	LOG_LEVEL: "debug",
 	// Far above the suite timeout, so a case that hangs fails on vitest's timer and
 	// not because the client gave up first.
@@ -805,6 +808,7 @@ describe.each(SETUPS)("the app in injection mode, $name", (setup) => {
 	it.each([
 		{ label: "a foreign Origin", extra: { origin: "https://elsewhere.example", "sec-fetch-site": "cross-site" } },
 		{ label: "neither Origin nor Sec-Fetch-Site", extra: {} },
+		{ label: "a Referer on another origin", extra: { "sec-fetch-site": "same-origin", referer: "https://elsewhere.example/page" } },
 	])("asks the provider, not the cache, for a request with $label, and answers its refusal", async ({ label, extra }) => {
 		const tag = label.replace(/\W+/g, "-");
 		const [first, second] = [`injection-${SETUPS.indexOf(setup)}-gate-${tag}-1`, `injection-${SETUPS.indexOf(setup)}-gate-${tag}-2`];
@@ -913,6 +917,8 @@ describe.each(SETUPS)("the app in injection mode, $name", (setup) => {
 // source from what the session grant carries (README, Calling
 // auth.provider's session grant): the browser's own Origin, Sec-Fetch-Site and
 // Referer, as received, and the proxy's own X-Forwarded-For / X-Forwarded-Proto.
+// The exchange carries the same X-Forwarded-For / X-Forwarded-Proto, and none
+// of the browser's origin headers.
 describe("the app in injection mode, telling the provider about the browser's request", () => {
 	let direct: ProxyProcess;
 	let behindProxy: ProxyProcess;
@@ -920,7 +926,7 @@ describe("the app in injection mode, telling the provider about the browser's re
 	beforeAll(async () => {
 		[direct, behindProxy] = await Promise.all([
 			startProxy(sessionEnv(), upstream),
-			startProxy({ ...sessionEnv(), INJECTION_TRUSTED_PROXIES: "127.0.0.1" }, upstream),
+			startProxy({ ...sessionEnv(), ...EXCHANGE_ENV, INJECTION_TRUSTED_PROXIES: "127.0.0.1" }, upstream),
 		]);
 	});
 	afterAll(async () => {
@@ -988,6 +994,31 @@ describe("the app in injection mode, telling the provider about the browser's re
 		expect(reachedProvider(requestId)).toEqual([
 			expect.objectContaining({ "x-forwarded-for": "203.0.113.9", "x-forwarded-proto": "https" }),
 		]);
+	});
+
+	it("tells the provider the same address and scheme on the exchange, and nothing of the browser's origin", async () => {
+		const requestId = "injection-caller-exchange";
+		fake.respond(TOKEN_PATH, issued("exchanged-caller"));
+
+		const res = await send(behindProxy.origin, {
+			path: RESOURCE,
+			headers: {
+				"x-request-id": requestId,
+				authorization: `Bearer ${jwt({ iss: "https://idp.example", sub: "erin", jti: "a-source" })}`,
+				origin: "https://elsewhere.example",
+				"sec-fetch-site": "cross-site",
+				referer: "https://elsewhere.example/page",
+				"x-forwarded-for": "198.51.100.66, 203.0.113.9",
+				"x-forwarded-proto": "https",
+			},
+		});
+
+		expect(res.status).toBe(200);
+		const [headers] = reachedProvider(requestId);
+		expect(headers).toMatchObject({ "x-forwarded-for": "203.0.113.9", "x-forwarded-proto": "https" });
+		expect(headers).not.toHaveProperty("origin");
+		expect(headers).not.toHaveProperty("sec-fetch-site");
+		expect(headers).not.toHaveProperty("referer");
 	});
 });
 

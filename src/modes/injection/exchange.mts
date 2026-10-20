@@ -247,11 +247,12 @@ const logFailure = (logger: Logger, requestId: string, err: JwtBearerError): voi
  *
  * A successful result is cached under `exchangeCacheKey` and bounded by
  * `computeExchangeExpiresAt`; concurrent identical requests share one
- * submission. Failures are neither cached nor retried, so a one-time assertion
+ * submission, which tells the provider the source of the request that made
+ * it. Failures are neither cached nor retried, so a one-time assertion
  * is submitted once per client presentation and never silently again.
  */
 export const decideExchange = async (
-	{ requestId, authorization, sessionCookie }: ExchangeArgs,
+	{ requestId, authorization, sessionCookie, source }: ExchangeArgs,
 	deps: ExchangeDeps,
 ): Promise<ExchangeOutcome> => {
 	const { logger } = deps;
@@ -313,7 +314,7 @@ export const decideExchange = async (
 			// Captured before the request goes out: expires_in is measured
 			// from here, not from however late the response arrives.
 			const requestedAt = Date.now();
-			const result = await deps.client.exchange({ assertion: parsed.assertion, requestId });
+			const result = await deps.client.exchange({ assertion: parsed.assertion, requestId, source });
 			const expiresAt = computeExchangeExpiresAt({
 				requestedAt,
 				now: Date.now(),

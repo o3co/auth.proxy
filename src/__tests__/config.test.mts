@@ -411,9 +411,38 @@ describe("proxy config — injection mode", () => {
 			expect(publicOriginOf("http://localhost:8080")).toBe("http://localhost:8080");
 		});
 
+		it("reads an IPv6 host and an explicit port", () => {
+			expect(publicOriginOf("http://[::1]:8080")).toBe("http://[::1]:8080");
+			expect(publicOriginOf("HTTP://ADMIN.EXAMPLE:80")).toBe("http://admin.example");
+		});
+
 		it("refuses anything but an http(s) origin, naming the key", () => {
 			for (const value of ["admin.example", "https://admin.example/app", "https://admin.example?x", "ftp://admin.example", "https://u:p@admin.example"]) {
 				expect(() => publicOriginOf(value), value).toThrow(/auth\.injection\.publicOrigin/);
+			}
+		});
+
+		// The value as written, not as the URL parser would rewrite it: each of
+		// these normalises to a bare origin, but none is one.
+		it("refuses a value that only normalises to an origin", () => {
+			for (const value of [
+				"https://admin.example/a/..",
+				"https://admin.example/.",
+				"https://admin.example?",
+				"https://admin.example#",
+				"https://admin.example/?",
+				"https://@admin.example",
+				"https://:@admin.example",
+				"https://admin.example//",
+				"https://admin.example\\",
+				"https:\\\\admin.example",
+				"https:admin.example",
+				"https:///admin.example",
+				"https://admin.example:",
+				" https://admin.example",
+				"https://admin.example ",
+			]) {
+				expect(() => publicOriginOf(value), JSON.stringify(value)).toThrow(/auth\.injection\.publicOrigin/);
 			}
 		});
 	});
