@@ -1,6 +1,6 @@
 # `src/express`
 
-Last updated: 2026-09-24
+Last updated: 2026-10-21
 
 Helpers for reading inbound request headers at the Express layer. They read and normalise; they decide nothing. The boundary review behind this file is [#95](https://github.com/o3co/auth.proxy/issues/95).
 
@@ -21,6 +21,6 @@ Helpers for reading inbound request headers at the Express layer. They read and 
 ## Invariants
 
 - **No decision, configuration, provider call, logging or state.** Nothing here can fail or needs releasing.
-- **Two `Authorization` grammars, one per path (#95 F16).** This directory holds the one validation applies ([`bearer.mts`](bearer.mts): a case-sensitive `Bearer`, exactly one SP, the first word as the token); [`modes/injection`](../modes/injection/README.md) holds the exchange's, which follows RFC 6750 / 9110 and narrows to a JWS compact JWT. Each path parses once and applies exactly one of them; the session path parses no `Authorization` at all. Why this grammar is stricter than RFC 7235 is in the doc comment on [`extractBearerToken`](bearer.mts). Pinned by [`__tests__/bearer.test.mts`](__tests__/bearer.test.mts).
+- **Two `Authorization` grammars, one per path (#95 F16).** This directory holds the one validation applies ([`bearer.mts`](bearer.mts): RFC 6750 §2.1 exactly — a case-sensitive `Bearer`, exactly one SP and a `b64token`, with nothing after it); [`modes/injection`](../modes/injection/README.md) holds the exchange's, which follows RFC 6750 / 9110 and narrows to a JWS compact JWT. Each path parses once and applies exactly one of them; the session path parses no `Authorization` at all. Why this grammar is stricter than RFC 9110 and RFC 6750 is in the doc comment on [`extractBearerToken`](bearer.mts). Pinned by [`__tests__/bearer.test.mts`](__tests__/bearer.test.mts).
 - **The request id is mounted first (#95 F17).** The middleware writes the normalised id back into `req.headers`, and every later reader — the request logs, the mode middlewares, the provider clients, the upstream stage — takes it from there. That is correct only because each mode router mounts it before anything else; mount nothing that reads the id in front of it. Not tested — no test pins the order.
 - **Reuse over replace.** An inbound id is kept rather than replaced; a duplicated header yields its first value; an empty value counts as absent. Pinned by [`__tests__/requestId.test.mts`](__tests__/requestId.test.mts).

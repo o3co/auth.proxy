@@ -54,8 +54,9 @@ export type ValidationDepsOverrides = Partial<ValidationDeps>;
 
 /**
  * Reads the two headers, lets `decideValidation` decide, applies the outcome.
- * `forward` leaves `req.headers` untouched, so the upstream receives the
- * inbound `Authorization` bytes. An outcome kind this switch does not
+ * `Authorization` is read from `req.headersDistinct`, every field line as
+ * received: `req.headers` keeps only the first. `forward` leaves `req.headers`
+ * untouched, so the upstream receives the inbound `Authorization` bytes. An outcome kind this switch does not
  * know throws rather than leaving the request unanswered and the socket held.
  */
 const validationMiddleware =
@@ -64,7 +65,7 @@ const validationMiddleware =
 		const outcome = await decideValidation(
 			{
 				requestId: (req.headers["x-request-id"] as string | undefined) ?? "",
-				authorization: req.headers.authorization,
+				authorization: req.headersDistinct.authorization ?? [],
 			},
 			deps,
 			policy,

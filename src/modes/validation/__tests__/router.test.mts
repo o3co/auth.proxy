@@ -231,6 +231,66 @@ describe("validation router", () => {
 			expect(fetchMock).not.toHaveBeenCalled();
 		});
 
+		// What reaches the upstream is exactly what was introspected: a header
+		// with anything after the token would let an upstream that reads it
+		// differently find a token nobody verified.
+		it("refuses a Bearer header carrying a second token 400 invalid_request, forwarding nothing", async () => {
+			const fetchMock = vi.fn();
+			vi.stubGlobal("fetch", fetchMock);
+
+			const res = await request(app)
+				.get("/protected")
+				.set("Authorization", "Bearer good eyJhbGciOiJub25lIn0.eyJzdWIiOiJhZG1pbiJ9.");
+
+			expect(res.status).toBe(400);
+			expect(res.body).toEqual({ code: 400, message: "Invalid Token Type" });
+			expect(res.headers["www-authenticate"]).toBe('Bearer error="invalid_request"');
+			expect(upstreamCalls).toBe(0);
+			expect(fetchMock).not.toHaveBeenCalled();
+		});
+
+		it("refuses two Authorization field lines 400 invalid_request, forwarding nothing", async () => {
+			const fetchMock = vi.fn();
+			vi.stubGlobal("fetch", fetchMock);
+
+			const server = app.listen(0, "127.0.0.1");
+			await once(server, "listening");
+			try {
+				// Node's client writes one field line per array element.
+				const req = httpRequest({
+					host: "127.0.0.1",
+					port: (server.address() as AddressInfo).port,
+					path: "/protected",
+					headers: { Authorization: ["Bearer good", "Bearer other"] },
+				});
+				req.end();
+				const [res] = (await once(req, "response")) as [IncomingMessage];
+				res.resume();
+				await once(res, "end");
+
+				expect(res.statusCode).toBe(400);
+				expect(res.headers["www-authenticate"]).toBe('Bearer error="invalid_request"');
+			} finally {
+				server.close();
+			}
+			expect(upstreamCalls).toBe(0);
+			expect(fetchMock).not.toHaveBeenCalled();
+		});
+
+		// RFC 9110 §5.5: whitespace around a field value is not part of it, and
+		// Node's parser drops it, so the proxy and the upstream read one value.
+		it("reads a value with surrounding whitespace on the wire as the value without it", async () => {
+			const introspect = vi.fn(async () => ({ active: true }));
+			const own = express();
+			own.use(createRouter({ config: makeConfig(upstreamPort), deps: { introspect } }));
+
+			const res = await request(own).get("/protected").set("Authorization", "Bearer t \t ");
+
+			expect(res.status).toBe(200);
+			expect(introspect).toHaveBeenCalledWith("t", expect.any(String));
+			expect(upstreamHeaders[0].authorization).toBe("Bearer t");
+		});
+
 		it("answers 401 Invalid Token when the provider answers 401", async () => {
 			const fetchMock = vi.fn(async () => new Response("", { status: 401 }));
 			vi.stubGlobal("fetch", fetchMock);
@@ -328,13 +388,13 @@ describe("validation router", () => {
 
 			const res = await request(own)
 				.get("/protected")
-				.set("Authorization", "Bearer t extra")
+				.set("Authorization", "Bearer t")
 				.set("x-request-id", "rid-abc");
 
 			expect(res.status).toBe(200);
 			expect(upstreamCalls).toBe(1);
-			// The first SP-delimited word is introspected, the inbound bytes are forwarded.
-			expect(upstreamHeaders[0].authorization).toBe("Bearer t extra");
+			// The token is introspected, the inbound bytes are forwarded.
+			expect(upstreamHeaders[0].authorization).toBe("Bearer t");
 			// The request id the decision hands over is the one the request-id middleware settled on.
 			expect(introspect).toHaveBeenCalledWith("t", "rid-abc");
 			expect(res.headers["x-request-id"]).toBe("rid-abc");

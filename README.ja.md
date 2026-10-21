@@ -45,11 +45,11 @@
 
 ### バリデーションモード（`auth.mode = "validation"`）
 
-受信した `Authorization: Bearer <token>` ヘッダーをプロバイダーのイントロスペクションエンドポイントで検証する。`Authorization` ヘッダーが無い、または空のリクエストはそのまま転送する（パブリックエンドポイントは引き続き到達可能）。`Authorization` が `Bearer <token>` 以外 — 別のスキーム、小文字の `bearer`、使えるトークンの無い `Bearer` — のリクエストは `400 Invalid Token Type` で拒否する（下のチャレンジ表を参照）。
+受信した `Authorization: Bearer <token>` ヘッダーをプロバイダーのイントロスペクションエンドポイントで検証する。`Authorization` ヘッダーが無い、または空のリクエストはそのまま転送する（パブリックエンドポイントは引き続き到達可能）。`Authorization` が「`Bearer`、空白 1 つ、RFC 6750 2.1 節の `b64token`（英字・数字・`-._~+/` の後に任意個の `=` パディング）」ちょうどでないリクエスト — 別のスキーム、小文字の `bearer`、トークンの無い `Bearer`、空白 2 つ、トークンの後に何かが続くもの — は `400 Invalid Token Type` で拒否する（下のチャレンジ表を参照）。`Authorization` ヘッダー行が 2 つ以上あるリクエストも同様。したがってアップストリームが受け取るヘッダーは常に `Bearer` とイントロスペクションした 1 つのトークンだけで、ヘッダーを独自に読むアップストリーム（最後の単語、行末までの正規表現）が、プロバイダーの検証していないトークンをそこに見つけることはない。値全体の前後の空白は値の一部ではなく（RFC 9110 5.5 節）、どちらが読む前にも取り除かれる。
 
 フロー:
 
-1. `Authorization: Bearer <token>` ヘッダーを検出（`Authorization` ヘッダーが無い、または空の場合はそのまま通過。それ以外の `Authorization` は `400`）。
+1. `Authorization: Bearer <token>` ヘッダーを検出（`Authorization` ヘッダーが無い、または空の場合はそのまま通過。それ以外の `Authorization`、または 2 行以上の `Authorization` は `400`）。
 2. トークンの SHA-256 ハッシュをキーにインメモリキャッシュを確認。
 3. キャッシュミス時、プロバイダーの `POST /oauth/introspect` を呼び出す。そこからのリダイレクトは追従しない — エンドポイントは設定値である — ので、`502 Provider Configuration Error` を返す。同一トークンの並行ミスは、インジェクションモードと同じく 1 回のプロバイダー呼び出しに集約する（single-flight）。
 4. `active: false` なら `401` を返し、`active: true` ならリクエストを転送する。応答として読むのは `200` だけで、`200` 以外の `2xx` は、`active: true` を含んでいても、プロバイダーの失敗になる（下のログの表を参照）。
@@ -59,8 +59,8 @@
 | 拒否 | realm なし | realm あり |
 | --- | --- | --- |
 | `401`: プロキシが受け付けないアクセストークン（RFC 6750 §3） | `Bearer error="invalid_token"` | `Bearer realm="api", error="invalid_token"` |
-| `400`: 読み取れないほど不正な `Bearer` クレデンシャル（`Bearer`、`Bearer  t`） | `Bearer error="invalid_request"` | `Bearer realm="api", error="invalid_request"` |
-| `400`: 別の方式（`Basic …`、またはこのプロキシが受け付けない小文字の `bearer`） — §3.1 のとおりエラーコードなし | なし | `Bearer realm="api"` |
+| `400`: `Bearer <b64token>` ちょうどではない `Bearer` クレデンシャル（`Bearer`、`Bearer  t`、`Bearer t extra`）、またはそれを 1 行でも含む 2 行以上の `Authorization` | `Bearer error="invalid_request"` | `Bearer realm="api", error="invalid_request"` |
+| `400`: 別の方式（`Basic …`、またはこのプロキシが受け付けない小文字の `bearer`）。1 行でも複数行でも — §3.1 のとおりエラーコードなし | なし | `Bearer realm="api"` |
 
 `413`、`500`、`501`、`502`、`504` にはチャレンジを付けない。どれも呼び出し元の Bearer クレデンシャルについての表明ではないからである。インジェクションモードはどの経路でもチャレンジを返さない。これは意図的で、その呼び出し元が持つのは Bearer トークンではなくセッションクッキーだからである。
 
