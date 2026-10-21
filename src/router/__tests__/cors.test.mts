@@ -8,12 +8,20 @@
  */
 import express from "express";
 import request from "supertest";
-import { describe, expect, it } from "vitest";
+import { describe, expect, it, vi } from "vitest";
+import type { Logger } from "../../logger.mjs";
 import { createCors } from "../cors.mjs";
+
+/** A logger that records what it is given and writes nothing. */
+const recordingLogger = () => {
+	const warn = vi.fn<Logger["warn"]>();
+	const logger: Logger = { info: vi.fn(), warn, error: vi.fn(), debug: vi.fn() };
+	return { logger, warn };
+};
 
 const app = (pattern: string | null) =>
 	express()
-		.use(createCors({ http: { cors: { origin: { pattern } } } }))
+		.use(createCors({ http: { cors: { origin: { pattern } } } }, { logger: recordingLogger().logger }))
 		.use((req, res) => {
 			res.status(200).send(`reached by ${req.method}`);
 		});
@@ -100,7 +108,8 @@ describe("createCors", () => {
 		expect(res.headers.vary).toBe("Origin");
 	});
 
-	// `CORS_ORIGIN_PATTERN` unset leaves the pattern null; set empty, it is "".
+	// The schema reads an empty `CORS_ORIGIN_PATTERN` as null; a hand-built
+	// configuration may still carry "".
 	it.each([[null], [""]])("with the pattern %j, does no CORS: a preflight is passed on", async (pattern) => {
 		const res = await request(app(pattern))
 			.options("/resource")
@@ -110,5 +119,101 @@ describe("createCors", () => {
 		expect(res.status).toBe(200);
 		expect(res.text).toBe("reached by OPTIONS");
 		expect(res.headers["access-control-allow-origin"]).toBeUndefined();
+	});
+});
+
+// Said once, when CORS is built at boot, and never refused: a pattern is the
+// only gate on a credentialed cross-origin read, and these are the ways one
+// commonly admits more than its author meant. A syntactic check cannot be
+// complete, so it warns rather than stopping a deployment that may be right.
+describe("createCors warns at boot about a pattern that likely admits too much", () => {
+	const warningsFor = (pattern: string | null): unknown[] => {
+		const { logger, warn } = recordingLogger();
+		createCors({ http: { cors: { origin: { pattern } } } }, { logger });
+		return warn.mock.calls.map((call) => (typeof call[0] === "object" ? call[0].event : call[0]));
+	};
+
+	it.each([
+		"^https://app\\.example\\.com$",
+		"^https://(app|admin)\\.example\\.com$",
+		"^https://app\\.example\\.com$|^https://admin\\.example\\.com$",
+		"^https://[a-z0-9-]+\\.example\\.com$",
+		"^https://.+\\.example\\.com$",
+		"^https://[.a-z]+\\.example$",
+		"^https://app\\.example\\\\$",
+	])("says nothing about %j", (pattern) => {
+		expect(warningsFor(pattern)).toEqual([]);
+	});
+
+	it.each([[null], [""]])("says nothing without a pattern (%j)", (pattern) => {
+		expect(warningsFor(pattern)).toEqual([]);
+	});
+
+	// Unanchored, `https://app\.example\.com` also admits
+	// `https://app.example.com.evil.net` and `https://evil.net/https://app.example.com`.
+	it.each([
+		"https://app\\.example\\.com",
+		"^https://app\\.example\\.com",
+		"https://app\\.example\\.com$",
+		"^https://a\\.example$|https://b\\.example",
+		"^https://app\\.example\\$",
+		"^https://app\\.example[$]",
+	])("warns that %j is not anchored on every alternative", (pattern) => {
+		expect(warningsFor(pattern)).toContain("cors.origin_pattern_unanchored");
+	});
+
+	// `null` is what a sandboxed iframe, a `data:` document or a redirected
+	// request sends, from any site.
+	it("warns about a pattern that admits the origin null", () => {
+		expect(warningsFor("^null$")).toEqual(["cors.origin_pattern_admits_null"]);
+	});
+
+	it.each(["^https://.*$", "^https?://[^/]+$"])("warns that %j admits an origin no deployment serves", (pattern) => {
+		expect(warningsFor(pattern)).toEqual(["cors.origin_pattern_admits_foreign_origin"]);
+	});
+
+	it("warns about every concern a pattern has", () => {
+		expect(warningsFor(".*")).toEqual([
+			"cors.origin_pattern_unanchored",
+			"cors.origin_pattern_admits_null",
+			"cors.origin_pattern_admits_foreign_origin",
+		]);
+	});
+
+	// `^https://app.example.com$` also admits `https://appxexample.com`, a
+	// name anyone can register.
+	it.each(["^https://app.example\\.com$", "^https://10.0.0.1$"])(
+		"warns that %j has a dot that matches any character where a host name's dot was meant",
+		(pattern) => {
+			expect(warningsFor(pattern)).toEqual(["cors.origin_pattern_unescaped_dot"]);
+		},
+	);
+
+	it("warns about a dot inside a group as well", () => {
+		expect(warningsFor("^https://(app.example)\\.com$")).toEqual(["cors.origin_pattern_unescaped_dot"]);
+	});
+
+	// `^https://.*example\.com$` also admits `https://evilexample.com`.
+	it.each(["^https://.*example\\.com$", "^https://[a-z]+example\\.com$", "^https://[a-z]{3}example\\.com$", "^https://.+?example\\.com$"])(
+		"warns that %j lets a wildcard run into a host name",
+		(pattern) => {
+			expect(warningsFor(pattern)).toEqual(["cors.origin_pattern_unbounded_wildcard"]);
+		},
+	);
+
+	it.each(["^https://(www\\.)?example\\.com$", "^https?://app\\.example\\.com$", "^https://app-[0-9]+\\.example\\.com$"])(
+		"does not take the optional group or scheme in %j for a wildcard",
+		(pattern) => {
+			expect(warningsFor(pattern)).toEqual([]);
+		},
+	);
+
+	it("names the key and the pattern in the warning", () => {
+		const { logger, warn } = recordingLogger();
+		createCors({ http: { cors: { origin: { pattern: "https://app\\.example" } } } }, { logger });
+		expect(warn).toHaveBeenCalledWith(
+			expect.objectContaining({ event: "cors.origin_pattern_unanchored", pattern: "https://app\\.example" }),
+			expect.stringMatching(/^http\.cors\.origin\.pattern /),
+		);
 	});
 });

@@ -18,7 +18,7 @@
  * The configuration schema: validates the parsed `application.conf` and
  * produces the `AppConfig` the code reads. It never reads the environment:
  * `${?NAME}` is substituted as a string by the HOCON parse in `src/app.mts`,
- * so numbers are coerced and booleans and lists have their own parsers below.
+ * so integers, booleans and lists have their own parsers below.
  *
  * Defaults are declared twice, as a `.default()` here and as a literal in
  * `application.conf`, and the two must agree. Keys whose default lives only in
@@ -78,7 +78,8 @@ const isIntrospectionUrl = (value: string): boolean => {
 
 /**
  * An http(s) origin and nothing else: `scheme://host[:port]`, optionally with
- * a bare trailing slash, and no userinfo, path, query or fragment.
+ * a bare trailing slash, and no userinfo, path, query or fragment. Port `0`
+ * is no port anything can be reached at.
  */
 const isHttpOrigin = (value: string): boolean => {
 	if (!URL.canParse(value)) return false;
@@ -87,6 +88,7 @@ const isHttpOrigin = (value: string): boolean => {
 		(parsed.protocol === "http:" || parsed.protocol === "https:") &&
 		parsed.username === "" &&
 		parsed.password === "" &&
+		parsed.port !== "0" &&
 		(parsed.pathname === "" || parsed.pathname === "/") &&
 		!parsed.search &&
 		!parsed.hash
@@ -104,6 +106,58 @@ const ORIGIN_AS_WRITTEN = /^https?:\/\/(?:\[[0-9a-f:.]+\]|[^\s\p{Cc}/?#@\\:[\]]+
 
 const isHttpOriginAsWritten = (value: string): boolean =>
 	ORIGIN_AS_WRITTEN.test(value) && isHttpOrigin(value);
+
+/** A segment of `http.pathPrefix`: RFC 3986 unreserved characters only. */
+const PATH_PREFIX_SEGMENT = /^[A-Za-z0-9._~-]+$/;
+
+/**
+ * A path prefix express mounts where it reads: `/`, or `/`-separated segments
+ * of RFC 3986 unreserved characters, optionally with one trailing `/`, which
+ * express mounts the same as none. Express mounts a prefix without its leading
+ * `/` nowhere, reads `:`, `*`, `(`, `?` and the like as route syntax, and
+ * matches the request's percent-encoded path, so any other character would
+ * mount the router somewhere else or nowhere; `.` and `..` are segments a
+ * client resolves away before it sends the request.
+ */
+const isPathPrefix = (value: string): boolean => {
+	if (value === "/") return true;
+	if (!value.startsWith("/")) return false;
+	return value
+		.slice(1)
+		.replace(/\/$/, "")
+		.split("/")
+		.every((segment) => PATH_PREFIX_SEGMENT.test(segment) && segment !== "." && segment !== "..");
+};
+
+/** The longest delay a Node timer holds; a longer one fires after 1 ms. */
+const MAX_TIMER_MS = 2_147_483_647;
+
+/**
+ * An integer from `min` to `max` that survives the HOCON -> environment round
+ * trip: a HOCON number, or an override of decimal digits, whitespace around
+ * them allowed. Anything else is a configuration error naming the key.
+ *
+ * Not `z.coerce.number()`: under it an empty override is `0` — a random
+ * listen port, or a cache turned off — and `1e3` and `0x50` are numbers too.
+ */
+const integer = (
+	key: string,
+	{ min, max = Number.MAX_SAFE_INTEGER, note = "" }: { min: number; max?: number; note?: string },
+	fallback: number,
+) =>
+	z
+		.union([z.number(), z.string()])
+		.default(fallback)
+		.transform((value, ctx): number => {
+			const parsed = typeof value === "number" ? value : /^\s*[0-9]+\s*$/.test(value) ? Number(value) : Number.NaN;
+			if (Number.isSafeInteger(parsed) && parsed >= min && parsed <= max) return parsed;
+			const range = max === Number.MAX_SAFE_INTEGER ? `of at least ${min}` : `from ${min} to ${max}`;
+			ctx.addIssue({
+				code: "custom",
+				message: `${key} must be an integer ${range}${note} (got ${JSON.stringify(value)})`,
+			});
+			return z.NEVER;
+		});
 
 /**
  * A boolean that survives the HOCON -> environment round trip: `parseFile`
@@ -321,9 +375,20 @@ const exchangeSchema = z
 
 export const AppConfigSchema = z.object({
 	http: z.object({
-		hostname: z.string().default("0.0.0.0"),
-		port: z.coerce.number().default(80),
-		pathPrefix: z.string().default("/"),
+		hostname: z
+			.string()
+			.regex(/^\S+$/, {
+				message: "http.hostname must be a host name or an IP address to listen on, not empty and without whitespace",
+			})
+			.default("0.0.0.0"),
+		port: integer("http.port", { min: 1, max: 65535 }, 80),
+		pathPrefix: z
+			.string()
+			.refine(isPathPrefix, {
+				message:
+					"http.pathPrefix must be / or /-separated segments of letters, digits, -, ., _ and ~ (/api, /api/v1), starting with /",
+			})
+			.default("/"),
 		// Read once more by the router, which enforces it; a value the body
 		// reader would misread is refused here rather than at the first request.
 		bodyLimitSize: z
@@ -335,7 +400,19 @@ export const AppConfigSchema = z.object({
 			.default("10mb"),
 		cors: z.object({
 			origin: z.object({
-				pattern: z.string().nullable().default(null),
+				// Compiled here, so a pattern that does not compile stops the
+				// process naming the key rather than when CORS is built.
+				pattern: optionalString().superRefine((value, ctx) => {
+					if (value === null) return;
+					try {
+						new RegExp(value);
+					} catch (err) {
+						ctx.addIssue({
+							code: "custom",
+							message: `http.cors.origin.pattern must be a regular expression that compiles (${err instanceof Error ? err.message : "it does not"})`,
+						});
+					}
+				}),
 			}),
 		}),
 	}),
@@ -402,9 +479,13 @@ export const AppConfigSchema = z.object({
 						message:
 							"auth.validation.introspect.url must be an absolute http(s) URL without userinfo; the URL carries no credential (configure auth.validation.client)",
 					}),
-					cacheTtlSec: z.coerce.number().default(30),
-					cacheMaxEntries: z.coerce.number().int().positive().default(10000),
-					timeoutMs: z.coerce.number().int().positive().default(5000),
+					cacheTtlSec: integer(
+						"auth.validation.introspect.cacheTtlSec",
+						{ min: 0, note: " (0 turns the cache off)" },
+						30,
+					),
+					cacheMaxEntries: integer("auth.validation.introspect.cacheMaxEntries", { min: 1 }, 10000),
+					timeoutMs: integer("auth.validation.introspect.timeoutMs", { min: 1, max: MAX_TIMER_MS }, 5000),
 				}),
 			}).superRefine((validation, ctx) => {
 				const keyed = validation.client.clientKey !== null;
@@ -435,7 +516,7 @@ export const AppConfigSchema = z.object({
 					.url()
 					.refine(isHttpOrigin, {
 						message:
-							"providerOrigin must be an http(s) origin only (scheme://host[:port]), no userinfo/path/query/fragment",
+							"auth.injection.providerOrigin must be an http(s) origin only (scheme://host[:port]), no userinfo/path/query/fragment",
 					}),
 				clientId: z.string().min(1),
 				/**
@@ -505,9 +586,9 @@ export const AppConfigSchema = z.object({
 				),
 				tokenCache: z
 					.object({
-						ttlSeconds: z.coerce.number().int().positive().default(60),
-						maxEntries: z.coerce.number().int().positive().default(10000),
-						safetyMarginSeconds: z.coerce.number().int().nonnegative().default(5),
+						ttlSeconds: integer("auth.injection.tokenCache.ttlSeconds", { min: 1 }, 60),
+						maxEntries: integer("auth.injection.tokenCache.maxEntries", { min: 1 }, 10000),
+						safetyMarginSeconds: integer("auth.injection.tokenCache.safetyMarginSeconds", { min: 0 }, 5),
 					})
 					.refine(
 						(tc) => tc.safetyMarginSeconds < tc.ttlSeconds,
@@ -516,7 +597,7 @@ export const AppConfigSchema = z.object({
 								"auth.injection.tokenCache.safetyMarginSeconds must be less than auth.injection.tokenCache.ttlSeconds",
 						},
 					),
-				timeoutMs: z.coerce.number().int().positive().default(5000),
+				timeoutMs: integer("auth.injection.timeoutMs", { min: 1, max: MAX_TIMER_MS }, 5000),
 				exchange: exchangeSchema,
 			}).superRefine((injection, ctx) => {
 				const keyed =
@@ -544,7 +625,24 @@ export const AppConfigSchema = z.object({
 		}),
 	]),
 	upstream: z.object({
-		baseURL: z.string(),
+		/**
+		 * The upstream every proxied request goes to, held as its origin. The
+		 * upstream proxy (express-http-proxy) keeps only the host and port of
+		 * its target, so a path would be dropped without a word; only an
+		 * origin is accepted, and the message never quotes the value, which
+		 * may carry userinfo.
+		 */
+		baseURL: z.string().transform((value, ctx): string => {
+			if (!isHttpOriginAsWritten(value)) {
+				ctx.addIssue({
+					code: "custom",
+					message:
+						"upstream.baseURL must be an http(s) origin written as scheme://host[:port], optionally with one trailing /, and nothing else: the proxy forwards to its host and port only, so a path, query, fragment or userinfo would be dropped",
+				});
+				return z.NEVER;
+			}
+			return new URL(value).origin;
+		}),
 	}),
 });
 

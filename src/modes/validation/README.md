@@ -1,6 +1,6 @@
 # `src/modes/validation`
 
-Last updated: 2026-10-01
+Last updated: 2026-10-21
 
 In validation mode, an inbound `Authorization: Bearer <token>` is checked against the provider's RFC 7662 introspection endpoint, and the request is then forwarded or refused. The root README covers the wire behaviour and the credential choice under [Validation mode](../../../README.md#validation-mode-authmode--validation) and [Introspection client identity](../../../README.md#introspection-client-identity). It covers revocation under [Revocation and the access-token lifetime](../../../README.md#revocation-and-the-access-token-lifetime). The boundary review behind this directory is [#95](https://github.com/o3co/auth.proxy/issues/95).
 
@@ -43,7 +43,7 @@ In validation mode, an inbound `Authorization: Bearer <token>` is checked agains
    - **Lifetime.** An entry expires at `min(now + cacheTtlSec, exp)`, where `now` is captured before the call goes out.
    - **Cached.** The provider's validated answer is cached, and that includes a plain `active: false`.
    - **Never cached.** The refusals this path makes itself, an entry already past its bound when it arrives, and any error.
-   - **Disabled.** `cacheTtlSec` ≤ 0 turns off both reading and writing.
+   - **Disabled.** `cacheTtlSec` = 0 turns off both reading and writing. The schema refuses a negative value.
    - **Bound.** The cache holds at most `cacheMaxEntries`. Each write sweeps expired entries, then drops the oldest insertion. Re-writing a key already held evicts nothing. This cache is its own implementation, not injection's `TokenCache`; how the two differ is recorded in the doc comment on [`IntrospectionCache`](introspection-cache.mts).
 
    [`introspect.test.mts`](__tests__/introspect.test.mts), [`introspection-cache.test.mts`](__tests__/introspection-cache.test.mts) and [`router.test.mts`](__tests__/router.test.mts) pin this. The error case is not tested.
