@@ -15,6 +15,10 @@
  */
 
 /**
+ * The `Cookie` header grammar injection mode reads with: `extractCookie`, the
+ * session cookie's value, and `withoutCookie`, the header with the session
+ * cookie removed.
+ *
  * `extractCookie`: the session cookie's value from a `Cookie` header, refused
  * unless it is an RFC 6265 section 4.1.1 `cookie-value`:
  *
@@ -101,4 +105,27 @@ export const extractCookie = (
 		skipped ??= classified.reason;
 	}
 	return skipped === null ? { kind: "absent" } : { kind: "rejected", reason: skipped };
+};
+
+/**
+ * `cookieHeader` with every pair named `name` removed, or `undefined` when no
+ * pair is left. Names are matched as `extractCookie` matches them — after SP /
+ * HTAB slack, case-sensitively, whole — and whatever the value, so a pair it
+ * refused is removed too. A header with no such pair comes back unchanged;
+ * otherwise the remaining pairs are kept in order, joined by `; ` (RFC 6265
+ * section 4.2.1), and empty segments are dropped.
+ */
+export const withoutCookie = (
+	cookieHeader: string | undefined,
+	name: string,
+): string | undefined => {
+	if (cookieHeader === undefined) return undefined;
+	const pairs = cookieHeader.split(";").map(trimOws);
+	const kept = pairs.filter((pair) => {
+		const eq = pair.indexOf("=");
+		return eq === -1 || trimOws(pair.slice(0, eq)) !== name;
+	});
+	if (kept.length === pairs.length) return cookieHeader;
+	const rest = kept.filter((pair) => pair !== "");
+	return rest.length > 0 ? rest.join("; ") : undefined;
 };
