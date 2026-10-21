@@ -207,6 +207,75 @@ describe("createUpstreamProxy on the wire", () => {
 		expect(rawPairs(received[0], "x-request-id")).toEqual([["x-request-id", "rid-2c9e"]]);
 		expect(rawPairs(received[0], "connection").map(([, value]) => value.toLowerCase())).toEqual(["close"]);
 	});
+
+	// The body is sent on as the bytes that arrived, so the stage has no
+	// charset of its own to ask for: what the upstream negotiates against is
+	// the caller's.
+	it("sends the caller's Accept-Charset upstream unchanged", async () => {
+		const res = await request(app).get("/resource").set("Accept-Charset", "iso-8859-1");
+
+		expect(res.status).toBe(200);
+		expect(rawPairs(received[0], "accept-charset").map(([, value]) => value)).toEqual(["iso-8859-1"]);
+	});
+
+	it("sends no Accept-Charset upstream when none arrived, with a body or without", async () => {
+		await request(app).get("/resource");
+		await request(app).post("/upload").set("content-type", "text/plain").send("a body");
+
+		expect(received).toHaveLength(2);
+		for (const headers of received) {
+			expect(rawPairs(headers, "accept-charset")).toEqual([]);
+		}
+	});
+
+	// RFC 9110 §7.6.3: a gateway sends Via on each request it forwards, its
+	// own member after those the request arrived with.
+	describe("Via", () => {
+		const via = (headers: string[]) => rawPairs(headers, "via").map(([, value]) => value);
+
+		it("names the proxy, by the protocol version it received, on a request that arrived without one", async () => {
+			const res = await request(app).get("/resource");
+
+			expect(res.status).toBe(200);
+			expect(via(received[0])).toEqual(["1.1 auth.proxy"]);
+		});
+
+		it("appends the proxy after the members the request arrived with", async () => {
+			const res = await request(app).get("/resource").set("Via", "1.1 edge, 1.0 lb");
+
+			expect(res.status).toBe(200);
+			expect(via(received[0])).toEqual(["1.1 edge, 1.0 lb, 1.1 auth.proxy"]);
+		});
+
+		it("still names the proxy when the inbound Connection names Via, without the caller's members", async () => {
+			const res = await request(app).get("/resource").set("Connection", "Via").set("Via", "1.1 edge");
+
+			expect(res.status).toBe(200);
+			expect(via(received[0])).toEqual(["1.1 auth.proxy"]);
+		});
+
+		it("names the version of a request that arrived as HTTP/1.0", async () => {
+			const front = app.listen(0, "127.0.0.1");
+			await new Promise<void>((resolve) => front.on("listening", resolve));
+			try {
+				const { port } = front.address() as AddressInfo;
+				const socket = connect(port, "127.0.0.1");
+				let answer = "";
+				socket.on("data", (part: Buffer) => {
+					answer += part.toString("latin1");
+				});
+				const closed = new Promise<void>((resolve) => socket.on("close", () => resolve()));
+				socket.write("GET /resource HTTP/1.0\r\nHost: t\r\n\r\n");
+				await closed;
+
+				expect(answer).toMatch(/^HTTP\/1\.1 200/);
+				expect(via(received[0])).toEqual(["1.0 auth.proxy"]);
+			} finally {
+				front.closeAllConnections();
+				front.close();
+			}
+		});
+	});
 });
 
 /**

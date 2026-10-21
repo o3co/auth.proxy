@@ -1,6 +1,6 @@
 # auth.proxy
 
-最終更新: 2026-10-20
+最終更新: 2026-10-21
 
 [![CI](https://github.com/o3co/auth.proxy/actions/workflows/ci.yml/badge.svg)](https://github.com/o3co/auth.proxy/actions/workflows/ci.yml)
 [![codecov](https://codecov.io/gh/o3co/auth.proxy/graph/badge.svg)](https://codecov.io/gh/o3co/auth.proxy)
@@ -327,6 +327,12 @@ auth.provider v0.18 は OAuth エンドポイントへのリクエストを送�
 呼び出し元からプロキシまでの接続に属するフィールドは上流へ送らない（RFC 9110 §7.6.1）。受信した `Connection` が挙げるフィールド、`Keep-Alive`、`TE`、`Upgrade`、`Proxy-Connection` がこれにあたる。`Proxy-Authorization` も送らない。これはプロキシが使わない、このホップ用の資格情報である（§11.7.2）。`Connection` に `Authorization`、`x-request-id`、`Connection` 自体を挙げても、それらは消えない。上流が受け取る値を決めるのはプロキシである。`Authorization` は、バリデーションモードでは受信したトークン、インジェクションモードでは発行したトークンか、モードがそのまま残したものになる（[受信 Authorization ヘッダー](#受信-authorization-ヘッダー)を参照）。`x-request-id` はプロキシのリクエスト ID、`Connection` は 1 リクエストで閉じる接続である。
 
 上流の接続のフィールドも同じく上流のホップにとどまる。上流の応答の `Connection`、それが挙げるフィールド、`Keep-Alive`、`Proxy-Connection`、`TE`、`Upgrade`、`Trailer`、`Proxy-Authenticate` は呼び出し元に届かない。呼び出し元との接続を保つか閉じるかは Node が決めて伝えるので、プロキシした応答が keep-alive の接続を閉じることはない。プロキシが転送の前に付けたフィールド（`x-request-id`、CORS のフィールド）は、上流の `Connection` が挙げても、プロキシの値のまま残る。応答は届いたとおりにストリームで返す。
+
+### 上流へのリクエストの `Via`
+
+上流へ送るリクエストにはすべて `Via` を付け、受信したときのメンバーの後ろにプロキシ自身のメンバーを足す（RFC 9110 §7.6.3）。プロキシが受信した HTTP のバージョンと、仮名 `auth.proxy` である — `Via: 1.1 auth.proxy`、自分のメンバーを付けたロードバランサーの後ろなら `Via: 1.1 lb, 1.1 auth.proxy`。ホストもポートも名乗らない。常に送り、設定はない。`Via` をプロキシ経由のリクエストのしるしとして読む上流には、そのしるしが届く。たとえば nginx は、`gzip_proxied` がデフォルトの `off` のあいだ、そうしたリクエストへの応答を圧縮せず、圧縮済みファイル（`gzip_static`）も返さない。上流の nginx で圧縮を続けるには `gzip_proxied any;` を設定する。呼び出し元への応答にプロキシは `Via` を付けない。上流が付けた `Via` は、ほかのフィールドと同じように呼び出し元へ渡す。
+
+呼び出し元の `Accept-Charset` は受信したとおりに上流に届く。プロキシが自分の値を送ることはない。
 
 ### 秘密鍵によるクライアント認証（`private_key_jwt`）
 
