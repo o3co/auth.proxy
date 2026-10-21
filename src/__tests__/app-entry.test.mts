@@ -268,6 +268,83 @@ describe("the entry point's mounts: healthcheck at the root, the mode router und
 		expect(upstream.receivedFor("entry-no-cors")).toHaveLength(1);
 	});
 
+	// A CORS preflight (Fetch): OPTIONS with Origin and Access-Control-Request-Method.
+	const preflight = (requestId: string, origin: string) => ({
+		"x-request-id": requestId,
+		origin,
+		"access-control-request-method": "PUT",
+		"access-control-request-headers": "authorization",
+	});
+
+	it("answers a preflight under the prefix 204 itself: nothing upstream, nothing logged", async () => {
+		const res = await send(proxy.origin, {
+			method: "OPTIONS",
+			path: "/api/resource",
+			headers: preflight("entry-preflight", "https://app.example"),
+		});
+
+		expect(res.status).toBe(204);
+		expect(res.headers["access-control-allow-origin"]).toBe("https://app.example");
+		expect(res.headers["access-control-allow-credentials"]).toBe("true");
+		expect(res.headers["access-control-allow-headers"]).toBe("authorization");
+		expect(upstream.receivedFor("entry-preflight")).toEqual([]);
+		expect(await proxy.linesFor("entry-preflight")).toEqual([]);
+	});
+
+	it("answers a preflight from an origin the pattern does not admit 204 itself, granting nothing", async () => {
+		const res = await send(proxy.origin, {
+			method: "OPTIONS",
+			path: "/api/resource",
+			headers: preflight("entry-preflight-refused", "https://evil.example"),
+		});
+
+		expect(res.status).toBe(204);
+		expect(res.headers["access-control-allow-origin"]).toBeUndefined();
+		expect(upstream.receivedFor("entry-preflight-refused")).toEqual([]);
+	});
+
+	it("answers OPTIONS outside the prefix 404, a preflight included, without CORS fields", async () => {
+		const res = await send(proxy.origin, {
+			method: "OPTIONS",
+			path: "/resource",
+			headers: preflight("entry-preflight-outside", "https://app.example"),
+		});
+
+		expect(res.status).toBe(404);
+		expect(res.headers["access-control-allow-origin"]).toBeUndefined();
+		expect(res.headers.vary).toBeUndefined();
+		expect(upstream.receivedFor("entry-preflight-outside")).toEqual([]);
+	});
+
+	// Not a preflight: an ordinary request to the mode router, which checks its
+	// token, forwards it and logs it like any other.
+	it.for([
+		{ name: "without Origin", requestId: "entry-options-plain", headers: {} },
+		{
+			name: "with Origin but no Access-Control-Request-Method",
+			requestId: "entry-options-origin",
+			headers: { origin: "https://app.example" },
+		},
+		{
+			name: "with Access-Control-Request-Method but no Origin",
+			requestId: "entry-options-acrm",
+			headers: { "access-control-request-method": "PUT" },
+		},
+	])("routes an OPTIONS under the prefix $name to the mode router", async ({ requestId, headers }) => {
+		fake.respond("/oauth/introspect", json(200, { active: true }));
+		const res = await send(proxy.origin, {
+			method: "OPTIONS",
+			path: "/api/resource",
+			// A token of its own: a cached answer would not reach the provider.
+			headers: { ...headers, "x-request-id": requestId, authorization: `Bearer tok-${requestId}` },
+		});
+
+		expect(res.status).toBe(200);
+		expect(upstream.receivedFor(requestId).map((request) => request.method)).toEqual(["OPTIONS"]);
+		expect(fake.requests).toHaveLength(1);
+		expect((await proxy.linesFor(requestId)).map((line) => line.event)).toEqual(["validation.incoming_request"]);
+	});
+
 	it("does not route a request outside the prefix to the mode router: 404, nothing upstream, nothing logged", async () => {
 		const res = await send(proxy.origin, {
 			path: "/resource",

@@ -15,8 +15,9 @@
  */
 
 /**
- * What `app.mts` mounts from this directory: the healthcheck only. The
+ * What `app.mts` mounts from this directory: the healthcheck and CORS. The
  * upstream stage (`upstream.mts`) is imported by the two mode routers directly.
  */
 
+export * as Cors from "./cors.mjs";
 export * as Healthcheck from "./Healthcheck.mjs";

@@ -17,8 +17,8 @@
 /**
  * The composition root: the process entry point, which runs at import — there
  * is no exported factory. It parses and validates `../config/application.conf`
- * once, then mounts, in this order, the healthcheck and CORS at the root, the
- * mode router under `http.pathPrefix`, and a `404` for whatever neither
+ * once, then mounts, in this order, the healthcheck at the root, CORS and
+ * the mode router under `http.pathPrefix`, and a `404` for whatever neither
  * answered; listens, answers `Expect: 100-continue` against the body limit
  * (`continueWithinLimit`), and installs graceful shutdown.
  *
@@ -29,7 +29,6 @@
 
 import { parseFile } from "@o3co/ts.hocon";
 import { validate } from "@o3co/ts.hocon/zod";
-import cors from "cors";
 import express from "express";
 import { type AppConfig, AppConfigSchema } from "../config/application.schema.mjs";
 import { resolveRouter } from "./app-internal.mjs";
@@ -45,19 +44,9 @@ const config: AppConfig = validate(
 
 const app = express();
 
-const corsOrigin = config.http.cors.origin.pattern
-	? new RegExp(config.http.cors.origin.pattern)
-	: false;
-
 const server = app
 	.use(routers.Healthcheck.createRouter())
-	.use(
-		cors({
-			origin: corsOrigin,
-			credentials: true,
-		}),
-	)
-	.use(config.http.pathPrefix, resolveRouter(config))
+	.use(config.http.pathPrefix, routers.Cors.createCors(config), resolveRouter(config))
 	.use((_req: express.Request, res: express.Response) => {
 		res.sendStatus(404);
 	})
