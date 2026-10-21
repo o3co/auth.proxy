@@ -55,9 +55,12 @@ const libraryHeaders = (inbound: IncomingHttpHeaders): ProxyReqOpts["headers"] =
 const decorate = async (inbound: IncomingHttpHeaders) => {
 	const decorator = builtOptions().proxyReqOptDecorator as Decorator;
 	const proxyReqOpts = { headers: libraryHeaders(inbound) } as ProxyReqOpts;
-	const srcReq = { headers: inbound } as unknown as Parameters<Decorator>[1];
+	const srcReq = { headers: inbound, httpVersion: "1.1" } as unknown as Parameters<Decorator>[1];
 	return decorator(proxyReqOpts, srcReq);
 };
+
+/** The member the decorator adds to `Via` for a request that arrived as HTTP/1.1 without one. */
+const VIA = { via: "1.1 auth.proxy" };
 
 const inbound: IncomingHttpHeaders = {
 	host: "proxy.test",
@@ -89,12 +92,23 @@ describe("createUpstreamProxy", () => {
 		expect(built).toHaveBeenCalledWith(req, res, next);
 	});
 
-	it("targets upstream.baseURL and sets exactly limit (= http.bodyLimitSize in bytes) and proxyReqOptDecorator", () => {
+	it("targets upstream.baseURL and sets exactly limit (= http.bodyLimitSize in bytes), reqBodyEncoding and proxyReqOptDecorator", () => {
 		expect(proxyMock).toHaveBeenCalledWith("http://upstream.test:65531", expect.anything());
 		const options = builtOptions();
-		expect(Object.keys(options).sort()).toEqual(["limit", "proxyErrorHandler", "proxyReqOptDecorator"]);
+		expect(Object.keys(options).sort()).toEqual([
+			"limit",
+			"proxyErrorHandler",
+			"proxyReqOptDecorator",
+			"reqBodyEncoding",
+		]);
 		expect(options.limit).toBe(7331 * 1024);
 		expect(options.proxyReqOptDecorator).toEqual(expect.any(Function));
+	});
+
+	// Left undefined, the library defaults it to utf-8 and sends that as
+	// Accept-Charset in place of the caller's; null sends the caller's on.
+	it("sets reqBodyEncoding to null, so the library sets no Accept-Charset of its own", () => {
+		expect(builtOptions().reqBodyEncoding).toBeNull();
 	});
 
 	// The library resolves `limit || "1mb"`, so a numeric 0 would become a
@@ -182,7 +196,7 @@ describe("createUpstreamProxy", () => {
 			const chunked = { ...inbound, "transfer-encoding": "chunked", trailer: "X-Sum" };
 			const result = await decorate(chunked);
 			const { "transfer-encoding": _te, trailer: _trailer, ...rest } = libraryHeaders(chunked);
-			expect(result.headers).toEqual({ ...rest, Authorization: "Bearer inbound-7f3a" });
+			expect(result.headers).toEqual({ ...rest, ...VIA, Authorization: "Bearer inbound-7f3a" });
 		});
 
 		// RFC 9110 §7.6.1: the fields the inbound Connection names, and the
@@ -200,7 +214,7 @@ describe("createUpstreamProxy", () => {
 				"proxy-authorization": "Basic cHJveHk6cHc=",
 			};
 			const result = await decorate({ ...inbound, ...hopByHop });
-			expect(result.headers).toEqual({ ...libraryHeaders(inbound), Authorization: "Bearer inbound-7f3a" });
+			expect(result.headers).toEqual({ ...libraryHeaders(inbound), ...VIA, Authorization: "Bearer inbound-7f3a" });
 		});
 
 		// The fields the proxy decides are not the caller's to remove by naming
@@ -208,7 +222,7 @@ describe("createUpstreamProxy", () => {
 		// x-request-id and Connection stays the proxy's choice.
 		it("keeps Authorization, x-request-id and the library's Connection though the inbound Connection names them", async () => {
 			const result = await decorate({ ...inbound, connection: "Authorization, X-Request-Id, Connection" });
-			expect(result.headers).toEqual({ ...libraryHeaders(inbound), Authorization: "Bearer inbound-7f3a" });
+			expect(result.headers).toEqual({ ...libraryHeaders(inbound), ...VIA, Authorization: "Bearer inbound-7f3a" });
 			expect(result.headers).toMatchObject({ connection: "close" });
 		});
 
@@ -227,11 +241,26 @@ describe("createUpstreamProxy", () => {
 		);
 	});
 
+	// RFC 9110 §7.6.3: a gateway adds its own member to Via on each request it
+	// forwards, after those the request arrived with.
+	describe("proxyReqOptDecorator's Via", () => {
+		it("appends the proxy, by the version the request arrived with, after the inbound members", async () => {
+			const result = await decorate({ ...inbound, via: "1.1 edge, 1.0 lb" });
+			expect(result.headers).toMatchObject({ via: "1.1 edge, 1.0 lb, 1.1 auth.proxy" });
+		});
+
+		it("drops the inbound members when the inbound Connection names Via, and still names the proxy", async () => {
+			const result = await decorate({ ...inbound, connection: "Via", via: "1.1 edge" });
+			expect(result.headers).toMatchObject(VIA);
+		});
+	});
+
 	describe("proxyReqOptDecorator is otherwise a casing-only no-op on what the library already copied", () => {
 		it("adds Authorization in canonical casing beside the lowercase copy, leaves x-request-id as copied, touches nothing else", async () => {
 			const result = await decorate(inbound);
 			expect(result.headers).toEqual({
 				...libraryHeaders(inbound),
+				...VIA,
 				Authorization: "Bearer inbound-7f3a",
 			});
 			expect(result.headers).toMatchObject({
@@ -240,10 +269,10 @@ describe("createUpstreamProxy", () => {
 			});
 		});
 
-		it("with only x-request-id inbound, changes nothing at all", async () => {
+		it("with only x-request-id inbound, changes nothing but Via", async () => {
 			const { authorization: _authorization, ...ridOnly } = inbound;
 			const result = await decorate(ridOnly);
-			expect(result.headers).toEqual(libraryHeaders(ridOnly));
+			expect(result.headers).toEqual({ ...libraryHeaders(ridOnly), ...VIA });
 		});
 
 		it("with only Authorization inbound, the whole delta is the canonical-casing copy", async () => {
@@ -251,15 +280,16 @@ describe("createUpstreamProxy", () => {
 			const result = await decorate(authOnly);
 			expect(result.headers).toEqual({
 				...libraryHeaders(authOnly),
+				...VIA,
 				Authorization: "Bearer inbound-7f3a",
 			});
 		});
 
-		it("adds nothing when the inbound request carries neither header", async () => {
+		it("adds nothing but Via when the inbound request carries neither header", async () => {
 			const { authorization: _authorization, "x-request-id": _rid, ...anonymous } = inbound;
 			const result = await decorate(anonymous);
-			expect(result.headers).toEqual(libraryHeaders(anonymous));
-			expect(result.headers).toEqual({ accept: "application/json", connection: "close" });
+			expect(result.headers).toEqual({ ...libraryHeaders(anonymous), ...VIA });
+			expect(result.headers).toEqual({ accept: "application/json", connection: "close", ...VIA });
 		});
 	});
 });

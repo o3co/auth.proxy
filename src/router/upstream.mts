@@ -123,6 +123,23 @@ const THIS_HOP_ONLY = ["keep-alive", "proxy-connection", "te", "upgrade", "proxy
 const PROXY_DECIDED = new Set(["authorization", "x-request-id", "connection"]);
 
 /**
+ * The proxy's name in the `Via` member it adds: a pseudonym in place of its
+ * host and port (RFC 9110 §7.6.3), which tell the upstream nothing it needs.
+ */
+const VIA_PSEUDONYM = "auth.proxy";
+
+/**
+ * `Via` with the proxy's member after those the request arrived with
+ * (RFC 9110 §7.6.3): the version of HTTP the proxy received it by, and its
+ * pseudonym. An empty inbound value counts as none.
+ */
+const appendVia = (received: number | string | readonly string[] | undefined, httpVersion: string): string => {
+	const own = `${httpVersion} ${VIA_PSEUDONYM}`;
+	const members = Array.isArray(received) ? received.join(", ") : String(received ?? "");
+	return members.trim() === "" ? own : `${members}, ${own}`;
+};
+
+/**
  * The upstream's fields for its connection to this proxy, never sent to the
  * caller (RFC 9110 §7.6.1), beside `Connection` itself: the other hop-by-hop
  * fields; `Trailer`, which announces fields the piped body does not carry on;
@@ -293,9 +310,16 @@ const upstreamLimit = (bytes: number): number | string => (bytes === 0 ? "0" : b
  * `Authorization`, `x-request-id` or `Connection` in `Connection` does not
  * remove them (`PROXY_DECIDED`).
  *
+ * And it adds the proxy to `Via` (RFC 9110 §7.6.3), after the members the
+ * request arrived with: the version of HTTP it arrived by and the pseudonym
+ * `auth.proxy`. A caller naming `Via` in `Connection` drops its own members,
+ * not the proxy's.
+ *
  * What it does not do: choose which fields are forwarded, beyond the body's
- * framing, the expectation and the connection's own fields. Every other
- * choice is made before this stage, on `req.headers`. express-http-proxy
+ * framing, the expectation, the connection's own fields and `Via`. Every
+ * other choice is made before this stage, on `req.headers`. The library's own
+ * `Accept-Charset`, which would replace the caller's, is turned off
+ * (`reqBodyEncoding: null`), so the caller's goes on unchanged. express-http-proxy
  * copies every inbound header except `connection` and `host` onto the
  * outbound request and sets `connection: close` before any decorator runs
  * (`reqHeaders` in `express-http-proxy/lib/requestOptions.js`). Node
@@ -332,6 +356,10 @@ export const createUpstreamProxy = (config: UpstreamStageConfig): RequestHandler
 const proxyTo = (config: UpstreamStageConfig): RequestHandler =>
 	proxy(config.upstream.baseURL, {
 		limit: upstreamLimit(bodyLimitBytes(config)),
+		// The library's default, utf-8, would be sent as `Accept-Charset` in
+		// place of the caller's; null sends the caller's on. The body goes on
+		// as the bytes that arrived, so no encoding is needed for it.
+		reqBodyEncoding: null,
 		proxyErrorHandler: (err, res, next) => {
 			if (res.destroyed && !hasOwnStatus(err)) return;
 			next(toUpstreamFailure(err));
@@ -359,6 +387,9 @@ const proxyTo = (config: UpstreamStageConfig): RequestHandler =>
 				if (!PROXY_DECIDED.has(name)) delete proxyReqOpts.headers[name];
 			}
 			for (const name of THIS_HOP_ONLY) delete proxyReqOpts.headers[name];
+			// After the connection's own fields, so a caller naming `Via` in
+			// `Connection` drops its members, not the proxy's.
+			proxyReqOpts.headers.via = appendVia(proxyReqOpts.headers.via, srcReq.httpVersion);
 			return proxyReqOpts;
 		},
 	});

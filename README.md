@@ -1,6 +1,6 @@
 # auth.proxy
 
-Last updated: 2026-10-20
+Last updated: 2026-10-21
 
 [![CI](https://github.com/o3co/auth.proxy/actions/workflows/ci.yml/badge.svg)](https://github.com/o3co/auth.proxy/actions/workflows/ci.yml)
 [![codecov](https://codecov.io/gh/o3co/auth.proxy/graph/badge.svg)](https://codecov.io/gh/o3co/auth.proxy)
@@ -346,6 +346,12 @@ Whatever else reaches the end of a mode's router unanswered is refused in the sa
 The fields that belong to the caller's connection to the proxy are not sent upstream (RFC 9110 §7.6.1): those the inbound `Connection` names, `Keep-Alive`, `TE`, `Upgrade` and `Proxy-Connection`. Nor is `Proxy-Authorization`, a credential for this hop the proxy does not use (§11.7.2). Naming `Authorization`, `x-request-id` or `Connection` itself in `Connection` does not remove them: what the upstream receives for those is the proxy's to decide — for `Authorization`, the inbound token in validation mode, and in injection mode the minted one or whatever the mode left in place (see [Inbound Authorization headers](#inbound-authorization-headers)); for `x-request-id`, the proxy's request id; for `Connection`, a connection closed after the one request.
 
 The upstream's connection fields stay on its hop in the same way. Its response's `Connection`, the fields that names, `Keep-Alive`, `Proxy-Connection`, `TE`, `Upgrade`, `Trailer` and `Proxy-Authenticate` do not reach the caller. Node keeps or closes the caller's own connection and announces which, so a proxied answer does not close a keep-alive connection. A field the proxy set before forwarding — `x-request-id`, the CORS fields — stays, with the proxy's value, though the upstream's `Connection` names it. The answer still streams as it arrives.
+
+### `Via` on the upstream request
+
+Every request sent upstream carries `Via` with the proxy's own member after those the request arrived with (RFC 9110 §7.6.3): the HTTP version the proxy received it by and the pseudonym `auth.proxy` — `Via: 1.1 auth.proxy`, or `Via: 1.1 lb, 1.1 auth.proxy` behind a balancer that sent its own. It names no host or port, and it is always sent; there is no setting. An upstream that takes `Via` as the sign of a proxied request now sees one: nginx, for one, does not compress answers to such requests while `gzip_proxied` is `off`, its default, so set `gzip_proxied any;` on an nginx upstream to keep them compressed. The proxy adds no `Via` to its answers to the caller; an upstream's own reaches the caller unchanged.
+
+The caller's `Accept-Charset` reaches the upstream as it arrived; the proxy sends none of its own.
 
 ### Client authentication with a private key (`private_key_jwt`)
 
