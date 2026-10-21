@@ -27,7 +27,7 @@ vi.mock("express-http-proxy", () => ({
 const proxyMock = vi.mocked(proxy);
 
 const config: UpstreamStageConfig = {
-	http: { bodyLimitSize: "7331kb" },
+	http: { bodyLimitSize: "7331kb", cors: { origin: { pattern: null } } },
 	upstream: { baseURL: "http://upstream.test:65531" },
 };
 
@@ -115,7 +115,7 @@ describe("createUpstreamProxy", () => {
 	// 1 MiB limit; zero goes as "0", which the body reader reads as 0.
 	it("passes a zero limit in a form the library keeps as zero", () => {
 		proxyMock.mockClear();
-		createUpstreamProxy({ ...config, http: { bodyLimitSize: "0" } });
+		createUpstreamProxy({ ...config, http: { ...config.http, bodyLimitSize: "0" } });
 		expect(builtOptions().limit).toBe("0");
 	});
 
@@ -123,7 +123,7 @@ describe("createUpstreamProxy", () => {
 	// reader would read as 1 byte; any count but zero goes as the number.
 	it("passes a limit too large for plain notation as the number", () => {
 		proxyMock.mockClear();
-		createUpstreamProxy({ ...config, http: { bodyLimitSize: "1000000pb" } });
+		createUpstreamProxy({ ...config, http: { ...config.http, bodyLimitSize: "1000000pb" } });
 		expect(builtOptions().limit).toBe(1_000_000 * 1024 ** 5);
 	});
 

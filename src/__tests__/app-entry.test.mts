@@ -22,7 +22,12 @@ import { afterAll, afterEach, beforeAll, describe, expect, it, vi } from "vitest
 import { bootProxy, type ProxyProcess, SUITE_TIMEOUT_MS, send, startProxy } from "./app-process.mjs";
 import { expectContinue } from "./expect-continue.mjs";
 import { type FakeProvider, json, startFakeProvider } from "./fake-provider.mjs";
-import { type RecordingUpstream, startRecordingUpstream, upstreamBody } from "./recording-upstream.mjs";
+import {
+	PROXY_FIELDS_PATH,
+	type RecordingUpstream,
+	startRecordingUpstream,
+	upstreamBody,
+} from "./recording-upstream.mjs";
 
 // Above the harness's boot deadline and stop grace, so a stuck child fails on
 // those — killed, with its stderr — rather than on vitest's timer.
@@ -39,6 +44,10 @@ const INJECTION = {
 /** A private JWK with an algorithm that does not fit it: a key the proxy cannot sign with. */
 const UNUSABLE_JWK = { ...generateKeyPairSync("ed25519").privateKey.export({ format: "jwk" }), alg: "HS256" };
 const USABLE_KEY = JSON.stringify(generateKeyPairSync("ed25519").privateKey.export({ format: "jwk" }));
+
+/** The names of the `Access-Control-*` fields an answer carries. */
+const accessControlFields = (headers: Record<string, unknown>): string[] =>
+	Object.keys(headers).filter((name) => name.startsWith("access-control-"));
 
 /** A configuration the documentation says is refused at boot. */
 interface Refusal {
@@ -264,8 +273,131 @@ describe("the entry point's mounts: healthcheck at the root, the mode router und
 		});
 
 		expect(res.status).toBe(200);
-		expect(res.headers["access-control-allow-origin"]).toBeUndefined();
+		expect(accessControlFields(res.headers)).toEqual([]);
 		expect(upstream.receivedFor("entry-no-cors")).toHaveLength(1);
+	});
+
+	// A CORS preflight (Fetch): OPTIONS with Origin and Access-Control-Request-Method.
+	const preflight = (requestId: string, origin: string) => ({
+		"x-request-id": requestId,
+		origin,
+		"access-control-request-method": "PUT",
+		"access-control-request-headers": "authorization",
+	});
+
+	it("answers a preflight under the prefix 204 itself: nothing upstream, nothing logged", async () => {
+		const res = await send(proxy.origin, {
+			method: "OPTIONS",
+			path: "/api/resource",
+			headers: preflight("entry-preflight", "https://app.example"),
+		});
+
+		expect(res.status).toBe(204);
+		expect(res.headers["access-control-allow-origin"]).toBe("https://app.example");
+		expect(res.headers["access-control-allow-credentials"]).toBe("true");
+		expect(res.headers["access-control-allow-headers"]).toBe("authorization");
+		expect(upstream.receivedFor("entry-preflight")).toEqual([]);
+		expect(await proxy.linesFor("entry-preflight")).toEqual([]);
+	});
+
+	it("answers a preflight from an origin the pattern does not admit 204 itself, granting nothing", async () => {
+		const res = await send(proxy.origin, {
+			method: "OPTIONS",
+			path: "/api/resource",
+			headers: preflight("entry-preflight-refused", "https://evil.example"),
+		});
+
+		expect(res.status).toBe(204);
+		expect(accessControlFields(res.headers)).toEqual([]);
+		expect(upstream.receivedFor("entry-preflight-refused")).toEqual([]);
+	});
+
+	it("answers OPTIONS outside the prefix 404, a preflight included, without CORS fields", async () => {
+		const res = await send(proxy.origin, {
+			method: "OPTIONS",
+			path: "/resource",
+			headers: preflight("entry-preflight-outside", "https://app.example"),
+		});
+
+		expect(res.status).toBe(404);
+		expect(res.headers["access-control-allow-origin"]).toBeUndefined();
+		expect(res.headers.vary).toBeUndefined();
+		expect(upstream.receivedFor("entry-preflight-outside")).toEqual([]);
+	});
+
+	// Not a preflight: an ordinary request to the mode router, which checks its
+	// token, forwards it and logs it like any other.
+	it.for([
+		{ name: "without Origin", requestId: "entry-options-plain", headers: {} },
+		{
+			name: "with Origin but no Access-Control-Request-Method",
+			requestId: "entry-options-origin",
+			headers: { origin: "https://app.example" },
+		},
+		{
+			name: "with Access-Control-Request-Method but no Origin",
+			requestId: "entry-options-acrm",
+			headers: { "access-control-request-method": "PUT" },
+		},
+	])("routes an OPTIONS under the prefix $name to the mode router", async ({ requestId, headers }) => {
+		fake.respond("/oauth/introspect", json(200, { active: true }));
+		const res = await send(proxy.origin, {
+			method: "OPTIONS",
+			path: "/api/resource",
+			// A token of its own: a cached answer would not reach the provider.
+			headers: { ...headers, "x-request-id": requestId, authorization: `Bearer tok-${requestId}` },
+		});
+
+		expect(res.status).toBe(200);
+		expect(upstream.receivedFor(requestId).map((request) => request.method)).toEqual(["OPTIONS"]);
+		expect(fake.requests).toHaveLength(1);
+		expect((await proxy.linesFor(requestId)).map((line) => line.event)).toEqual(["validation.incoming_request"]);
+	});
+
+	// The request id and the CORS grant are the proxy's; Vary lists what both
+	// sides' choices read; X-Powered-By is the upstream's, the proxy announcing
+	// none of its own.
+	it("keeps the proxy's request id and CORS grant on a proxied answer, merges Vary, and passes X-Powered-By on", async () => {
+		fake.respond("/oauth/introspect", json(200, { active: true }));
+		const res = await send(proxy.origin, {
+			path: `/api${PROXY_FIELDS_PATH}`,
+			headers: { "x-request-id": "entry-fields", origin: "https://app.example", authorization: "Bearer tok-fields" },
+		});
+
+		expect(res.status).toBe(200);
+		expect(upstream.receivedFor("entry-fields")).toHaveLength(1);
+		expect(res.headers["x-request-id"]).toBe("entry-fields");
+		expect(res.headers["access-control-allow-origin"]).toBe("https://app.example");
+		expect(res.headers["access-control-allow-credentials"]).toBe("true");
+		expect(res.headers.vary).toBe("Origin, Cookie");
+		expect(res.headers["x-powered-by"]).toBe("upstream-framework");
+	});
+
+	it("grants an origin the pattern does not admit nothing, though the upstream grants any", async () => {
+		fake.respond("/oauth/introspect", json(200, { active: true }));
+		const res = await send(proxy.origin, {
+			path: `/api${PROXY_FIELDS_PATH}`,
+			headers: {
+				"x-request-id": "entry-fields-refused",
+				origin: "https://evil.example",
+				authorization: "Bearer tok-fields-refused",
+			},
+		});
+
+		expect(res.status).toBe(200);
+		expect(upstream.receivedFor("entry-fields-refused")).toHaveLength(1);
+		expect(accessControlFields(res.headers)).toEqual([]);
+	});
+
+	it("announces no X-Powered-By on an answer of its own", async () => {
+		const answers = await Promise.all([
+			send(proxy.origin, { path: "/_healthcheck" }),
+			send(proxy.origin, { path: "/resource" }),
+			send(proxy.origin, { path: "/api/resource", headers: { authorization: "Basic eDp5" } }),
+		]);
+
+		expect(answers.map((res) => res.status)).toEqual([200, 404, 400]);
+		for (const res of answers) expect(res.headers["x-powered-by"]).toBeUndefined();
 	});
 
 	it("does not route a request outside the prefix to the mode router: 404, nothing upstream, nothing logged", async () => {

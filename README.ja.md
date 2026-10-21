@@ -326,7 +326,7 @@ auth.provider v0.18 は OAuth エンドポイントへのリクエストを送�
 
 呼び出し元からプロキシまでの接続に属するフィールドは上流へ送らない（RFC 9110 §7.6.1）。受信した `Connection` が挙げるフィールド、`Keep-Alive`、`TE`、`Upgrade`、`Proxy-Connection` がこれにあたる。`Proxy-Authorization` も送らない。これはプロキシが使わない、このホップ用の資格情報である（§11.7.2）。`Connection` に `Authorization`、`x-request-id`、`Connection` 自体を挙げても、それらは消えない。上流が受け取る値を決めるのはプロキシである。`Authorization` は、バリデーションモードでは受信したトークン、インジェクションモードでは発行したトークンか、モードがそのまま残したものになる（[受信 Authorization ヘッダー](#受信-authorization-ヘッダー)を参照）。`x-request-id` はプロキシのリクエスト ID、`Connection` は 1 リクエストで閉じる接続である。
 
-上流の接続のフィールドも同じく上流のホップにとどまる。上流の応答の `Connection`、それが挙げるフィールド、`Keep-Alive`、`Proxy-Connection`、`TE`、`Upgrade`、`Trailer`、`Proxy-Authenticate` は呼び出し元に届かない。呼び出し元との接続を保つか閉じるかは Node が決めて伝えるので、プロキシした応答が keep-alive の接続を閉じることはない。プロキシが転送の前に付けたフィールド（`x-request-id`、CORS のフィールド）は、上流の `Connection` が挙げても、プロキシの値のまま残る。応答は届いたとおりにストリームで返す。
+上流の接続のフィールドも同じく上流のホップにとどまる。上流の応答の `Connection`、それが挙げるフィールド、`Keep-Alive`、`Proxy-Connection`、`TE`、`Upgrade`、`Trailer`、`Proxy-Authenticate` は呼び出し元に届かない。呼び出し元との接続を保つか閉じるかは Node が決めて伝えるので、プロキシした応答が keep-alive の接続を閉じることはない。プロキシが転送の前に付けたフィールド（`x-request-id`、CORS のフィールド）は、上流の `Connection` が挙げても、プロキシの値のまま残る。応答は届いたとおりにストリームで返す。プロキシが付けたフィールドを上流の応答も持つときは、プロキシの値が残る。呼び出し元が受け取るのは、プロキシがログに使うリクエスト ID と、プロキシが与えた CORS の許可である。`Vary` だけは両方を並べる。プロキシのメンバーの後ろに、まだないメンバーを上流から加え（大文字小文字を区別せずに比べる）、どちらかが `*` なら `*` とする（RFC 9110 §12.5.5）。`CORS_ORIGIN_PATTERN` を設定しているあいだ、上流の CORS の許可は、プロキシがそのオリジンを許可したかどうかにかかわらず呼び出し元に届かない。`Access-Control-Expose-Headers` など、上流のそれ以外の `Access-Control-*` フィールドは届く。プロキシは自分の `X-Powered-By` を送らない。上流のものは呼び出し元に届く。
 
 ### 上流へのリクエストの `Via`
 
@@ -411,10 +411,10 @@ make docker       # ランタイムイメージのビルド
 | `AUTH_MODE` | **必須。** `"validation"` または `"injection"`。 |
 | `HTTP_PORT` | HTTP リッスンポート（デフォルト: 80）。 |
 | `HTTP_HOSTNAME` | HTTP リッスンホスト名（デフォルト: 0.0.0.0）。 |
-| `HTTP_PATH_PREFIX` | プロキシルートのパスプレフィックス（デフォルト: /）。その外のリクエストは、ヘルスチェックを除き、ボディを読まずに `404`（テキスト `Not Found`）で応答する。ただし `CORS_ORIGIN_PATTERN` を設定しているときの `OPTIONS` は、プレフィックスを確かめる前に CORS が `204` で応答する（#148）。 |
+| `HTTP_PATH_PREFIX` | プロキシルートのパスプレフィックス（デフォルト: /）。その外のリクエストは、ヘルスチェックを除き、ボディを読まずに `404`（テキスト `Not Found`）で応答する。CORS はその内側にだけ適用する。 |
 | `HTTP_BODY_LIMIT_SIZE` | リクエストボディサイズ上限（デフォルト: 10mb）。数値（`+` の符号を付けてもよい）に単位 `b`・`kb`・`mb`・`gb`・`tb`・`pb` を付けてもよい（1kb = 1024 バイト）。それ以外ではプロキシは起動しない。[リクエストボディの上限](#リクエストボディの上限)を参照。 |
 | `UPSTREAM_BASEURL` | アップストリームサービスのベース URL。 |
-| `CORS_ORIGIN_PATTERN` | CORS オリジン正規表現パターン（任意）。 |
+| `CORS_ORIGIN_PATTERN` | CORS オリジン正規表現パターン（任意）。設定すると、プロキシは `HTTP_PATH_PREFIX` の内側で CORS に応答する。パターンに一致するオリジンには資格情報付きで許可を与える（`Access-Control-Allow-Origin` にそのオリジン、`Access-Control-Allow-Credentials: true`）。それ以外のオリジンと、オリジンのないリクエストには何も許可しない。プロキシはその応答に、プリフライトでもそれ以外でも `Access-Control-*` フィールドを付けず、プロキシした応答では後述のとおり上流の許可を落とす。パターンは `^…$` で固定する。一致したオリジンには許可を与えるので、パターンが文字列 `null` に一致すれば、サンドボックス化されたフレームや `file:` ページの不透明なオリジン `null` にも許可を与えてしまう。`HTTP_PATH_PREFIX` の内側での応答の `Vary` には、プリフライトでない `OPTIONS` への応答を除き、`Origin` を入れる（上流が `Vary: *` を返したときは `*`）。プリフライト — `Origin` と `Access-Control-Request-Method` を持つ `OPTIONS` — にはモードより前に `204` で応答し、転送もログ出力もしない。それ以外の `OPTIONS` は通常のリクエストである。許可を与えるのはプロキシだけで、上流の `Access-Control-Allow-Origin` と `Access-Control-Allow-Credentials` は呼び出し元に届かない。未設定または空なら、プロキシは CORS を扱わず、上流のものをそのまま渡す。 |
 | `LOG_LEVEL` | pino のログレベル — `trace`・`debug`・`info`・`warn`・`error`・`fatal`・`silent`（デフォルト: `info`）。HOCON 設定を経由せず、ロガー生成時に環境変数から直接読む。出力は stdout への NDJSON。どちらのモードでも、リクエストに関する行 — `incoming request` と各判定 — はリクエスト ID を `requestId` に、`injection.*` または `validation.*` という名前の `event` を持つ。 |
 
 バリデーションモード:

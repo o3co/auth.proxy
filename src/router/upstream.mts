@@ -16,7 +16,7 @@
 
 /**
  * The upstream proxy stage both mode routers end with, `createUpstreamProxy`,
- * and the two config fields it reads. What its decorator does and does not
+ * and the config fields it reads. What its decorator does and does not
  * do, and why it is kept, is the doc comment on the function.
  */
 
@@ -24,6 +24,7 @@ import type { IncomingMessage, ServerResponse } from "node:http";
 import type { NextFunction, RequestHandler } from "express";
 import proxy from "express-http-proxy";
 import { bodyLimitBytes } from "./body-limit.mjs";
+import { type CorsConfig, proxyOwnedCorsFields } from "./cors.mjs";
 
 /**
  * The upstream failing rather than the request. Before its answer started: it
@@ -147,6 +148,27 @@ const appendVia = (received: number | string | readonly string[] | undefined, ht
  */
 const UPSTREAM_HOP_ONLY = new Set(["keep-alive", "proxy-connection", "te", "upgrade", "trailer", "proxy-authenticate"]);
 
+/** The members of a `Vary` value, in order. */
+const varyMembers = (value: number | string | readonly string[]): string[] =>
+	(Array.isArray(value) ? value.join(",") : String(value))
+		.split(",")
+		.map((member) => member.trim())
+		.filter((member) => member !== "");
+
+/**
+ * The `Vary` of an answer both sides chose from (RFC 9110 §12.5.5): the
+ * proxy's members, then the upstream's not already listed, compared
+ * case-insensitively; `*` when either lists it.
+ */
+const mergeVary = (proxy: number | string | readonly string[], upstream: number | string | readonly string[]): string => {
+	const merged: string[] = [];
+	for (const member of [...varyMembers(proxy), ...varyMembers(upstream)]) {
+		if (member === "*") return "*";
+		if (!merged.some((listed) => listed.toLowerCase() === member.toLowerCase())) merged.push(member);
+	}
+	return merged.join(", ");
+};
+
 /** The field names a `Connection` value lists, lower-cased. */
 const connectionOptions = (connection: string | undefined): string[] =>
 	(connection ?? "")
@@ -155,16 +177,23 @@ const connectionOptions = (connection: string | undefined): string[] =>
 		.filter((name) => name !== "");
 
 /**
- * Keeps the upstream's connection fields off `res`. The library copies the
- * upstream's fields onto `res` one by one through `setHeader` and then pipes
- * the body, so the stage takes over `setHeader` for this response: the
+ * Screens the upstream's fields on their way onto `res`. The library copies
+ * the upstream's fields onto `res` one by one through `setHeader` and then
+ * pipes the body, so the stage takes over `setHeader` for this response: the
  * upstream's `Connection` is held back rather than set, and so are
- * `UPSTREAM_HOP_ONLY`. As the head is written — Node writes it through
- * `writeHead`, on the first write too — the fields that `Connection` names are
- * removed where the upstream set them. A field the proxy had set before the
- * stage (the request id, `cors`'s) is the proxy's answer, not the upstream's
- * hop: named, it goes back to the proxy's value. A name the response does not
- * carry is left alone, since Node takes removing `Transfer-Encoding`,
+ * `UPSTREAM_HOP_ONLY` and `proxyOnly`, the fields only the proxy sets.
+ *
+ * A field the proxy had set before the stage — the request id, `cors`'s — is
+ * the proxy's answer: the upstream's value for it is dropped, except for
+ * `Vary`, whose members both sides add to (`mergeVary`). So a stage before
+ * this one sets only fields the proxy decides whole, or `Vary`; a list field
+ * such as `Set-Cookie` set there would drop the upstream's.
+ *
+ * As the head is written — Node writes it through `writeHead`, on the first
+ * write too — the fields that `Connection` names are removed where the
+ * upstream set them; one the proxy had set goes back to the proxy's value,
+ * the upstream's `Vary` members with it. A name the response does not carry
+ * is left alone, since Node takes removing `Transfer-Encoding`,
  * `Content-Length`, `Connection` or `Date` as a decision about framing or the
  * announcement, though nothing was there. Its own response decorator would
  * read the whole body first, so the answer still streams.
@@ -178,7 +207,7 @@ const connectionOptions = (connection: string | undefined): string[] =>
  * field the upstream's head brought dropped, the proxy's at its values, and
  * nothing the upstream's `Connection` named held against it.
  */
-const keepUpstreamHopFieldsOff = (res: ServerResponse): (() => void) => {
+const screenUpstreamHead = (res: ServerResponse, proxyOnly: ReadonlySet<string>): (() => void) => {
 	const proxySet = res.getHeaders();
 	let named: string[] = [];
 	const setHeader = res.setHeader;
@@ -188,8 +217,11 @@ const keepUpstreamHopFieldsOff = (res: ServerResponse): (() => void) => {
 			named = connectionOptions(Array.isArray(value) ? value.join(",") : String(value));
 			return this;
 		}
-		if (UPSTREAM_HOP_ONLY.has(field)) return this;
-		return setHeader.call(this, name, value);
+		if (UPSTREAM_HOP_ONLY.has(field) || proxyOnly.has(field)) return this;
+		const proxyValue = proxySet[field];
+		if (proxyValue === undefined) return setHeader.call(this, name, value);
+		if (field === "vary") return setHeader.call(this, name, mergeVary(proxyValue, value));
+		return this;
 	} as ServerResponse["setHeader"];
 	const writeHead = res.writeHead;
 	res.writeHead = function (this: ServerResponse, ...args: unknown[]) {
@@ -245,10 +277,10 @@ const watchAnswer = (res: ServerResponse, next: NextFunction, restoreHead: () =>
 	});
 };
 
-/** The two config fields the stage reads. `AppConfig` satisfies it structurally. */
+/** The config fields the stage reads. `AppConfig` satisfies it structurally. */
 export interface UpstreamStageConfig {
 	upstream: { baseURL: string };
-	http: { bodyLimitSize: string };
+	http: { bodyLimitSize: string } & CorsConfig["http"];
 }
 
 /**
@@ -261,11 +293,11 @@ const upstreamLimit = (bytes: number): number | string => (bytes === 0 ? "0" : b
 
 /**
  * The upstream proxy stage — the last stage of either mode's router before
- * its error handler. It is assembly (built from `upstream.baseURL` and
- * `http.bodyLimitSize`, in bytes), not a mode's decision, so both routers
- * mount this one function. It reads the request body against that limit; a
- * body over it that declared no length is refused here, as an error the
- * router's error handler answers.
+ * its error handler. It is assembly (built from `upstream.baseURL`,
+ * `http.bodyLimitSize` in bytes, and whether the proxy answers CORS), not a
+ * mode's decision, so both routers mount this one function. It reads the
+ * request body against that limit; a body over it that declared no length is
+ * refused here, as an error the router's error handler answers.
  *
  * Every failure the library meets before the upstream's answer starts goes to
  * the router's error handler, through `proxyErrorHandler`, which replaces the
@@ -336,9 +368,13 @@ const upstreamLimit = (bytes: number): number | string => (bytes === 0 ? "0" : b
  *
  * On the way back, the upstream's connection fields stay on its hop: its
  * `Connection`, the fields that names — except those the proxy set before
- * forwarding, which keep the proxy's value — and the hop-by-hop fields do not
- * reach the caller (`keepUpstreamHopFieldsOff`). Node keeps or closes the caller's
- * connection and announces it, and the answer still streams.
+ * forwarding — and the hop-by-hop fields do not reach the caller. A field the
+ * proxy set before forwarding keeps the proxy's value though the upstream
+ * sends it too, except `Vary`, which lists both sides' members; and while the
+ * proxy answers CORS, the upstream's CORS grant never reaches the caller
+ * (`proxyOwnedCorsFields` in `cors.mts`). All of it is `screenUpstreamHead`.
+ * Node keeps or closes the caller's connection and announces it, and the
+ * answer still streams.
  *
  * Why it is kept: the framing above, the connection's own fields, and
  * header-name casing. HTTP header names are case-insensitive (RFC 9110 §5.1),
@@ -349,8 +385,9 @@ const upstreamLimit = (bytes: number): number | string => (bytes === 0 ? "0" : b
  */
 export const createUpstreamProxy = (config: UpstreamStageConfig): RequestHandler => {
 	const forward = proxyTo(config);
+	const proxyOnly = new Set(proxyOwnedCorsFields(config));
 	return (req, res, next) => {
-		watchAnswer(res, next, keepUpstreamHopFieldsOff(res));
+		watchAnswer(res, next, screenUpstreamHead(res, proxyOnly));
 		forward(req, res, next);
 	};
 };
