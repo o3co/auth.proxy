@@ -45,11 +45,11 @@ One deployment runs one of two modes:
 
 ### Validation mode (`auth.mode = "validation"`)
 
-Validates inbound `Authorization: Bearer <token>` headers against the provider's introspection endpoint. A request with no `Authorization` header, or an empty one, is forwarded unchanged (public endpoints remain reachable). A request whose `Authorization` is anything other than `Bearer <token>` — another scheme, a lowercase `bearer`, a `Bearer` with no usable token — is refused `400 Invalid Token Type` (see the challenge table below).
+Validates inbound `Authorization: Bearer <token>` headers against the provider's introspection endpoint. A request with no `Authorization` header, or an empty one, is forwarded unchanged (public endpoints remain reachable). A request whose `Authorization` is anything other than exactly `Bearer`, one space and an RFC 6750 §2.1 `b64token` (letters, digits, `-._~+/`, then any `=` padding) — another scheme, a lowercase `bearer`, a `Bearer` with no token, two spaces, or anything after the token — is refused `400 Invalid Token Type` (see the challenge table below), and so is a request with more than one `Authorization` header line. Whenever a token is forwarded, the header the upstream receives is therefore `Bearer` and the one token that was introspected: no upstream that reads the header its own way (the last word, a regex to the end of the line) can find in it a token the provider never saw. Whitespace around the whole value is not part of it (RFC 9110 §5.5) and is dropped before either side reads it.
 
 Flow:
 
-1. Detects `Authorization: Bearer <token>` header (passes through if there is no `Authorization` header, or an empty one; any other `Authorization` is `400`).
+1. Detects `Authorization: Bearer <token>` header (passes through if there is no `Authorization` header, or an empty one; any other `Authorization`, or more than one, is `400`).
 2. Checks in-memory cache keyed by SHA-256 of the token.
 3. On cache miss, calls provider's `POST /oauth/introspect`. A redirect from it is not followed — the endpoint is configuration — and is answered `502 Provider Configuration Error`. Concurrent misses on the same token coalesce into a single provider call (single-flight), as they do in injection mode.
 4. Returns `401` if `active: false`; forwards the request if `active: true`. Only a `200` is read as an answer: another `2xx`, even one carrying `active: true`, is a provider failure (see the logging table below).
@@ -59,8 +59,8 @@ Challenges, without and with `VALIDATION_REALM` (here `api`):
 | Refusal | No realm | Realm set |
 | --- | --- | --- |
 | `401`: an access token the proxy would not accept (RFC 6750 §3) | `Bearer error="invalid_token"` | `Bearer realm="api", error="invalid_token"` |
-| `400`: a `Bearer` credential too malformed to read (`Bearer`, `Bearer  t`) | `Bearer error="invalid_request"` | `Bearer realm="api", error="invalid_request"` |
-| `400`: another method (`Basic …`, or a lowercase `bearer`, which this proxy does not admit) — no error code, as §3.1 says | none | `Bearer realm="api"` |
+| `400`: a `Bearer` credential that is not exactly `Bearer <b64token>` (`Bearer`, `Bearer  t`, `Bearer t extra`), or more than one `Authorization` line when any of them names the `Bearer` scheme | `Bearer error="invalid_request"` | `Bearer realm="api", error="invalid_request"` |
+| `400`: another method (`Basic …`, or a lowercase `bearer`, which this proxy does not admit), one line or several — no error code, as §3.1 says | none | `Bearer realm="api"` |
 
 A `413`, `500`, `501`, `502` or `504` carries none, because none of them is a statement about the caller's Bearer credential. Injection mode answers no challenge on any path, deliberately: its caller holds a session cookie, not a Bearer token.
 
@@ -129,6 +129,8 @@ Flow:
 4. On cache miss, exchanges the cookie for an access token via the provider's `POST /oauth/token` with `grant_type=session`. Concurrent misses on the same cookie, among requests the [same-origin gate](#cache-behavior) admits, coalesce into a single provider call (single-flight).
 5. Injects `Authorization: Bearer <token>` and forwards upstream.
 
+Whatever the proxy forwards, it forwards without the session cookie: the pair is removed from `Cookie` and the other cookies go on (see [Cookie forwarding](#cookie-forwarding)).
+
 Opt-in, injection mode can also exchange an external credential presented as `Authorization: Bearer <JWT>` for a first-party token — see [External credential exchange](#external-credential-exchange-authinjectionexchange).
 
 #### Cache behavior
@@ -186,7 +188,7 @@ grant into a `GET` with no body, which a token endpoint answers `405`.
 
 #### CSRF responsibility boundary
 
-The proxy is a transparent augmentation layer. It injects the Bearer but does NOT enforce CSRF. It only keeps its token cache from skipping the provider's own same-origin check on the session grant (see [Cache behavior](#cache-behavior)): a request that does not show it is same-origin is never served a cached token. Combine with `SameSite=Lax` cookies, same-origin deployment, and CSRF protection in the upstream service. Being transparent cuts the other way too — see [Inbound Authorization headers](#inbound-authorization-headers).
+The proxy is a transparent augmentation layer. It injects the Bearer but does NOT enforce CSRF. It only keeps its token cache from skipping the provider's own same-origin check on the session grant (see [Cache behavior](#cache-behavior)): a request that does not show it is same-origin is never served a cached token. Combine with `SameSite=Lax` cookies, same-origin deployment, and CSRF protection in the upstream service. That protection cannot be tied to the session cookie, which the upstream never receives (see [Cookie forwarding](#cookie-forwarding)): a synchronizer token kept in a session looked up by that cookie does not work behind this proxy. A CSRF cookie of its own (double-submit), an `Origin` / `Sec-Fetch-Site` check, or a claim in the injected token does. Being transparent cuts the other way too — see [Inbound Authorization headers](#inbound-authorization-headers).
 
 #### Inbound Authorization headers
 
@@ -203,6 +205,8 @@ With `auth.injection.exchange.enabled` the pass-through is gone altogether: an i
 #### Cookie forwarding
 
 Only the cookie named in `auth.injection.sessionCookieName` is forwarded to the provider on the session grant call. Other cookies (analytics, CSRF tokens, third-party) do not reach the provider.
+
+**The upstream never receives the session cookie as a user agent sends it.** It is the credential tokens are minted from, and it outlives every token minted from it, so the upstream — and whatever logs or instruments its requests — is handed the token instead. Whenever the proxy forwards a request, every pair named `auth.injection.sessionCookieName` is removed from `Cookie`, whether it minted a token or was refused by the grammar check below; the other cookies go on, in order, joined by `; `, and the header is dropped when none is left. A `Cookie` header without the session cookie is forwarded byte for byte. Repeated `Cookie` header lines are one header by then (Node joins them with `; `), so a session cookie in any of them is removed. There is no setting to forward it: an upstream that needs the user's identity reads the token. Peer token handlers go further: Duende BFF removes the whole `Cookie` header from a proxied API call, and Curity's OAuth proxy removes cookie headers by default.
 
 The forwarded value must conform to the RFC 6265 section 4.1.1 `cookie-value` grammar: a run of `cookie-octet`s (printable US-ASCII excluding whitespace, DQUOTE, comma, semicolon, and backslash), optionally wrapped in exactly one surrounding DQUOTE pair. A surrounding DQUOTE pair is accepted and forwarded verbatim (quotes preserved) so the provider's own cookie parser decides how to read it. Anything else is refused — a `,`, whitespace, `\`, a control character, or a non-ASCII byte anywhere in the value, or a DQUOTE anywhere other than as that surrounding pair (interior or unbalanced), or an empty value: the request is forwarded without a minted `Authorization` and the provider is not called. With the exchange disabled, a client's own `Authorization` header still reaches the upstream unless `stripInboundAuthorization` is on; with the exchange enabled, an inbound `Authorization` is handed to the exchange before the cookie is considered, so it is exchanged or refused rather than passed through (see [Inbound Authorization headers](#inbound-authorization-headers)). Whitespace immediately after `=` is part of the value and is refused; SP / HTAB next to the `;` separator or at the ends of the header is separator slack and is ignored. `;` is the cookie-pair delimiter and never becomes part of a value. Default session stores (express-session `connect.sid`, hex / base64url / JWT session ids) always conform.
 
@@ -293,7 +297,7 @@ where `sent` is the instant the token request went out. `ttlSeconds` and `expire
 
 Active access tokens reside in process memory, and so does a configured client secret or private key, which also sits in the process environment. An attacker with read access to proxy process memory can extract all cached tokens and the proxy's own client credentials. Standard host-security practices apply (container isolation, minimal image, no unnecessary `ptrace` capabilities).
 
-Graceful shutdown does not clear the caches: the drain closes the listener and lets in-flight requests finish within `drainTimeoutMs` — during the drain a connection closes after its last answer, so a caller that keeps its connection alive does not hold the drain open; a caller that reuses the connection then may see one reset, for a request the proxy never read, which it can retry — after which the remaining connections are force-closed, and the cached tokens stay in memory until the process exits (#95 F21).
+Graceful shutdown does not clear the caches: the drain closes the listener and lets in-flight requests finish within 10 seconds, a fixed period with no setting (see [Shutdown and the grace period](#shutdown-and-the-grace-period)) — during the drain a connection closes after its last answer, so a caller that keeps its connection alive does not hold the drain open; a caller that reuses the connection then may see one reset, for a request the proxy never read, which it can retry — after which the remaining connections are force-closed, and the cached tokens stay in memory until the process exits (#95 F21).
 
 ### Provider rate limiting
 
@@ -316,10 +320,16 @@ Raise the budget on the provider side rather than working around it here:
 - `token-endpoint.requests` / `window` for `/oauth/token`, and `token-control.requests` / `window` for `/oauth/introspect`.
 - The counts live in the provider's store. In memory, each provider replica counts on its own, so a multi-replica provider wants a shared store such as Redis.
 
-Two things that make it worse:
+Three things that make it worse:
 
 - **Lowering `tokenCache.ttlSeconds` / `INTROSPECT_CACHE_TTL_SEC` multiplies the misses.** The shorter the TTL, the more of the same budget the same traffic spends. Their effects on revocation differ between injection and validation — see [Revocation and the access-token lifetime](#revocation-and-the-access-token-lifetime).
 - **Scaling out gives each instance its own cold cache.** A rollout therefore costs `instance count × active sessions` provider calls at once. Where the provider does not list the proxy, each instance also has its own count — unless several sit behind one NAT or egress gateway, present a single source address and share one.
+- **Random credentials from one anonymous client spend all of it.** This always applies in validation mode, and in injection mode when the provider does not list the proxy.
+  - Every call then counts against the instance's own source. Validation's introspection calls never carry `X-Forwarded-For`. The budget is about 60 cache misses a minute with the provider's defaults.
+  - Each random Bearer value, or each random session cookie in injection mode, is a new cache key. A client that sends random ones makes every request a miss and uses up the budget.
+  - After that, every legitimate credential not yet in the cache is answered `502` until the window resets.
+
+  What to do now: rate-limit requests that carry `Authorization` or the session cookie, per client address, at the ingress in front of the proxy. Counting each introspection against its caller is planned ([#188](https://github.com/o3co/auth.proxy/issues/188)), subject to change.
 
 ### Request body limit
 
@@ -352,6 +362,10 @@ The upstream's connection fields stay on its hop in the same way. Its response's
 Every request sent upstream carries `Via` with the proxy's own member after those the request arrived with (RFC 9110 §7.6.3): the HTTP version the proxy received it by and the pseudonym `auth.proxy` — `Via: 1.1 auth.proxy`, or `Via: 1.1 lb, 1.1 auth.proxy` behind a balancer that sent its own. It names no host or port, and it is always sent; there is no setting. An upstream that takes `Via` as the sign of a proxied request sees one: nginx, for one, neither compresses answers to such requests nor serves them its pre-compressed files (`gzip_static`) while `gzip_proxied` is `off`, its default, so set `gzip_proxied any;` on an nginx upstream to keep them compressed. The proxy adds no `Via` to its answers to the caller; an upstream's own is passed on like any other field.
 
 The caller's `Accept-Charset` reaches the upstream as it arrived; the proxy sends none of its own.
+
+### Request id (`x-request-id`)
+
+Every request gets one id, which every log line about it carries as `requestId`, which the proxy sends upstream and to the provider as `x-request-id`, and which it echoes to the caller on the answer. The caller's own `x-request-id` is reused when it is 1 to 200 characters drawn from letters, digits and `- . _ ~ + / =` — enough for a UUID, a ULID, base64 or base64url, or a W3C trace id. Any other value is replaced by a fresh id, as a missing one is: one longer than 200 characters, or one with whitespace, a control character, a quote, a backslash, `,`, `;`, any other punctuation or a non-ASCII character. Two `x-request-id` header lines are replaced too, since Node joins them with `, `. The request is not refused, and the replaced value is not logged; the caller learns the id in use from the answer's `x-request-id`. 200 is the bound Heroku's router applies to the same header.
 
 ### Client authentication with a private key (`private_key_jwt`)
 
@@ -421,6 +435,16 @@ pnpm run debug    # tsx watch mode
 make docker       # Build runtime image
 ```
 
+The runtime image (`--target runtime`):
+
+- **Runs as the unprivileged `node` user** (uid 1000). Its files, and `/home/node` that holds them, belong to root and are only read: the process cannot replace its own code or configuration. The image also works with a read-only root filesystem, which the operator turns on (`docker run --read-only`, Kubernetes `readOnlyRootFilesystem: true`).
+- **Listens on port 8080.** The image sets `HTTP_PORT=8080`, a port a non-root process can bind; the configuration's own default, 80, applies outside the image. Publish it with `-p <host-port>:8080`, or set `HTTP_PORT`.
+- **Runs `node dist/src/app.mjs` as PID 1**, with no package manager in between: SIGTERM reaches the proxy and starts the graceful shutdown, and stdout carries only the proxy's NDJSON lines. The image holds no pnpm (the base image's npm and corepack are present but never run), and starts without network access.
+- **Declares a `HEALTHCHECK`** that asks `GET /_healthcheck` on `127.0.0.1:${HTTP_PORT}` with the base image's busybox `wget`. It is a liveness probe: it says nothing about the provider or the upstream. If `HTTP_HOSTNAME` names an address that `127.0.0.1` does not reach, override the healthcheck — `localhost` among them, which resolves to `::1` inside the image. Kubernetes ignores `HEALTHCHECK`; give the pod its own probe on the same path.
+- **Ships no tests**: the build compiles `tsconfig.build.json`, which leaves `__tests__` out of `dist/`.
+
+Building needs Docker Engine 25 or later (the `HEALTHCHECK` uses `--start-interval`). CI builds the image on every push and pull request and runs it through `.github/scripts/image-smoke.sh`, which checks each of the above.
+
 ## Configuration
 
 A value the proxy cannot use as written — an empty or negative number, a URL with a path where an origin is required, a pattern that does not compile — stops it at boot, before it listens, with an error naming the key. A number is written as decimal digits.
@@ -430,13 +454,14 @@ Shared environment variables:
 | Environment Variable | Description |
 | --- | --- |
 | `AUTH_MODE` | **Required.** `"validation"` or `"injection"`. |
-| `HTTP_PORT` | HTTP listen port, an integer from 1 to 65535 (default: 80). |
+| `HTTP_PORT` | HTTP listen port, an integer from 1 to 65535 (default: 80; the Docker image sets 8080, see [Docker](#docker)). |
 | `HTTP_HOSTNAME` | HTTP listen hostname, not empty (default: 0.0.0.0). |
 | `HTTP_PATH_PREFIX` | Path prefix for proxy routes (default: /): `/`, or `/`-separated segments of letters, digits, `-`, `.`, `_` and `~` (`/api`, `/api/v1`), starting with `/`; a trailing `/` mounts the same as none. A request outside it, other than the healthcheck, is answered `404` with the text `Not Found`, without reading its body. CORS applies under it only. |
 | `HTTP_BODY_LIMIT_SIZE` | Request body size limit (default: 10mb). A number, optionally signed `+`, with an optional unit — `b`, `kb`, `mb`, `gb`, `tb`, `pb`; 1kb = 1024 bytes — or the proxy does not start. See [Request body limit](#request-body-limit). |
-| `UPSTREAM_BASEURL` | Upstream service origin — `scheme://host[:port]`, http or https, at most one trailing `/`, no path/query/fragment/userinfo (default: `http://localhost:3000`). The proxy forwards to its host and port only, so a path would be dropped. |
+| `UPSTREAM_BASEURL` | Upstream service origin — `scheme://host[:port]`, http or https, at most one trailing `/`, no path/query/fragment/userinfo (default: `http://localhost:3000`, for development only: always set it, see [Operations](#operations)). The proxy forwards to its host and port only, so a path would be dropped. |
 | `CORS_ORIGIN_PATTERN` | CORS origin regex pattern (optional). When set, the proxy answers CORS under `HTTP_PATH_PREFIX`: an origin the pattern matches is granted, with credentials (`Access-Control-Allow-Origin` set to it, `Access-Control-Allow-Credentials: true`); any other origin, and a request without one, is granted nothing — the proxy sets no `Access-Control-*` field on its answer, on a preflight or otherwise, and on a proxied answer the upstream's grant is dropped as below. A pattern that does not compile stops the proxy at boot. Anchor the pattern (`^…$`): an origin it matches is granted, and that includes `null`, the opaque origin of a sandboxed frame or a `file:` page, should the pattern match the text `null`. At boot the proxy warns, and still uses the pattern, when a top-level alternative is not anchored as `^…$` (`cors.origin_pattern_unanchored`), when the pattern admits `null` (`cors.origin_pattern_admits_null`) or an origin no deployment serves, `https://attacker.invalid` or `http://attacker.invalid` (`cors.origin_pattern_admits_foreign_origin`), when an unescaped `.` stands before a host name character (`cors.origin_pattern_unescaped_dot`), or when a wildcard runs straight into a host name, as `.*example\.com` admits `evilexample.com` (`cors.origin_pattern_unbounded_wildcard`); the check is syntactic, so it can miss a broad pattern and flag a narrow one. Every answer there carries `Origin` in `Vary` (or `Vary: *` from the upstream), but one to an `OPTIONS` that is not a preflight. A preflight — `OPTIONS` with `Origin` and `Access-Control-Request-Method` — is answered `204` before the mode, and is neither forwarded nor logged; any other `OPTIONS` is an ordinary request. The grant is the proxy's alone: an upstream's `Access-Control-Allow-Origin` and `Access-Control-Allow-Credentials` never reach the caller. Unset or empty, the proxy does no CORS and passes the upstream's on. |
 | `LOG_LEVEL` | pino log level — `trace`, `debug`, `info`, `warn`, `error`, `fatal` or `silent` (default: `info`). Read directly from the environment when the logger is created, not through the HOCON config. Output is NDJSON on stdout. In both modes, every line about a request — `incoming request` and each decision — carries the request id as `requestId` and an `event` named `injection.*` or `validation.*`. |
+| `DEBUG` | Not a setting of the proxy: read by the `debug` package its libraries use, and written to stderr outside the logger. Leave it unset. `DEBUG=express-http-proxy` prints live credentials; see [Logs and `DEBUG`](#logs-and-debug). |
 
 Validation mode:
 
@@ -446,7 +471,7 @@ Validation mode:
 | `CLIENT_SECRET` | Client secret for introspection auth (`client_secret_basic`; optional, with `CLIENT_ID`). |
 | `CLIENT_KEY` | Private JWK for introspection auth (`private_key_jwt`; optional, with `CLIENT_ID` and `VALIDATION_PROVIDER_ISSUER`). See [Client authentication with a private key](#client-authentication-with-a-private-key-private_key_jwt). |
 | `VALIDATION_PROVIDER_ISSUER` | The provider's issuer identifier, the client assertion's audience. **Required** with `CLIENT_KEY`, and refused without it. |
-| `INTROSPECT_URL` | Introspection endpoint URL: absolute `http(s)`, without userinfo. Anything else is refused at boot, naming the key — the proxy authenticates with its client credentials, never with the URL. |
+| `INTROSPECT_URL` | Introspection endpoint URL (default: `http://localhost:3000/oauth/introspect`, for development only: always set it, see [Operations](#operations)): absolute `http(s)`, without userinfo. Anything else is refused at boot, naming the key — the proxy authenticates with its client credentials, never with the URL. |
 | `VALIDATION_REALM` | RFC 6750 `realm` for `WWW-Authenticate` (optional; at most 256 printable ASCII characters, without `"`, `\` or surrounding spaces). Unset, a request using another auth scheme gets no challenge. |
 | `INTROSPECT_CACHE_TTL_SEC` | Cache TTL in seconds, an integer of at least 0; `0` turns the cache off (default: 30). |
 | `INTROSPECT_CACHE_MAX_ENTRIES` | Cache max entries, at least 1 (default: 10000). |
@@ -456,7 +481,7 @@ Injection mode:
 
 | Environment Variable | Description |
 | --- | --- |
-| `INJECTION_PROVIDER_ORIGIN` | Provider origin — `scheme://host[:port]`, no path/query/fragment, no userinfo, http or https only (default: `http://localhost:3000`). |
+| `INJECTION_PROVIDER_ORIGIN` | Provider origin — `scheme://host[:port]`, no path/query/fragment, no userinfo, http or https only (default: `http://localhost:3000`, for development only: always set it, see [Operations](#operations)). |
 | `INJECTION_CLIENT_ID` | **Required.** OAuth `client_id`. |
 | `INJECTION_CLIENT_KEY` | Private JWK for the session grant (`private_key_jwt`; optional). Unset, the session grant is a public client. |
 | `INJECTION_PROVIDER_ISSUER` | The provider's issuer identifier, the client assertion's audience. **Required** with `INJECTION_CLIENT_KEY` or an enabled exchange's `INJECTION_EXCHANGE_CLIENT_KEY`, and refused without either. |
@@ -477,6 +502,92 @@ Injection mode:
 | `INJECTION_EXCHANGE_AUDIENCE` | `audience` sent with the exchange (optional). |
 | `INJECTION_EXCHANGE_RESOURCE` | RFC 8707 `resource` sent with the exchange (optional). |
 | `INJECTION_EXCHANGE_ALLOWED_ISSUERS` | Optional prefilter on the unverified `iss`: a whitespace-separated list (default: empty = off). |
+
+## Operations
+
+What a deployment needs beyond the settings above. For the image itself, see [Docker](#docker).
+
+### Always set the provider and upstream URLs
+
+The shipped `config/application.conf` gives these keys development defaults:
+
+| Variable | Default |
+| --- | --- |
+| `UPSTREAM_BASEURL` | `http://localhost:3000` |
+| `INTROSPECT_URL` | `http://localhost:3000/oauth/introspect` |
+| `INJECTION_PROVIDER_ORIGIN` | `http://localhost:3000` |
+
+The defaults suit a provider and an upstream on a developer's machine. Inside a container, `localhost` is the container (or pod) itself, so a deployment that leaves them unset sends its traffic to the proxy itself or to nothing. Set every one the mode uses, in every deployment.
+
+### The configuration file
+
+The entry point, `dist/src/app.mjs`, reads `../config/application.conf` relative to itself. In the image that is `/home/node/dist/config/application.conf`.
+
+- To replace the file, mount over that path.
+- A file mounted at `/home/node/config/application.conf`, where the source tree keeps it, is never read.
+- A replacement file is the whole configuration. Keep the shipped file's `key = ${?ENV}` lines for every key you still want to set from the environment.
+- The mounted file must be readable by the image's user.
+
+### Liveness probe
+
+`GET /_healthcheck` answers `200 {"status":"ok"}`.
+
+- It is mounted at the root, outside `HTTP_PATH_PREFIX`.
+- It is never authenticated or forwarded, and carries no request id.
+- It is a liveness probe: it answers while the provider or the upstream is down, so do not use it as readiness.
+
+### Shutdown and the grace period
+
+On SIGTERM or SIGINT the proxy stops accepting connections and gives in-flight requests **10 seconds** to finish. The period is fixed in `src/app.mts`; there is no setting for it.
+
+- A clean drain exits `0`.
+- Past the 10 seconds, the remaining connections are cut and the process exits `1`.
+
+Keep the orchestrator's grace period above 10 s, so the proxy finishes its drain before SIGKILL:
+
+- Kubernetes `terminationGracePeriodSeconds` defaults to 30 s, which is enough. The proxy refuses new connections as soon as SIGTERM arrives, while the pod may still receive traffic until its endpoint is removed; a short `preStop` sleep covers that gap.
+- compose `stop_grace_period` and `docker stop` default to 10 s, the same as the drain, which leaves no margin. Raise it, for example `stop_grace_period: 15s`.
+
+A request that runs longer than 10 s at shutdown, such as a long download or a server-sent event stream, is cut.
+
+### Memory: request bodies are buffered
+
+A request the mode forwards has its body read whole into memory before it goes upstream, up to `HTTP_BODY_LIMIT_SIZE` (default 10 MB). In injection mode that includes requests without a session cookie. Answers are streamed, not buffered.
+
+Peak memory is therefore roughly the number of concurrent forwarded requests with a body × `HTTP_BODY_LIMIT_SIZE`: 100 concurrent 10 MB uploads hold about 1 GB. To keep it bounded:
+
+- size the container's memory limit for the concurrency you admit;
+- lower `HTTP_BODY_LIMIT_SIZE` to what the upstream really accepts;
+- cap concurrency at the ingress.
+
+### Keep-alive behind a load balancer
+
+The proxy keeps a caller's connection open between requests and closes it once it has been idle for about 5 seconds, advertised as `Keep-Alive: timeout=5`. That is Node's default keep-alive timeout, and the proxy has no setting for it.
+
+A load balancer that pools connections to the proxy and keeps one idle for longer can send a request just as the proxy closes that connection, and answers that request `502`. What to do depends on the balancer:
+
+- **nginx:** set `keepalive_timeout` in the `upstream` block (default 60 s) below 5 s. It only closes idle pooled connections, so lowering it is safe.
+- **A balancer whose one idle timeout also bounds a request in flight**, such as AWS ALB (default 60 s): lowering it below 5 s fails every request that is silent for that long with `504`. There is no safe setting today. Expect an occasional `502` on a reused connection, which a retry of an idempotent request absorbs. A keep-alive setting on the proxy, to set above the balancer's timeout, is planned ([#197](https://github.com/o3co/auth.proxy/issues/197)), subject to change.
+
+### CORS preflight answers
+
+With `CORS_ORIGIN_PATTERN` set, a preflight from an origin the pattern admits is answered `204` with:
+
+- `Access-Control-Allow-Origin` set to that origin, and `Access-Control-Allow-Credentials: true`;
+- `Access-Control-Allow-Methods: GET,HEAD,PUT,PATCH,POST,DELETE`, a fixed list;
+- `Access-Control-Allow-Headers` echoing the preflight's `Access-Control-Request-Headers`. Every header is allowed for an admitted origin, so the pattern is the only gate;
+- no `Access-Control-Max-Age`.
+
+Without `Max-Age`, browsers cache a preflight result for 5 seconds only, the Fetch standard's default. A page that keeps sending non-simple requests therefore preflights again every few seconds. The proxy answers each preflight itself, without reaching the provider or the upstream, but each one is a round trip for the browser.
+
+### Logs and `DEBUG`
+
+The proxy's own log lines (NDJSON on stdout) never carry a token, a cookie, a client secret or a key. Errors pass through an allowlist (`src/logger.mts`), and the description of each event in this README names what it leaves out.
+
+The `DEBUG` environment variable is outside that guarantee. It turns on the `debug` package that `express-http-proxy` and Express use, which writes to stderr unfiltered. **`DEBUG=express-http-proxy` (or `DEBUG=*`) prints the full outbound request options of every proxied request.** That includes the `Authorization` header (the caller's token or the token the proxy minted) and the cookies.
+
+- Never set `DEBUG` in a deployment that handles real credentials.
+- Treat the stderr of one that did as holding secrets.
 
 ## Related Projects
 

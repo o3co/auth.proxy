@@ -39,6 +39,7 @@ import { bodyLimitBytes, createBodyLimitGuard } from "../../router/body-limit.mj
 import { createErrorHandler } from "../../router/error-handler.mjs";
 import { createUpstreamProxy } from "../../router/upstream.mjs";
 import { createSingleFlight } from "../../single-flight.mjs";
+import { withoutCookie } from "./cookie-extractor.mjs";
 import { decideInjection, type InjectionDeps } from "./decision.mjs";
 import {
 	decideExchange,
@@ -106,14 +107,35 @@ const callerOf = (req: Request, requestSource: (req: Request) => RequestSource):
 });
 
 /**
+ * Removes the `name` pairs from `req.headers.cookie`, and the header when none
+ * is left. `delete`, not `= undefined`: express-http-proxy copies own
+ * enumerable properties, and Node's `setHeader` throws
+ * ERR_HTTP_INVALID_HEADER_VALUE on an undefined value.
+ */
+const removeSessionCookie = (req: Request, name: string): void => {
+	const rest = withoutCookie(req.headers.cookie, name);
+	if (rest === undefined) {
+		delete req.headers.cookie;
+	} else {
+		req.headers.cookie = rest;
+	}
+};
+
+/**
  * Reads the request, lets `decideInjection` decide — and, on its
  * `exchange` hand-off, `decideExchange` — then applies the outcome.
  *
- * `inject` and `forward_stripped` act on `req.headers` before the upstream
- * stage, not in the proxy's `proxyReqOptDecorator`: express-http-proxy copies
- * `req.headers` wholesale into the outbound request, so the decorator alone
- * would leave the original copy in place. An outcome kind this switch does not
- * know throws rather than leaving the request unanswered and the socket held.
+ * Every outcome that forwards removes the session cookie from `Cookie` first:
+ * it is the credential tokens are minted from, longer-lived than any of them,
+ * and the upstream is handed a token instead. The other cookies are the
+ * upstream's and go on.
+ *
+ * The outcomes act on `req.headers` before the upstream stage, not in the
+ * proxy's `proxyReqOptDecorator`: express-http-proxy copies `req.headers`
+ * wholesale into the outbound request, so the decorator alone would leave the
+ * original copy in place. Node has already joined repeated `Cookie` lines into
+ * the one value. An outcome kind this switch does not know throws rather than
+ * leaving the request unanswered and the socket held.
  */
 const injectionMiddleware =
 	(
@@ -137,14 +159,15 @@ const injectionMiddleware =
 				: decided;
 		switch (outcome.kind) {
 			case "forward":
+				removeSessionCookie(req, deps.cfg.sessionCookieName);
 				return next();
 			case "forward_stripped":
-				// `delete`, not `= undefined`: express-http-proxy copies own
-				// enumerable properties, and Node's `setHeader` throws
-				// ERR_HTTP_INVALID_HEADER_VALUE on an undefined value.
+				removeSessionCookie(req, deps.cfg.sessionCookieName);
+				// `delete`, for the reason given on `removeSessionCookie`.
 				delete req.headers.authorization;
 				return next();
 			case "inject":
+				removeSessionCookie(req, deps.cfg.sessionCookieName);
 				req.headers.authorization = `Bearer ${outcome.token}`;
 				return next();
 			case "respond":
