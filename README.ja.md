@@ -414,17 +414,19 @@ make docker       # ランタイムイメージのビルド
 
 ## 設定
 
+そのままでは使えない値 — 空や負の数、オリジンを求めるところにパスを持つ URL、コンパイルできないパターン — は、リッスンの前、起動時にキーを名指すエラーでプロキシを止める。数は 10 進の数字で書く。
+
 共通環境変数:
 
 | 環境変数 | 説明 |
 | --- | --- |
 | `AUTH_MODE` | **必須。** `"validation"` または `"injection"`。 |
-| `HTTP_PORT` | HTTP リッスンポート（デフォルト: 80。Docker イメージは 8080 を設定する。[Docker](#docker) を参照）。 |
-| `HTTP_HOSTNAME` | HTTP リッスンホスト名（デフォルト: 0.0.0.0）。 |
-| `HTTP_PATH_PREFIX` | プロキシルートのパスプレフィックス（デフォルト: /）。その外のリクエストは、ヘルスチェックを除き、ボディを読まずに `404`（テキスト `Not Found`）で応答する。CORS はその内側にだけ適用する。 |
+| `HTTP_PORT` | HTTP リッスンポート。1 から 65535 の整数（デフォルト: 80。Docker イメージは 8080 を設定する。[Docker](#docker) を参照）。 |
+| `HTTP_HOSTNAME` | HTTP リッスンホスト名。空は不可（デフォルト: 0.0.0.0）。 |
+| `HTTP_PATH_PREFIX` | プロキシルートのパスプレフィックス（デフォルト: /）。`/`、または英字・数字・`-`・`.`・`_`・`~` からなるセグメントを `/` でつないだもの（`/api`、`/api/v1`）で、`/` で始める。末尾の `/` は無いのと同じにマウントされる。その外のリクエストは、ヘルスチェックを除き、ボディを読まずに `404`（テキスト `Not Found`）で応答する。CORS はその内側にだけ適用する。 |
 | `HTTP_BODY_LIMIT_SIZE` | リクエストボディサイズ上限（デフォルト: 10mb）。数値（`+` の符号を付けてもよい）に単位 `b`・`kb`・`mb`・`gb`・`tb`・`pb` を付けてもよい（1kb = 1024 バイト）。それ以外ではプロキシは起動しない。[リクエストボディの上限](#リクエストボディの上限)を参照。 |
-| `UPSTREAM_BASEURL` | アップストリームサービスのベース URL。 |
-| `CORS_ORIGIN_PATTERN` | CORS オリジン正規表現パターン（任意）。設定すると、プロキシは `HTTP_PATH_PREFIX` の内側で CORS に応答する。パターンに一致するオリジンには資格情報付きで許可を与える（`Access-Control-Allow-Origin` にそのオリジン、`Access-Control-Allow-Credentials: true`）。それ以外のオリジンと、オリジンのないリクエストには何も許可しない。プロキシはその応答に、プリフライトでもそれ以外でも `Access-Control-*` フィールドを付けず、プロキシした応答では後述のとおり上流の許可を落とす。パターンは `^…$` で固定する。一致したオリジンには許可を与えるので、パターンが文字列 `null` に一致すれば、サンドボックス化されたフレームや `file:` ページの不透明なオリジン `null` にも許可を与えてしまう。`HTTP_PATH_PREFIX` の内側での応答の `Vary` には、プリフライトでない `OPTIONS` への応答を除き、`Origin` を入れる（上流が `Vary: *` を返したときは `*`）。プリフライト — `Origin` と `Access-Control-Request-Method` を持つ `OPTIONS` — にはモードより前に `204` で応答し、転送もログ出力もしない。それ以外の `OPTIONS` は通常のリクエストである。許可を与えるのはプロキシだけで、上流の `Access-Control-Allow-Origin` と `Access-Control-Allow-Credentials` は呼び出し元に届かない。未設定または空なら、プロキシは CORS を扱わず、上流のものをそのまま渡す。 |
+| `UPSTREAM_BASEURL` | アップストリームサービスのオリジン — `scheme://host[:port]`、http または https、末尾の `/` は 1 つまで、パス／クエリ／フラグメント／userinfo 不可（デフォルト: `http://localhost:3000`）。プロキシはそのホストとポートにだけ転送するので、パスは落ちてしまう。 |
+| `CORS_ORIGIN_PATTERN` | CORS オリジン正規表現パターン（任意）。設定すると、プロキシは `HTTP_PATH_PREFIX` の内側で CORS に応答する。パターンに一致するオリジンには資格情報付きで許可を与える（`Access-Control-Allow-Origin` にそのオリジン、`Access-Control-Allow-Credentials: true`）。それ以外のオリジンと、オリジンのないリクエストには何も許可しない。プロキシはその応答に、プリフライトでもそれ以外でも `Access-Control-*` フィールドを付けず、プロキシした応答では後述のとおり上流の許可を落とす。コンパイルできないパターンは起動時にプロキシを止める。パターンは `^…$` で固定する。一致したオリジンには許可を与えるので、パターンが文字列 `null` に一致すれば、サンドボックス化されたフレームや `file:` ページの不透明なオリジン `null` にも許可を与えてしまう。起動時、トップレベルの選択肢が `^…$` で固定されていないとき（`cors.origin_pattern_unanchored`）、パターンが `null`（`cors.origin_pattern_admits_null`）やどの導入先も持たないオリジン `https://attacker.invalid` または `http://attacker.invalid`（`cors.origin_pattern_admits_foreign_origin`）に一致するとき、エスケープしていない `.` がホスト名の文字の前にあるとき（`cors.origin_pattern_unescaped_dot`）、ワイルドカードがそのままホスト名に続くとき — `.*example\.com` は `evilexample.com` にも一致する —（`cors.origin_pattern_unbounded_wildcard`）は、警告したうえでそのパターンを使う。構文上の検査なので、広いパターンを見逃すことも、狭いパターンを警告することもある。`HTTP_PATH_PREFIX` の内側での応答の `Vary` には、プリフライトでない `OPTIONS` への応答を除き、`Origin` を入れる（上流が `Vary: *` を返したときは `*`）。プリフライト — `Origin` と `Access-Control-Request-Method` を持つ `OPTIONS` — にはモードより前に `204` で応答し、転送もログ出力もしない。それ以外の `OPTIONS` は通常のリクエストである。許可を与えるのはプロキシだけで、上流の `Access-Control-Allow-Origin` と `Access-Control-Allow-Credentials` は呼び出し元に届かない。未設定または空なら、プロキシは CORS を扱わず、上流のものをそのまま渡す。 |
 | `LOG_LEVEL` | pino のログレベル — `trace`・`debug`・`info`・`warn`・`error`・`fatal`・`silent`（デフォルト: `info`）。HOCON 設定を経由せず、ロガー生成時に環境変数から直接読む。出力は stdout への NDJSON。どちらのモードでも、リクエストに関する行 — `incoming request` と各判定 — はリクエスト ID を `requestId` に、`injection.*` または `validation.*` という名前の `event` を持つ。 |
 
 バリデーションモード:
@@ -437,9 +439,9 @@ make docker       # ランタイムイメージのビルド
 | `VALIDATION_PROVIDER_ISSUER` | プロバイダーの issuer 識別子。クライアントアサーションの audience。`CLIENT_KEY` を設定する場合は**必須**で、設定しない場合は拒否される。 |
 | `INTROSPECT_URL` | イントロスペクションエンドポイント URL。userinfo を含まない絶対 `http(s)` URL であること。それ以外はキー名を示して起動時に失敗する — プロキシは URL ではなく自身のクライアント資格情報で認証する。 |
 | `VALIDATION_REALM` | `WWW-Authenticate` の RFC 6750 `realm`（任意。印字可能 ASCII で 256 文字以内、`"`・`\`・前後の空白を含まない）。未設定なら、別の認証方式を使ったリクエストにはチャレンジを返さない。 |
-| `INTROSPECT_CACHE_TTL_SEC` | キャッシュ TTL（秒、デフォルト: 30）。 |
-| `INTROSPECT_CACHE_MAX_ENTRIES` | キャッシュ最大エントリ数（デフォルト: 10000）。 |
-| `INTROSPECT_TIMEOUT_MS` | イントロスペクション HTTP タイムアウト（デフォルト: 5000）。 |
+| `INTROSPECT_CACHE_TTL_SEC` | キャッシュ TTL（秒、0 以上の整数、デフォルト: 30）。`0` でキャッシュを使わない。 |
+| `INTROSPECT_CACHE_MAX_ENTRIES` | キャッシュ最大エントリ数（1 以上、デフォルト: 10000）。 |
+| `INTROSPECT_TIMEOUT_MS` | イントロスペクション HTTP タイムアウト（ミリ秒、1 から 2147483647、デフォルト: 5000）。 |
 
 インジェクションモード:
 
@@ -454,10 +456,10 @@ make docker       # ランタイムイメージのビルド
 | `INJECTION_STRIP_INBOUND_AUTHORIZATION` | `"true"` / `"false"`（デフォルト: `false`）。プロキシがトークンを発行しなかったリクエストの受信 `Authorization` ヘッダーを削除する。それ以外の値は起動時に失敗する。[受信 Authorization ヘッダー](#受信-authorization-ヘッダー)を参照。 |
 | `INJECTION_PUBLIC_ORIGIN` | ブラウザーがこのプロキシに到達するオリジン。`http` か `https` の `scheme://host[:port]` で、末尾の `/` は 1 つまで可（任意）。それ以外（パス・クエリ・フラグメント・userinfo。空のものや、`/a/..` のように正規化で消えるものも含む）は起動しない。ブラウザーが `Origin` を送る形で保持する: スキームとホストは小文字、デフォルトポートと末尾の `/` は落とす。そのスキームで届き、`Origin` がこれと一致するリクエストはセッショントークンキャッシュから答えられる。未設定なら、`https` で届き、`Origin` もオリジンを示す `Referer` もなく、`Sec-Fetch-Site: same-origin` を送ったリクエストだけ。ブラウザーはデフォルトで同一オリジンの `Referer` を送るので、設定しないとセッションキャッシュは事実上効かない。そのとき起動時に `injection.public_origin_unset` を warn で出す。[キャッシュ動作](#キャッシュ動作)と[auth.provider のセッショングラントを呼ぶ](#authprovider-のセッショングラントを呼ぶ)を参照。 |
 | `INJECTION_TRUSTED_PROXIES` | セッショングラントと交換でリクエストの出どころをプロバイダーに伝えるとき、このプロキシが `X-Forwarded-For` と `X-Forwarded-Proto` を信じる前段のプロキシ。IP アドレスと `アドレス/プレフィックス` の範囲を空白区切りで並べる（デフォルト: 空 = なし。ソケットの接続元とスキームを送る）。ポート、IPv6 のゾーン ID、ホスト名は起動時に失敗する。1 つで全 IPv4 アドレスまたは全 IPv6 アドレスを信頼するエントリ（`0.0.0.0/0`、`::/0`、または `::ffff:0:0/96` 自身のように `::ffff:0:0/96` を含む IPv6 範囲）は、すべてのクライアントのヘッダーを信じることになり、警告（`injection.trusted_proxies_trust_all`）を出して起動する。複数のエントリを合わせて初めて全アドレスを覆う場合は検出しない。このプロキシの前で TLS を終端するロードバランサーやイングレスを列挙する。列挙しないとプロバイダーには `http` と伝わり、`INJECTION_PUBLIC_ORIGIN` が https ならセッションキャッシュは何も答えない。[auth.provider のセッショングラントを呼ぶ](#authprovider-のセッショングラントを呼ぶ)を参照。 |
-| `INJECTION_TOKEN_CACHE_TTL_SEC` | トークンキャッシュ TTL（秒、デフォルト: 60）。セッションキャッシュと交換キャッシュの両方に適用。 |
-| `INJECTION_TOKEN_CACHE_MAX_ENTRIES` | トークンキャッシュ最大エントリ数（デフォルト: 10000）。セッションキャッシュと交換キャッシュそれぞれに適用。 |
-| `INJECTION_TOKEN_CACHE_SAFETY_MARGIN_SEC` | クロックドリフト安全マージン（秒、デフォルト: 5）。両方のキャッシュに適用。 |
-| `INJECTION_TIMEOUT_MS` | プロバイダー HTTP タイムアウト（デフォルト: 5000）。セッショングラントと交換の両方に適用。 |
+| `INJECTION_TOKEN_CACHE_TTL_SEC` | トークンキャッシュ TTL（秒、1 以上、デフォルト: 60）。セッションキャッシュと交換キャッシュの両方に適用。 |
+| `INJECTION_TOKEN_CACHE_MAX_ENTRIES` | トークンキャッシュ最大エントリ数（1 以上、デフォルト: 10000）。セッションキャッシュと交換キャッシュそれぞれに適用。 |
+| `INJECTION_TOKEN_CACHE_SAFETY_MARGIN_SEC` | クロックドリフト安全マージン（秒、0 以上で TTL 未満、デフォルト: 5）。両方のキャッシュに適用。 |
+| `INJECTION_TIMEOUT_MS` | プロバイダー HTTP タイムアウト（ミリ秒、1 から 2147483647、デフォルト: 5000）。セッショングラントと交換の両方に適用。 |
 | `INJECTION_EXCHANGE_ENABLED` | `"true"` / `"false"`（デフォルト: `false`）。受信 `Authorization: Bearer <JWT>` をプロバイダーで交換する（RFC 7523 jwt-bearer）。それ以外の値は起動時に失敗する。[外部クレデンシャル交換](#外部クレデンシャル交換authinjectionexchange)を参照。 |
 | `INJECTION_EXCHANGE_CLIENT_ID` | 交換でプロキシが名乗る `client_id`。交換を有効にした場合は**必須**。 |
 | `INJECTION_EXCHANGE_CLIENT_SECRET` | そのクライアントシークレット（`client_secret_basic`）。交換を有効にした場合、これと `INJECTION_EXCHANGE_CLIENT_KEY` のちょうど一方が**必須**。 |
