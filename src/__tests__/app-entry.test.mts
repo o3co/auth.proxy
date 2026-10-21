@@ -45,6 +45,10 @@ const INJECTION = {
 const UNUSABLE_JWK = { ...generateKeyPairSync("ed25519").privateKey.export({ format: "jwk" }), alg: "HS256" };
 const USABLE_KEY = JSON.stringify(generateKeyPairSync("ed25519").privateKey.export({ format: "jwk" }));
 
+/** The names of the `Access-Control-*` fields an answer carries. */
+const accessControlFields = (headers: Record<string, unknown>): string[] =>
+	Object.keys(headers).filter((name) => name.startsWith("access-control-"));
+
 /** A configuration the documentation says is refused at boot. */
 interface Refusal {
 	name: string;
@@ -269,7 +273,7 @@ describe("the entry point's mounts: healthcheck at the root, the mode router und
 		});
 
 		expect(res.status).toBe(200);
-		expect(res.headers["access-control-allow-origin"]).toBeUndefined();
+		expect(accessControlFields(res.headers)).toEqual([]);
 		expect(upstream.receivedFor("entry-no-cors")).toHaveLength(1);
 	});
 
@@ -304,7 +308,7 @@ describe("the entry point's mounts: healthcheck at the root, the mode router und
 		});
 
 		expect(res.status).toBe(204);
-		expect(res.headers["access-control-allow-origin"]).toBeUndefined();
+		expect(accessControlFields(res.headers)).toEqual([]);
 		expect(upstream.receivedFor("entry-preflight-refused")).toEqual([]);
 	});
 
@@ -382,7 +386,7 @@ describe("the entry point's mounts: healthcheck at the root, the mode router und
 
 		expect(res.status).toBe(200);
 		expect(upstream.receivedFor("entry-fields-refused")).toHaveLength(1);
-		expect(res.headers["access-control-allow-origin"]).toBeUndefined();
+		expect(accessControlFields(res.headers)).toEqual([]);
 	});
 
 	it("announces no X-Powered-By on an answer of its own", async () => {

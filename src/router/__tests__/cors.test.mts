@@ -20,6 +20,10 @@ const app = (pattern: string | null) =>
 
 const PATTERN = "^https://app\\.example$";
 
+/** The names of the `Access-Control-*` fields an answer carries. */
+const accessControlFields = (headers: Record<string, unknown>): string[] =>
+	Object.keys(headers).filter((name) => name.startsWith("access-control-"));
+
 describe("createCors", () => {
 	describe("with a pattern", () => {
 		it("answers a preflight 204 itself, granting an admitted origin with credentials", async () => {
@@ -37,14 +41,29 @@ describe("createCors", () => {
 			expect(res.headers["access-control-allow-methods"].split(",")).not.toContain("OPTIONS");
 		});
 
-		it("answers a preflight from an origin the pattern does not admit 204, granting nothing", async () => {
+		it("answers a preflight from an origin the pattern does not admit 204, with no Access-Control-* field", async () => {
 			const res = await request(app(PATTERN))
 				.options("/resource")
 				.set("Origin", "https://evil.example")
-				.set("Access-Control-Request-Method", "PUT");
+				.set("Access-Control-Request-Method", "PUT")
+				.set("Access-Control-Request-Headers", "authorization");
 
 			expect(res.status).toBe(204);
-			expect(res.headers["access-control-allow-origin"]).toBeUndefined();
+			expect(res.text).toBe("");
+			expect(accessControlFields(res.headers)).toEqual([]);
+			expect(res.headers.vary).toBe("Origin");
+		});
+
+		it.each([
+			["from an origin the pattern does not admit", { Origin: "https://evil.example" }],
+			["without Origin", {}],
+		])("sends no Access-Control-* field on a request %s, varies by Origin, and passes it on", async (_label, headers) => {
+			const res = await request(app(PATTERN)).put("/resource").set(headers);
+
+			expect(res.status).toBe(200);
+			expect(res.text).toBe("reached by PUT");
+			expect(accessControlFields(res.headers)).toEqual([]);
+			expect(res.headers.vary).toBe("Origin");
 		});
 
 		it.each([

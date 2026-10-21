@@ -488,19 +488,9 @@ describe("createUpstreamProxy on the wire, fields both the proxy and the upstrea
 		expect(res.headers["access-control-expose-headers"]).toBe("X-Total");
 	});
 
-	// For an origin it refuses, `cors` sets Vary: Origin and
-	// Access-Control-Allow-Credentials: true, and no Access-Control-Allow-Origin.
+	// For an origin it refuses, the proxy's CORS sets Vary: Origin and no grant.
 	it("drops the upstream's CORS grant while the proxy answers CORS, though the proxy granted nothing", async () => {
-		const refused = { "Access-Control-Allow-Credentials": "true", Vary: "Origin" };
-		const res = await request(proxyApp(PATTERN, refused)).get("/resource");
-
-		expect(res.status).toBe(200);
-		expect(res.headers["access-control-allow-origin"]).toBeUndefined();
-		expect(res.headers["access-control-allow-credentials"]).toBe("true");
-	});
-
-	it("drops the upstream's CORS grant while the proxy answers CORS, when the proxy set no field at all", async () => {
-		const res = await request(proxyApp(PATTERN, {})).get("/resource");
+		const res = await request(proxyApp(PATTERN, { Vary: "Origin" })).get("/resource");
 
 		expect(res.status).toBe(200);
 		expect(res.headers["access-control-allow-origin"]).toBeUndefined();

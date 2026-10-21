@@ -17,10 +17,10 @@
 /**
  * CORS, which the proxy answers itself when `http.cors.origin.pattern` is set
  * and `app.mts` mounts under `http.pathPrefix`, ahead of the mode router. An
- * origin the pattern admits is granted, with credentials; any other is
- * granted nothing — no `Access-Control-Allow-Origin`, though `cors` still
- * sends `Access-Control-Allow-Credentials: true`. Without a pattern the proxy
- * does no CORS.
+ * origin the pattern admits is granted, with credentials. Any other origin,
+ * and a request without one, is granted nothing: its answer carries no
+ * `Access-Control-*` field at all, on a preflight or otherwise, only
+ * `Vary: Origin`. Without a pattern the proxy does no CORS.
  *
  * Only a CORS preflight (Fetch: `OPTIONS` with `Origin` and
  * `Access-Control-Request-Method`) is answered here, `204`, before the mode
@@ -34,9 +34,7 @@
  * While the proxy answers CORS, the grant on an answer is the proxy's alone:
  * the upstream stage drops the upstream's `Access-Control-Allow-Origin` and
  * `Access-Control-Allow-Credentials` (`proxyOwnedCorsFields`), whether or not
- * the proxy granted the origin, so the upstream cannot widen the pattern —
- * an upstream's `Access-Control-Allow-Origin` beside the proxy's
- * `Access-Control-Allow-Credentials` would grant an origin it refused.
+ * the proxy granted the origin, so the upstream cannot widen the pattern.
  */
 
 import type { IncomingMessage } from "node:http";
@@ -73,7 +71,16 @@ const isPreflight = (req: IncomingMessage): boolean =>
 export const createCors = (config: CorsConfig): RequestHandler => {
 	const pattern = corsPattern(config);
 	if (pattern === null) return (_req, _res, next) => next();
-	const answer = cors({ origin: new RegExp(pattern), credentials: true });
+	const origin = new RegExp(pattern);
+	const granted: cors.CorsOptions = { origin, credentials: true };
+	// `cors` would still send `Access-Control-Allow-Credentials` and, on a
+	// preflight, the allowed methods and headers to an origin it refuses; empty
+	// lists and no credentials leave it only `Vary: Origin` and the `204`.
+	const refused: cors.CorsOptions = { origin, credentials: false, methods: [], allowedHeaders: [] };
+	const answer = cors((req, done) => {
+		const requestOrigin = req.headers.origin;
+		done(null, requestOrigin !== undefined && origin.test(requestOrigin) ? granted : refused);
+	});
 	return (req, res, next) => {
 		if (req.method === "OPTIONS" && !isPreflight(req)) return next();
 		answer(req, res, next);
