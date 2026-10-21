@@ -353,6 +353,24 @@ Every request sent upstream carries `Via` with the proxy's own member after thos
 
 The caller's `Accept-Charset` reaches the upstream as it arrived; the proxy sends none of its own.
 
+### Where the request came from, on the upstream request
+
+The proxy tells the upstream where each request came from as this hop saw it, so that a caller cannot choose the address or host the upstream reads:
+
+| Field | What the upstream receives |
+| --- | --- |
+| `X-Forwarded-For` | The entries the request arrived with, then the address of the proxy's peer (`unknown` if the connection has no peer any more), as nginx's `$proxy_add_x_forwarded_for` does: `X-Forwarded-For: 203.0.113.9, 10.0.0.5` behind a balancer at `10.0.0.5` that wrote the client's `203.0.113.9`. |
+| `X-Real-IP` | The address of the proxy's peer, in place of the caller's. |
+| `X-Forwarded-Host` | The `Host` the proxy received, in place of the caller's; none if the request had no `Host`. The upstream's own `Host` is the one in `UPSTREAM_BASEURL`. |
+| `Forwarded` | Nothing: the caller's is not sent on. It carries a host and a scheme as well as an address, and readers take them from its first element, which the caller wrote. |
+| `X-Forwarded-Proto` | What the request arrived with, unchanged. The proxy listens on plain HTTP and cannot see the client's scheme. Only the hop that terminates TLS in front of it can state the scheme. |
+
+An upstream should trust only the proxy's hop:
+
+- **Address.** Count the proxy as one trusted hop in its `X-Forwarded-For` handling, plus one for each balancer in front of the proxy that appends to it. For example, Express's `trust proxy` is `2` behind one balancer. Read the client from that entry, counted from the right, never from the left end. `X-Real-IP` is the proxy's peer, which behind a balancer is the balancer.
+- **Scheme.** Have the hop that terminates TLS set `X-Forwarded-Proto`, replacing any value the client sent; an AWS ALB and ingress-nginx do this by default. Believe it upstream only if clients cannot reach the proxy directly.
+- **Host.** If a hop in front rewrites `Host`, have it pass the public host as `Host` instead; any `X-Forwarded-Host` it sets is replaced.
+
 ### Client authentication with a private key (`private_key_jwt`)
 
 Wherever the proxy authenticates to the provider as a client, it can hold a private key instead of a shared secret ([RFC 7523 §2.2](https://www.rfc-editor.org/rfc/rfc7523.html#section-2.2)): introspection in validation mode, the exchange, and the session grant.

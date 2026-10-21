@@ -52,15 +52,30 @@ const libraryHeaders = (inbound: IncomingHttpHeaders): ProxyReqOpts["headers"] =
 	connection: "close",
 });
 
-const decorate = async (inbound: IncomingHttpHeaders) => {
+/** The address of the peer the proxy saw, in `decorate`. */
+const PEER = "192.0.2.10";
+
+/** `socket` is the inbound socket as the decorator reads it; `{}` for one with no peer any more. */
+const decorate = async (inbound: IncomingHttpHeaders, socket: { remoteAddress?: string } = { remoteAddress: PEER }) => {
 	const decorator = builtOptions().proxyReqOptDecorator as Decorator;
 	const proxyReqOpts = { headers: libraryHeaders(inbound) } as ProxyReqOpts;
-	const srcReq = { headers: inbound, httpVersion: "1.1" } as unknown as Parameters<Decorator>[1];
+	const srcReq = { headers: inbound, httpVersion: "1.1", socket } as unknown as Parameters<Decorator>[1];
 	return decorator(proxyReqOpts, srcReq);
 };
 
 /** The member the decorator adds to `Via` for a request that arrived as HTTP/1.1 without one. */
 const VIA = { via: "1.1 auth.proxy" };
+
+/**
+ * Every field the decorator sets of its own, for a request from `PEER` that
+ * arrived as HTTP/1.1 with `Host: proxy.test` and none of these fields.
+ */
+const OWN = {
+	...VIA,
+	"x-forwarded-for": PEER,
+	"x-real-ip": PEER,
+	"x-forwarded-host": "proxy.test",
+};
 
 const inbound: IncomingHttpHeaders = {
 	host: "proxy.test",
@@ -196,7 +211,7 @@ describe("createUpstreamProxy", () => {
 			const chunked = { ...inbound, "transfer-encoding": "chunked", trailer: "X-Sum" };
 			const result = await decorate(chunked);
 			const { "transfer-encoding": _te, trailer: _trailer, ...rest } = libraryHeaders(chunked);
-			expect(result.headers).toEqual({ ...rest, ...VIA, Authorization: "Bearer inbound-7f3a" });
+			expect(result.headers).toEqual({ ...rest, ...OWN, Authorization: "Bearer inbound-7f3a" });
 		});
 
 		// RFC 9110 §7.6.1: the fields the inbound Connection names, and the
@@ -214,7 +229,7 @@ describe("createUpstreamProxy", () => {
 				"proxy-authorization": "Basic cHJveHk6cHc=",
 			};
 			const result = await decorate({ ...inbound, ...hopByHop });
-			expect(result.headers).toEqual({ ...libraryHeaders(inbound), ...VIA, Authorization: "Bearer inbound-7f3a" });
+			expect(result.headers).toEqual({ ...libraryHeaders(inbound), ...OWN, Authorization: "Bearer inbound-7f3a" });
 		});
 
 		// The fields the proxy decides are not the caller's to remove by naming
@@ -222,7 +237,7 @@ describe("createUpstreamProxy", () => {
 		// x-request-id and Connection stays the proxy's choice.
 		it("keeps Authorization, x-request-id and the library's Connection though the inbound Connection names them", async () => {
 			const result = await decorate({ ...inbound, connection: "Authorization, X-Request-Id, Connection" });
-			expect(result.headers).toEqual({ ...libraryHeaders(inbound), ...VIA, Authorization: "Bearer inbound-7f3a" });
+			expect(result.headers).toEqual({ ...libraryHeaders(inbound), ...OWN, Authorization: "Bearer inbound-7f3a" });
 			expect(result.headers).toMatchObject({ connection: "close" });
 		});
 
@@ -268,12 +283,68 @@ describe("createUpstreamProxy", () => {
 		});
 	});
 
-	describe("proxyReqOptDecorator is otherwise a casing-only no-op on what the library already copied", () => {
+	// What the upstream is told about where the request came from is what
+	// this hop saw; `upstream-wire.test.mts` pins it on the wire.
+	describe("proxyReqOptDecorator's forwarding fields", () => {
+		it("appends the peer after the inbound X-Forwarded-For entries", async () => {
+			const result = await decorate({ ...inbound, "x-forwarded-for": "203.0.113.9, 198.51.100.7" });
+			expect(result.headers).toMatchObject({ "x-forwarded-for": `203.0.113.9, 198.51.100.7, ${PEER}` });
+		});
+
+		it.each([[""], ["  "]])("takes an inbound X-Forwarded-For of %j as none", async (empty) => {
+			const result = await decorate({ ...inbound, "x-forwarded-for": empty });
+			expect(result.headers).toMatchObject({ "x-forwarded-for": PEER });
+		});
+
+		it("appends after inbound entries the library hands on as a list", async () => {
+			const decorator = builtOptions().proxyReqOptDecorator as Decorator;
+			const proxyReqOpts = {
+				headers: { ...libraryHeaders(inbound), "x-forwarded-for": ["203.0.113.9", "198.51.100.7"] },
+			} as ProxyReqOpts;
+			const srcReq = { headers: inbound, httpVersion: "1.1", socket: { remoteAddress: PEER } } as unknown as Parameters<
+				Decorator
+			>[1];
+			const result = await decorator(proxyReqOpts, srcReq);
+			expect(result.headers).toMatchObject({ "x-forwarded-for": `203.0.113.9, 198.51.100.7, ${PEER}` });
+		});
+
+		// The socket no longer has a peer: the proxy's entry is still the last,
+		// so an upstream counting hops from the right never reads a caller's.
+		it("appends unknown, and sends no X-Real-IP, when the socket has no peer", async () => {
+			const result = await decorate({ ...inbound, "x-forwarded-for": "203.0.113.9", "x-real-ip": "203.0.113.9" }, {});
+			expect(result.headers).toMatchObject({ "x-forwarded-for": "203.0.113.9, unknown" });
+			expect(result.headers).not.toHaveProperty("x-real-ip");
+		});
+
+		it("replaces the inbound X-Real-IP and X-Forwarded-Host, drops Forwarded, and keeps X-Forwarded-Proto", async () => {
+			const result = await decorate({
+				...inbound,
+				"x-real-ip": "203.0.113.9",
+				"x-forwarded-host": "evil.example",
+				forwarded: "for=203.0.113.9;host=evil.example",
+				"x-forwarded-proto": "https",
+			});
+			expect(result.headers).toMatchObject({
+				"x-real-ip": PEER,
+				"x-forwarded-host": "proxy.test",
+				"x-forwarded-proto": "https",
+			});
+			expect(result.headers).not.toHaveProperty("forwarded");
+		});
+
+		it("sends no X-Forwarded-Host when the request arrived without a Host", async () => {
+			const { host: _host, ...hostless } = inbound;
+			const result = await decorate({ ...hostless, "x-forwarded-host": "evil.example" });
+			expect(result.headers).not.toHaveProperty("x-forwarded-host");
+		});
+	});
+
+	describe("proxyReqOptDecorator is otherwise a casing-only no-op on what the library already copied, beside the proxy's own fields", () => {
 		it("adds Authorization in canonical casing beside the lowercase copy, leaves x-request-id as copied, touches nothing else", async () => {
 			const result = await decorate(inbound);
 			expect(result.headers).toEqual({
 				...libraryHeaders(inbound),
-				...VIA,
+				...OWN,
 				Authorization: "Bearer inbound-7f3a",
 			});
 			expect(result.headers).toMatchObject({
@@ -282,10 +353,10 @@ describe("createUpstreamProxy", () => {
 			});
 		});
 
-		it("with only x-request-id inbound, changes nothing but Via", async () => {
+		it("with only x-request-id inbound, adds nothing but the proxy's own fields", async () => {
 			const { authorization: _authorization, ...ridOnly } = inbound;
 			const result = await decorate(ridOnly);
-			expect(result.headers).toEqual({ ...libraryHeaders(ridOnly), ...VIA });
+			expect(result.headers).toEqual({ ...libraryHeaders(ridOnly), ...OWN });
 		});
 
 		it("with only Authorization inbound, the whole delta is the canonical-casing copy", async () => {
@@ -293,16 +364,16 @@ describe("createUpstreamProxy", () => {
 			const result = await decorate(authOnly);
 			expect(result.headers).toEqual({
 				...libraryHeaders(authOnly),
-				...VIA,
+				...OWN,
 				Authorization: "Bearer inbound-7f3a",
 			});
 		});
 
-		it("adds nothing but Via when the inbound request carries neither header", async () => {
+		it("adds nothing but the proxy's own fields when the inbound request carries neither header", async () => {
 			const { authorization: _authorization, "x-request-id": _rid, ...anonymous } = inbound;
 			const result = await decorate(anonymous);
-			expect(result.headers).toEqual({ ...libraryHeaders(anonymous), ...VIA });
-			expect(result.headers).toEqual({ accept: "application/json", connection: "close", ...VIA });
+			expect(result.headers).toEqual({ ...libraryHeaders(anonymous), ...OWN });
+			expect(result.headers).toEqual({ accept: "application/json", connection: "close", ...OWN });
 		});
 	});
 });
