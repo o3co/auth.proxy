@@ -990,6 +990,7 @@ describe("proxy config — values refused at boot rather than misread", () => {
 			"http://@backend:4000",
 			"ftp://backend",
 			"http://",
+			"http://backend:0",
 		])("refuses UPSTREAM_BASEURL=%j, naming the key", (value) => {
 			expect(refusal({ ...VALIDATION, UPSTREAM_BASEURL: value })).toMatch(/upstream\.baseURL must be/);
 		});
@@ -1014,8 +1015,8 @@ describe("proxy config — values refused at boot rather than misread", () => {
 	});
 
 	describe("http.hostname", () => {
-		it("refuses an empty HTTP_HOSTNAME, naming the key", () => {
-			expect(refusal({ ...VALIDATION, HTTP_HOSTNAME: "" })).toMatch(/http\.hostname/);
+		it.each(["", " ", " localhost", "local host"])("refuses HTTP_HOSTNAME=%j, naming the key", (value) => {
+			expect(refusal({ ...VALIDATION, HTTP_HOSTNAME: value })).toMatch(/http\.hostname/);
 		});
 	});
 
@@ -1032,6 +1033,12 @@ describe("proxy config — values refused at boot rather than misread", () => {
 			(value) => {
 				expect(refusal({ ...VALIDATION, HTTP_PATH_PREFIX: value })).toMatch(/http\.pathPrefix must be/);
 			},
+		);
+	});
+
+	it("refuses an INJECTION_PROVIDER_ORIGIN on port 0, naming the key", () => {
+		expect(refusal({ ...INJECTION, INJECTION_PROVIDER_ORIGIN: "http://provider:0" })).toMatch(
+			/auth\.injection\.providerOrigin/,
 		);
 	});
 

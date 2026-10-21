@@ -78,18 +78,25 @@ const isPreflight = (req: IncomingMessage): boolean =>
  */
 const FOREIGN_ORIGINS: readonly string[] = ["https://attacker.invalid", "http://attacker.invalid"];
 
+/** A letter or a digit: what a host name's labels are made of. */
+const NAME_CHARACTER = /[A-Za-z0-9]/;
+
 /**
- * A pattern's top-level alternatives, and whether a `.` that matches any
+ * A pattern's top-level alternatives; whether a `.` that matches any
  * character stands right before a letter or a digit, where a host name's dot
- * was meant. Escapes, character classes and groups are stepped over, so a `|`
- * or a `.` inside one does not count.
+ * was meant; and whether a `*`, `+` or `{…}` quantifier does, so the wildcard
+ * runs into a host name with no dot to end it. Escapes and character classes
+ * are stepped over for all three, and groups for the alternatives, so a `|`
+ * inside a group does not count.
  */
-const scanPattern = (source: string): { alternatives: string[]; hostDot: boolean } => {
+const scanPattern = (source: string): { alternatives: string[]; hostDot: boolean; openWildcard: boolean } => {
 	const alternatives: string[] = [];
 	let start = 0;
 	let depth = 0;
 	let inClass = false;
 	let hostDot = false;
+	let openWildcard = false;
+	const nameFollows = (at: number): boolean => NAME_CHARACTER.test(source[at] ?? "");
 	for (let i = 0; i < source.length; i++) {
 		const c = source[i];
 		if (c === "\\") {
@@ -105,12 +112,14 @@ const scanPattern = (source: string): { alternatives: string[]; hostDot: boolean
 		} else if (c === "|" && depth === 0) {
 			alternatives.push(source.slice(start, i));
 			start = i + 1;
-		} else if (c === "." && /[A-Za-z0-9]/.test(source[i + 1] ?? "")) {
+		} else if (c === "." && nameFollows(i + 1)) {
 			hostDot = true;
+		} else if ((c === "*" || c === "+" || c === "}") && nameFollows(source[i + 1] === "?" ? i + 2 : i + 1)) {
+			openWildcard = true;
 		}
 	}
 	alternatives.push(source.slice(start));
-	return { alternatives, hostDot };
+	return { alternatives, hostDot, openWildcard };
 };
 
 /** Starts with `^` and ends with a `$` that is not escaped. */
@@ -123,13 +132,14 @@ const isAnchored = (alternative: string): boolean =>
  * `^…$` on every top-level alternative (`https://app\.example` also admits
  * `https://app.example.evil.net`), one that admits `null` (what a sandboxed
  * iframe or a redirected request sends, from any site), one that admits an
- * origin no deployment serves, and one with a host name's dot left
- * unescaped (`app.example` also admits `appxexample`). A warning, not a
- * refusal: a syntactic check misses some broad patterns and flags some
+ * origin no deployment serves, one with a host name's dot left unescaped
+ * (`app.example` also admits `appxexample`), and one whose wildcard runs into
+ * a host name (`.*example\.com` also admits `evilexample.com`). A warning,
+ * not a refusal: a syntactic check misses some broad patterns and flags some
  * narrow ones (an alternation wrapped in a group).
  */
 const warnIfBroad = (pattern: string, origin: RegExp, logger: Logger): void => {
-	const { alternatives, hostDot } = scanPattern(pattern);
+	const { alternatives, hostDot, openWildcard } = scanPattern(pattern);
 	if (!alternatives.every(isAnchored)) {
 		logger.warn(
 			{ event: "cors.origin_pattern_unanchored", pattern },
@@ -153,6 +163,12 @@ const warnIfBroad = (pattern: string, origin: RegExp, logger: Logger): void => {
 		logger.warn(
 			{ event: "cors.origin_pattern_unescaped_dot", pattern },
 			"http.cors.origin.pattern has an unescaped . before a host name character, which matches any character: escape it as \\.",
+		);
+	}
+	if (openWildcard) {
+		logger.warn(
+			{ event: "cors.origin_pattern_unbounded_wildcard", pattern },
+			"http.cors.origin.pattern has a wildcard that runs straight into a host name, so it also admits names that merely end the same way: end the wildcard at a dot, as in [^.]+\\.example\\.com",
 		);
 	}
 };

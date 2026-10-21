@@ -78,7 +78,8 @@ const isIntrospectionUrl = (value: string): boolean => {
 
 /**
  * An http(s) origin and nothing else: `scheme://host[:port]`, optionally with
- * a bare trailing slash, and no userinfo, path, query or fragment.
+ * a bare trailing slash, and no userinfo, path, query or fragment. Port `0`
+ * is no port anything can be reached at.
  */
 const isHttpOrigin = (value: string): boolean => {
 	if (!URL.canParse(value)) return false;
@@ -87,6 +88,7 @@ const isHttpOrigin = (value: string): boolean => {
 		(parsed.protocol === "http:" || parsed.protocol === "https:") &&
 		parsed.username === "" &&
 		parsed.password === "" &&
+		parsed.port !== "0" &&
 		(parsed.pathname === "" || parsed.pathname === "/") &&
 		!parsed.search &&
 		!parsed.hash
@@ -375,7 +377,9 @@ export const AppConfigSchema = z.object({
 	http: z.object({
 		hostname: z
 			.string()
-			.min(1, { message: "http.hostname must be a host name or an IP address to listen on, not empty" })
+			.regex(/^\S+$/, {
+				message: "http.hostname must be a host name or an IP address to listen on, not empty and without whitespace",
+			})
 			.default("0.0.0.0"),
 		port: integer("http.port", { min: 1, max: 65535 }, 80),
 		pathPrefix: z

@@ -108,7 +108,8 @@ describe("createCors", () => {
 		expect(res.headers.vary).toBe("Origin");
 	});
 
-	// `CORS_ORIGIN_PATTERN` unset leaves the pattern null; set empty, it is "".
+	// The schema reads an empty `CORS_ORIGIN_PATTERN` as null; a hand-built
+	// configuration may still carry "".
 	it.each([[null], [""]])("with the pattern %j, does no CORS: a preflight is passed on", async (pattern) => {
 		const res = await request(app(pattern))
 			.options("/resource")
@@ -185,6 +186,25 @@ describe("createCors warns at boot about a pattern that likely admits too much",
 		"warns that %j has a dot that matches any character where a host name's dot was meant",
 		(pattern) => {
 			expect(warningsFor(pattern)).toEqual(["cors.origin_pattern_unescaped_dot"]);
+		},
+	);
+
+	it("warns about a dot inside a group as well", () => {
+		expect(warningsFor("^https://(app.example)\\.com$")).toEqual(["cors.origin_pattern_unescaped_dot"]);
+	});
+
+	// `^https://.*example\.com$` also admits `https://evilexample.com`.
+	it.each(["^https://.*example\\.com$", "^https://[a-z]+example\\.com$", "^https://[a-z]{3}example\\.com$", "^https://.+?example\\.com$"])(
+		"warns that %j lets a wildcard run into a host name",
+		(pattern) => {
+			expect(warningsFor(pattern)).toEqual(["cors.origin_pattern_unbounded_wildcard"]);
+		},
+	);
+
+	it.each(["^https://(www\\.)?example\\.com$", "^https?://app\\.example\\.com$", "^https://app-[0-9]+\\.example\\.com$"])(
+		"does not take the optional group or scheme in %j for a wildcard",
+		(pattern) => {
+			expect(warningsFor(pattern)).toEqual([]);
 		},
 	);
 
