@@ -355,7 +355,7 @@ The caller's `Accept-Charset` reaches the upstream as it arrived; the proxy send
 
 ### Where the request came from, on the upstream request
 
-The proxy tells the upstream where each request came from as this hop saw it, so that a caller cannot choose the address or host the upstream reads:
+The proxy tells the upstream where each request came from as this hop saw it. A caller cannot choose the address the upstream reads from these fields, and the host they give is the `Host` the proxy received, the one the hops in front routed on:
 
 | Field | What the upstream receives |
 | --- | --- |
@@ -367,9 +367,11 @@ The proxy tells the upstream where each request came from as this hop saw it, so
 
 An upstream should trust only the proxy's hop:
 
-- **Address.** Count the proxy as one trusted hop in its `X-Forwarded-For` handling, plus one for each balancer in front of the proxy that appends to it. For example, Express's `trust proxy` is `2` behind one balancer. Read the client from that entry, counted from the right, never from the left end. `X-Real-IP` is the proxy's peer, which behind a balancer is the balancer.
+- **Address.** Count the proxy as one trusted hop in its `X-Forwarded-For` handling, plus one for each balancer in front of the proxy that appends to it. For example, Express's `trust proxy` is `2` behind one balancer. The client is the entry just left of the trusted hops, never the left end. An upstream that trusts by address range rather than by hop count must list the proxy's address too. `X-Real-IP` is the proxy's peer, which behind a balancer is the balancer. The peer is written as Node reports it. With the default `HTTP_HOSTNAME` of `0.0.0.0` an IPv4 peer is plain IPv4; on `::` it is IPv4-mapped (`::ffff:10.0.0.5`).
 - **Scheme.** Have the hop that terminates TLS set `X-Forwarded-Proto`, replacing any value the client sent; an AWS ALB and ingress-nginx do this by default. Believe it upstream only if clients cannot reach the proxy directly.
-- **Host.** If a hop in front rewrites `Host`, have it pass the public host as `Host` instead; any `X-Forwarded-Host` it sets is replaced.
+- **Host.** If a hop in front rewrites `Host`, have it pass the public host as `Host` instead; any `X-Forwarded-Host` it sets is replaced. The client still chooses `Host` unless a hop in front admits only your public hosts, so an upstream that builds absolute URLs (a password-reset link, a redirect) checks the host against its own list, or uses a configured public origin.
+- **Nothing else.** Read only the fields in the table above. Any other field of the kind arrives as the caller sent it and is not to be trusted. Examples are `X-Client-IP`, `True-Client-IP`, `X-Forwarded-Port`, `X-Forwarded-Prefix`, `X-Forwarded-Scheme`, `X-Forwarded-Ssl`, and underscore spellings such as `X_Forwarded_For` that some servers read as the hyphenated field.
+- **Connection.** As for every field, those the inbound `Connection` names are not sent on (see [Fields that stay on the hop to the proxy](#fields-that-stay-on-the-hop-to-the-proxy)). The proxy's own entries are added after that. A hop in front that passed the client's `Connection` on would therefore let it remove the `X-Forwarded-For` entries and the `X-Forwarded-Proto` that hop wrote. A compliant proxy does not pass it on (RFC 9110 §7.6.1); nginx, for one, sends its own.
 
 ### Client authentication with a private key (`private_key_jwt`)
 

@@ -322,6 +322,52 @@ describe("createUpstreamProxy on the wire", () => {
 			expect(sent(received[0], "x-forwarded-for")).toEqual(["127.0.0.1"]);
 		});
 
+		// Node joins repeated lines of these fields into one value in
+		// `req.headers`, so a second line is one more claim, read the same way.
+		it("treats repeated lines of the forwarding fields as one each", async () => {
+			const { port } = front.address() as AddressInfo;
+			const socket = connect(port, "127.0.0.1");
+			const closed = new Promise<void>((resolve) => socket.on("close", () => resolve()));
+			socket.resume();
+			socket.write(
+				[
+					"GET /resource HTTP/1.1",
+					"Host: app.example",
+					"X-Forwarded-For: 203.0.113.9",
+					"X-Forwarded-For: 198.51.100.7",
+					"X-Real-IP: 203.0.113.9",
+					"X-Real-IP: 198.51.100.7",
+					"X-Forwarded-Host: evil.example",
+					"X-Forwarded-Host: other.example",
+					"Forwarded: for=203.0.113.9",
+					"forwarded: host=evil.example",
+					"Connection: close",
+					"",
+					"",
+				].join("\r\n"),
+			);
+			await closed;
+
+			expect(received).toHaveLength(1);
+			expect(sent(received[0], "x-forwarded-for")).toEqual(["203.0.113.9, 198.51.100.7, 127.0.0.1"]);
+			expect(sent(received[0], "x-real-ip")).toEqual(["127.0.0.1"]);
+			expect(sent(received[0], "x-forwarded-host")).toEqual(["app.example"]);
+			expect(sent(received[0], "forwarded")).toEqual([]);
+		});
+
+		it("still sends the proxy's X-Real-IP and X-Forwarded-Host when the inbound Connection names them", async () => {
+			const res = await request(front)
+				.get("/resource")
+				.set("Host", "app.example")
+				.set("Connection", "X-Real-IP, X-Forwarded-Host")
+				.set("X-Real-IP", "203.0.113.9")
+				.set("X-Forwarded-Host", "evil.example");
+
+			expect(res.status).toBe(200);
+			expect(sent(received[0], "x-real-ip")).toEqual(["127.0.0.1"]);
+			expect(sent(received[0], "x-forwarded-host")).toEqual(["app.example"]);
+		});
+
 		it("sends the peer as X-Real-IP, in place of the caller's", async () => {
 			const res = await request(front).get("/resource").set("X-Real-IP", "203.0.113.9");
 

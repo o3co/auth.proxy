@@ -296,7 +296,9 @@ describe("createUpstreamProxy", () => {
 			expect(result.headers).toMatchObject({ "x-forwarded-for": PEER });
 		});
 
-		it("appends after inbound entries the library hands on as a list", async () => {
+		// Node joins repeated lines into one string; a stage before this one
+		// that set the field as a list is read the same way.
+		it("appends after entries set as a list", async () => {
 			const decorator = builtOptions().proxyReqOptDecorator as Decorator;
 			const proxyReqOpts = {
 				headers: { ...libraryHeaders(inbound), "x-forwarded-for": ["203.0.113.9", "198.51.100.7"] },
