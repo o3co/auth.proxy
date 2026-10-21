@@ -347,6 +347,12 @@ The fields that belong to the caller's connection to the proxy are not sent upst
 
 The upstream's connection fields stay on its hop in the same way. Its response's `Connection`, the fields that names, `Keep-Alive`, `Proxy-Connection`, `TE`, `Upgrade`, `Trailer` and `Proxy-Authenticate` do not reach the caller. Node keeps or closes the caller's own connection and announces which, so a proxied answer does not close a keep-alive connection. A field the proxy set before forwarding — `x-request-id`, the CORS fields — stays, with the proxy's value, though the upstream's `Connection` names it. The answer still streams as it arrives. Where the upstream's answer carries a field the proxy set too, the proxy's value stands: the caller gets the request id the proxy logs under, and the CORS grant the proxy made. `Vary` lists both instead: the proxy's members, then the upstream's not already listed (compared case-insensitively), or `*` when either says `*` (RFC 9110 §12.5.5). While `CORS_ORIGIN_PATTERN` is set, an upstream's CORS grant never reaches the caller, whether or not the proxy granted the origin; its other `Access-Control-*` fields, such as `Access-Control-Expose-Headers`, do. The proxy sends no `X-Powered-By` of its own; an upstream's reaches the caller.
 
+### `Via` on the upstream request
+
+Every request sent upstream carries `Via` with the proxy's own member after those the request arrived with (RFC 9110 §7.6.3): the HTTP version the proxy received it by and the pseudonym `auth.proxy` — `Via: 1.1 auth.proxy`, or `Via: 1.1 lb, 1.1 auth.proxy` behind a balancer that sent its own. It names no host or port, and it is always sent; there is no setting. An upstream that takes `Via` as the sign of a proxied request sees one: nginx, for one, neither compresses answers to such requests nor serves them its pre-compressed files (`gzip_static`) while `gzip_proxied` is `off`, its default, so set `gzip_proxied any;` on an nginx upstream to keep them compressed. The proxy adds no `Via` to its answers to the caller; an upstream's own is passed on like any other field.
+
+The caller's `Accept-Charset` reaches the upstream as it arrived; the proxy sends none of its own.
+
 ### Client authentication with a private key (`private_key_jwt`)
 
 Wherever the proxy authenticates to the provider as a client, it can hold a private key instead of a shared secret ([RFC 7523 §2.2](https://www.rfc-editor.org/rfc/rfc7523.html#section-2.2)): introspection in validation mode, the exchange, and the session grant.
