@@ -32,15 +32,19 @@ RUN pnpm prune --prod
 ##############################################
 # The runtime starts from the plain Node image, not from `base`: it runs node
 # itself, so it carries neither corepack nor pnpm, nor the `.npmrc` the build
-# installed with. The files stay owned by root and are only read, so the
-# process cannot rewrite its own code or configuration, and the image can run
-# with a read-only root filesystem.
+# installed with. The files, and the directory holding them, belong to root
+# and are only read, so the process cannot replace its own code or
+# configuration, and the image can run with a read-only root filesystem.
 FROM node:24-alpine AS runtime
 
 ENV HOME=/home/node
 ENV NODE_ENV=production
 
 WORKDIR ${HOME}
+
+# The base image gives the node user its home directory; taking it back
+# keeps the process from unlinking and replacing the entries below.
+RUN chown root:root ${HOME} && chmod 755 ${HOME}
 
 COPY --from=pre /home/node/package.json ./
 COPY --from=pre /home/node/node_modules ./node_modules/
@@ -52,8 +56,9 @@ COPY --from=pre /home/node/config/application.conf ./dist/config/application.con
 USER node
 
 # A port above 1023, which a non-root process can bind without a capability.
-# Not 3000: the defaults of UPSTREAM_BASEURL and INTROSPECT_URL name
-# localhost:3000, and a container that kept them would proxy to itself.
+# Not 3000: the defaults of UPSTREAM_BASEURL, INTROSPECT_URL and
+# INJECTION_PROVIDER_ORIGIN name localhost:3000, and a container that kept
+# them would call itself.
 ENV HTTP_PORT=8080
 EXPOSE 8080
 

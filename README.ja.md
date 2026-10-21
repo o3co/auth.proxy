@@ -404,13 +404,13 @@ make docker       # ランタイムイメージのビルド
 
 ランタイムイメージ（`--target runtime`）は次のとおり動く。
 
-- **特権を持たない `node` ユーザー**（uid 1000）で動く。ファイルは root の所有で読むだけなので、ルートファイルシステムを読み取り専用にしても動く。
+- **特権を持たない `node` ユーザー**（uid 1000）で動く。ファイルも、それを置く `/home/node` も root の所有で、プロセスは読むだけである。プロセスは自分のコードや設定を置き換えられず、ルートファイルシステムを読み取り専用にしても動く。
 - **ポート 8080 で待ち受ける。** イメージが `HTTP_PORT=8080` を設定する。root でないプロセスが bind できるポートである。設定ファイル自体のデフォルト 80 はイメージの外で使われる。`-p <ホスト側ポート>:8080` で公開するか、`HTTP_PORT` を設定する。
 - **`node dist/src/app.mjs` を PID 1 として動かし**、間にパッケージマネージャーを挟まない。SIGTERM はプロキシに届いてグレースフルシャットダウンを始め、stdout にはプロキシの NDJSON 行だけが出る。イメージは corepack も pnpm も持たず、ネットワークに出られなくても起動する。
-- **`HEALTHCHECK` を宣言する。** ベースイメージにある busybox の `wget` で `127.0.0.1:${HTTP_PORT}` の `GET /_healthcheck` を問い合わせる。生存確認（liveness）であり、プロバイダーや上流の状態は表さない。`HTTP_HOSTNAME` が `127.0.0.1` から届かないアドレスを指すときは、ヘルスチェックを上書きする。Kubernetes は `HEALTHCHECK` を使わないので、Pod に同じパスへの probe を設定する。
+- **`HEALTHCHECK` を宣言する。** ベースイメージにある busybox の `wget` で `127.0.0.1:${HTTP_PORT}` の `GET /_healthcheck` を問い合わせる。生存確認（liveness）であり、プロバイダーや上流の状態は表さない。`HTTP_HOSTNAME` が `127.0.0.1` から届かないアドレスを指すときは、ヘルスチェックを上書きする。イメージの中で `::1` に解決される `localhost` もその一つである。Kubernetes は `HEALTHCHECK` を使わないので、Pod に同じパスへの probe を設定する。
 - **テストを含まない。** ビルドは `tsconfig.build.json` でコンパイルし、`__tests__` を `dist/` から外す。
 
-CI はプルリクエストごとにイメージをビルドし、`.github/scripts/image-smoke.sh` で起動して上のそれぞれを確かめる。
+ビルドには Docker Engine 25 以降が要る（`HEALTHCHECK` が `--start-interval` を使う）。CI は push とプルリクエストのたびにイメージをビルドし、`.github/scripts/image-smoke.sh` で起動して上のそれぞれを確かめる。
 
 ## 設定
 

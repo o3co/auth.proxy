@@ -1,8 +1,9 @@
 #!/usr/bin/env bash
 # Runs a built runtime image the way an orchestrator does and checks what an
-# operator relies on: it runs as a non-root user, ships no tests, boots on a
-# read-only root filesystem without network access, turns healthy through its
-# own HEALTHCHECK, and on SIGTERM drains and exits 0 with nothing on stderr.
+# operator relies on: it runs as a non-root user that cannot write to its
+# working directory, ships no tests, boots on a read-only root filesystem
+# without network access, turns healthy through its own HEALTHCHECK, and on
+# SIGTERM drains and exits 0 with nothing on stderr.
 #
 # Usage: image-smoke.sh <image>
 set -euo pipefail
@@ -21,6 +22,10 @@ trap cleanup EXIT
 
 uid="$(docker run --rm --entrypoint id "$image" -u)"
 [ "$uid" != 0 ] || fail "the image runs as root"
+
+if docker run --rm --entrypoint sh "$image" -c 'touch probe' 2>/dev/null; then
+	fail "the process can write to its working directory"
+fi
 
 tests="$(docker run --rm --entrypoint find "$image" dist -name __tests__)"
 [ -z "$tests" ] || fail "the image ships tests: $tests"
@@ -50,7 +55,7 @@ done
 docker stop -t 30 "$name" >/dev/null
 code="$(docker inspect -f '{{.State.ExitCode}}' "$name")"
 [ "$code" = 0 ] || fail "exit code $code after SIGTERM"
-docker logs "$name" 2>/dev/null | grep -q '"msg":"graceful shutdown: complete"' ||
+grep -q '"msg":"graceful shutdown: complete"' <<<"$(docker logs "$name" 2>/dev/null)" ||
 	fail "SIGTERM did not run the graceful shutdown"
 stderr="$(docker logs "$name" 2>&1 >/dev/null)"
 [ -z "$stderr" ] || fail "stderr is not empty: $stderr"

@@ -38,6 +38,9 @@ jobs:
   # what it checks.
   docker-image:
     runs-on: ubuntu-latest
+    timeout-minutes: 15
+    permissions:
+      contents: read
     steps:
       - uses: actions/checkout@v4
       - name: Build the runtime image
