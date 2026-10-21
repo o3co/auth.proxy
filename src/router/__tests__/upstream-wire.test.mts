@@ -356,6 +356,69 @@ describe("createUpstreamProxy on the wire, the upstream connection", () => {
 });
 
 /**
+ * An upstream that answers before it has read the whole body — a `413` on
+ * the headers — and then stops reading but keeps its connection open. The
+ * caller's answer is complete while the request to the upstream is still
+ * writing; the stage ends that request once the caller's answer is done,
+ * rather than hold the connection and go on sending the body.
+ */
+describe("createUpstreamProxy on the wire, an upstream that answers early", () => {
+	const BODY_BYTES = 10 * 1024 * 1024;
+	let upstream: NetServer;
+	let sockets: Socket[];
+	let app: express.Express;
+
+	beforeEach(async () => {
+		sockets = [];
+		upstream = createNetServer((socket) => {
+			sockets.push(socket);
+			socket.once("data", () => {
+				socket.write("HTTP/1.1 413 Payload Too Large\r\nContent-Length: 0\r\n\r\n");
+				socket.pause();
+			});
+			socket.on("error", () => {});
+		});
+		await new Promise<void>((resolve) => upstream.listen(0, "127.0.0.1", resolve));
+		const { port } = upstream.address() as AddressInfo;
+		app = express();
+		app.use(
+			createUpstreamProxy({
+				http: { bodyLimitSize: "64mb", cors: { origin: { pattern: null } } },
+				upstream: { baseURL: `http://127.0.0.1:${port}` },
+			}),
+		);
+	});
+
+	afterEach(async () => {
+		for (const socket of sockets) socket.destroy();
+		await new Promise<void>((resolve) => upstream.close(() => resolve()));
+	});
+
+	// While the upstream reads nothing, a connection the proxy closed cannot be
+	// seen from its end. So once the caller has its answer, the upstream reads
+	// again: an upstream request still open sends the whole body and is only
+	// then done with; one the stage ended stops short of it.
+	it("ends the upstream request once the caller has the answer, without sending the rest of the body", async () => {
+		const res = await request(app)
+			.post("/upload")
+			.set("content-type", "application/octet-stream")
+			.send(Buffer.alloc(BODY_BYTES));
+
+		expect(res.status).toBe(413);
+		expect(sockets).toHaveLength(1);
+		const socket = sockets[0] as Socket;
+		await new Promise((resolve) => setTimeout(resolve, 100));
+		socket.on("data", () => {});
+		const ended = new Promise<void>((resolve) => socket.once("close", () => resolve()));
+		socket.resume();
+		await Promise.race([ended, new Promise((resolve) => setTimeout(resolve, 2_000))]);
+
+		expect(socket.destroyed).toBe(true);
+		expect(socket.bytesRead).toBeLessThan(BODY_BYTES);
+	});
+});
+
+/**
  * The upstream's own connection fields, on the way back. The library sends
  * `connection: close` upstream, so a Node upstream answers `Connection: close`;
  * copied onto the caller's response, that field would close the caller's

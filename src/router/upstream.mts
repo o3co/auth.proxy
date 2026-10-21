@@ -305,8 +305,11 @@ interface LibraryExchange {
  * default) and set the `Content-Length` it is framed by; the upstream's answer
  * is handed on as soon as its head arrives, for the library to stream, which
  * it does only with no response decorator and no skip filter; there is no
- * `timeout` to apply; and a caller that leaves before its answer is complete
- * ends the upstream request. The fields it reads are the library's own, not
+ * `timeout` to apply. Unlike that sender, it ends the upstream request
+ * whenever the caller's response closes, complete or not: a caller that left
+ * needs nothing more from it, and an upstream that answered before reading
+ * the whole body — a `413` on the headers — and stopped reading would
+ * otherwise hold the connection and the unsent body. The fields it reads are the library's own, not
  * its documented API; `upstream-wire.test.mts` drives the real library
  * through them.
  */
@@ -319,9 +322,7 @@ const sendAsReceived = (exchange: LibraryExchange): Promise<LibraryExchange> =>
 		});
 		exchange.proxy.req = sent;
 		sent.on("error", reject);
-		res.on("close", () => {
-			if (!res.writableFinished) sent.destroy();
-		});
+		res.on("close", () => sent.destroy());
 		sent.end(exchange.proxy.bodyContent);
 	});
 
