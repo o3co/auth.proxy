@@ -320,12 +320,12 @@ Three things that make it worse:
 
 - **Lowering `tokenCache.ttlSeconds` / `INTROSPECT_CACHE_TTL_SEC` multiplies the misses.** The shorter the TTL, the more of the same budget the same traffic spends. Their effects on revocation differ between injection and validation — see [Revocation and the access-token lifetime](#revocation-and-the-access-token-lifetime).
 - **Scaling out gives each instance its own cold cache.** A rollout therefore costs `instance count × active sessions` provider calls at once. Where the provider does not list the proxy, each instance also has its own count — unless several sit behind one NAT or egress gateway, present a single source address and share one.
-- **Random tokens from one anonymous client spend all of it (validation mode).**
-  - Introspection calls carry no `X-Forwarded-For`, so the provider counts all of an instance's introspections as one source: about 60 cache misses a minute with its defaults.
-  - Each random Bearer value is a new cache key, so a client that sends random tokens makes every request a miss and uses up the budget.
-  - After that, every legitimate token not yet in the cache is answered `502` until the window resets.
+- **Random credentials from one anonymous client spend all of it.** This always applies in validation mode, and in injection mode when the provider does not list the proxy.
+  - Every call then counts against the instance's own source. Validation's introspection calls never carry `X-Forwarded-For`. The budget is about 60 cache misses a minute with the provider's defaults.
+  - Each random Bearer value, or each random session cookie in injection mode, is a new cache key. A client that sends random ones makes every request a miss and uses up the budget.
+  - After that, every legitimate credential not yet in the cache is answered `502` until the window resets.
 
-  What to do now: rate-limit requests that carry `Authorization`, per client address, at the ingress in front of the proxy. Counting each introspection against its caller is planned ([#188](https://github.com/o3co/auth.proxy/issues/188)), subject to change.
+  What to do now: rate-limit requests that carry `Authorization` or the session cookie, per client address, at the ingress in front of the proxy. Counting each introspection against its caller is planned ([#188](https://github.com/o3co/auth.proxy/issues/188)), subject to change.
 
 ### Request body limit
 
@@ -461,7 +461,7 @@ Injection mode:
 
 | Environment Variable | Description |
 | --- | --- |
-| `INJECTION_PROVIDER_ORIGIN` | Provider origin — `scheme://host[:port]`, no path/query/fragment, no userinfo, http or https only (default: `http://localhost:3000`). |
+| `INJECTION_PROVIDER_ORIGIN` | Provider origin — `scheme://host[:port]`, no path/query/fragment, no userinfo, http or https only (default: `http://localhost:3000`, for development only: always set it, see [Operations](#operations)). |
 | `INJECTION_CLIENT_ID` | **Required.** OAuth `client_id`. |
 | `INJECTION_CLIENT_KEY` | Private JWK for the session grant (`private_key_jwt`; optional). Unset, the session grant is a public client. |
 | `INJECTION_PROVIDER_ISSUER` | The provider's issuer identifier, the client assertion's audience. **Required** with `INJECTION_CLIENT_KEY` or an enabled exchange's `INJECTION_EXCHANGE_CLIENT_KEY`, and refused without either. |
@@ -485,7 +485,7 @@ Injection mode:
 
 ## Operations
 
-What a deployment needs beyond the settings above. For the image itself (its user, its port and its `HEALTHCHECK`), see [Docker](#docker).
+What a deployment needs beyond the settings above. For the image itself, see [Docker](#docker).
 
 ### Always set the provider and upstream URLs
 
@@ -497,7 +497,7 @@ The shipped `config/application.conf` gives these keys development defaults:
 | `INTROSPECT_URL` | `http://localhost:3000/oauth/introspect` |
 | `INJECTION_PROVIDER_ORIGIN` | `http://localhost:3000` |
 
-The defaults suit a provider and an upstream on a developer's machine. Inside a container, `localhost` is the container itself, so a deployment that leaves them unset sends its traffic to the proxy itself or to nothing. Set every one the mode uses, in every deployment.
+The defaults suit a provider and an upstream on a developer's machine. Inside a container, `localhost` is the container (or pod) itself, so a deployment that leaves them unset sends its traffic to the proxy itself or to nothing. Set every one the mode uses, in every deployment.
 
 ### The configuration file
 
@@ -523,7 +523,12 @@ On SIGTERM or SIGINT the proxy stops accepting connections and gives in-flight r
 - A clean drain exits `0`.
 - Past the 10 seconds, the remaining connections are cut and the process exits `1`.
 
-Keep the orchestrator's grace period above 10 s, so the proxy finishes its drain before SIGKILL. Kubernetes `terminationGracePeriodSeconds` and compose `stop_grace_period` both default to 30 s. A request that runs longer than 10 s at shutdown, such as a long download or a server-sent event stream, is cut.
+Keep the orchestrator's grace period above 10 s, so the proxy finishes its drain before SIGKILL:
+
+- Kubernetes `terminationGracePeriodSeconds` defaults to 30 s, which is enough. The proxy refuses new connections as soon as SIGTERM arrives, while the pod may still receive traffic until its endpoint is removed; a short `preStop` sleep covers that gap.
+- compose `stop_grace_period` and `docker stop` default to 10 s, the same as the drain, which leaves no margin. Raise it, for example `stop_grace_period: 15s`.
+
+A request that runs longer than 10 s at shutdown, such as a long download or a server-sent event stream, is cut.
 
 ### Memory: request bodies are buffered
 
@@ -537,12 +542,12 @@ Peak memory is therefore roughly the number of concurrent forwarded requests wit
 
 ### Keep-alive behind a load balancer
 
-The proxy keeps a caller's connection open between requests and closes it after 5 idle seconds. That is Node's default keep-alive timeout, and the proxy does not change it.
+The proxy keeps a caller's connection open between requests and closes it once it has been idle for about 5 seconds, advertised as `Keep-Alive: timeout=5`. That is Node's default keep-alive timeout, and the proxy has no setting for it.
 
-A load balancer that pools connections to the proxy and keeps one idle for longer can send a request just as the proxy closes that connection, and answers that request `502`. Set the balancer's idle timeout toward the proxy below 5 s:
+A load balancer that pools connections to the proxy and keeps one idle for longer can send a request just as the proxy closes that connection, and answers that request `502`. What to do depends on the balancer:
 
-- AWS ALB: the default idle timeout is 60 s;
-- nginx: `keepalive_timeout` in the `upstream` block (default 60 s).
+- **nginx:** set `keepalive_timeout` in the `upstream` block (default 60 s) below 5 s. It only closes idle pooled connections, so lowering it is safe.
+- **A balancer whose one idle timeout also bounds a request in flight**, such as AWS ALB (default 60 s): lowering it below 5 s fails every request that is silent for that long with `504`. There is no safe setting today. Expect an occasional `502` on a reused connection, which a retry of an idempotent request absorbs. A keep-alive setting on the proxy, to set above the balancer's timeout, is planned ([#197](https://github.com/o3co/auth.proxy/issues/197)), subject to change.
 
 ### CORS preflight answers
 
@@ -557,7 +562,7 @@ Without `Max-Age`, browsers cache a preflight result for 5 seconds only, the Fet
 
 ### Logs and `DEBUG`
 
-The proxy's own log lines (NDJSON on stdout) never carry a token, a cookie, a client secret or a key. Errors pass through an allowlist (`src/logger.mts`), and each event names what it leaves out.
+The proxy's own log lines (NDJSON on stdout) never carry a token, a cookie, a client secret or a key. Errors pass through an allowlist (`src/logger.mts`), and the description of each event in this README names what it leaves out.
 
 The `DEBUG` environment variable is outside that guarantee. It turns on the `debug` package that `express-http-proxy` and Express use, which writes to stderr unfiltered. **`DEBUG=express-http-proxy` (or `DEBUG=*`) prints the full outbound request options of every proxied request.** That includes the `Authorization` header (the caller's token or the token the proxy minted) and the cookies.
 
