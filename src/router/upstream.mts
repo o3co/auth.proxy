@@ -141,6 +141,28 @@ const appendVia = (received: number | string | readonly string[] | undefined, ht
 };
 
 /**
+ * The entry the proxy adds for the peer it saw: its address, or `unknown`
+ * once the socket no longer has one, so the proxy's entry is still the last
+ * and an upstream counting trusted hops from the right never reads a
+ * caller's entry in its place.
+ */
+const peerEntry = (peer: string | undefined): string => peer ?? "unknown";
+
+/**
+ * `X-Forwarded-For` with the peer the proxy saw after the entries the request
+ * arrived with, as nginx's `$proxy_add_x_forwarded_for` does: the chain outer
+ * proxies wrote is kept, and an upstream that trusts N hops reads the right
+ * entry. An empty inbound value counts as none.
+ */
+const appendForwardedFor = (
+	received: number | string | readonly string[] | undefined,
+	peer: string | undefined,
+): string => {
+	const entries = Array.isArray(received) ? received.join(", ") : String(received ?? "");
+	return entries.trim() === "" ? peerEntry(peer) : `${entries}, ${peerEntry(peer)}`;
+};
+
+/**
  * The upstream's fields for its connection to this proxy, never sent to the
  * caller (RFC 9110 §7.6.1), beside `Connection` itself: the other hop-by-hop
  * fields; `Trailer`, which announces fields the piped body does not carry on;
@@ -396,6 +418,17 @@ const upstreamLimit = (bytes: number): number | string => (bytes === 0 ? "0" : b
  * `auth.proxy`. A caller naming `Via` in `Connection` drops its own members,
  * not the proxy's.
  *
+ * It tells the upstream where the request came from as this hop saw it, so
+ * an upstream that trusts only the proxy's hop reads no caller's claim:
+ * `X-Forwarded-For` gets the socket's peer appended after the inbound
+ * entries (`appendForwardedFor`), `X-Real-IP` is set to that peer, and
+ * `X-Forwarded-Host` to the `Host` the proxy received, which the library
+ * replaces with the upstream's. `Forwarded` is not sent on: it carries a host
+ * and a scheme too, which readers take from its first element, a caller's.
+ * `X-Forwarded-Proto` goes on as it arrived: the proxy listens on plain HTTP
+ * behind whatever terminates TLS, the only hop that can say the scheme. Like
+ * `Via`, these are set after the connection's own fields are dropped.
+ *
  * Last, it gives the request an agent of its own that keeps no connection
  * alive (`agent: false`), so each request goes on a connection that carries
  * no other, as its `connection: close` says (RFC 9112 §9.6) — Node's global
@@ -408,7 +441,8 @@ const upstreamLimit = (bytes: number): number | string => (bytes === 0 ? "0" : b
  * (`sendAsReceived`), so the body goes on as the bytes that arrived.
  *
  * What the decorator does not do: choose which fields are forwarded, beyond
- * the body's framing, the expectation, the connection's own fields and `Via`.
+ * the body's framing, the expectation, the connection's own fields, `Via` and
+ * the forwarding fields.
  * Every other choice is made before this stage, on `req.headers`.
  * express-http-proxy copies every inbound header except `connection` and
  * `host` onto the outbound request and sets `connection: close` before any
@@ -496,6 +530,15 @@ const proxyTo = (config: UpstreamStageConfig): RequestHandler => {
 			// After the connection's own fields, so a caller naming `Via` in
 			// `Connection` drops its members, not the proxy's.
 			proxyReqOpts.headers.via = appendVia(proxyReqOpts.headers.via, srcReq.httpVersion);
+			// Where the request came from, as this hop saw it: see the doc comment.
+			const peer = srcReq.socket?.remoteAddress;
+			proxyReqOpts.headers["x-forwarded-for"] = appendForwardedFor(proxyReqOpts.headers["x-forwarded-for"], peer);
+			if (peer === undefined) delete proxyReqOpts.headers["x-real-ip"];
+			else proxyReqOpts.headers["x-real-ip"] = peer;
+			const host = srcReq.headers?.host;
+			if (host === undefined) delete proxyReqOpts.headers["x-forwarded-host"];
+			else proxyReqOpts.headers["x-forwarded-host"] = host;
+			delete proxyReqOpts.headers.forwarded;
 			// A fresh agent that keeps no connection alive: the request says
 			// `connection: close`, so its connection carries no other request
 			// (RFC 9112 §9.6), whatever the upstream answers. Node's global

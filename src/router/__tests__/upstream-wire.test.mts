@@ -296,6 +296,145 @@ describe("createUpstreamProxy on the wire", () => {
 			}
 		});
 	});
+
+	/**
+	 * What the upstream is told about where the request came from: what this
+	 * hop saw, so an upstream that trusts only the proxy's hop reads no
+	 * client's claim. The front listens on 127.0.0.1, so the peer it sees is
+	 * that address, not its IPv4-mapped IPv6 form.
+	 */
+	describe("the forwarding fields", () => {
+		let front: Server;
+
+		beforeEach(async () => {
+			front = createServer(app);
+			await new Promise<void>((resolve) => front.listen(0, "127.0.0.1", resolve));
+		});
+
+		afterEach(async () => {
+			front.closeAllConnections();
+			await new Promise<void>((resolve) => front.close(() => resolve()));
+		});
+
+		const sent = (headers: string[], name: string) => rawPairs(headers, name).map(([, value]) => value);
+
+		it("appends the peer to X-Forwarded-For, after the entries the request arrived with", async () => {
+			const res = await request(front).get("/resource").set("X-Forwarded-For", "203.0.113.9, 198.51.100.7");
+
+			expect(res.status).toBe(200);
+			expect(sent(received[0], "x-forwarded-for")).toEqual(["203.0.113.9, 198.51.100.7, 127.0.0.1"]);
+		});
+
+		it("sends the peer alone in X-Forwarded-For when none arrived", async () => {
+			const res = await request(front).get("/resource");
+
+			expect(res.status).toBe(200);
+			expect(sent(received[0], "x-forwarded-for")).toEqual(["127.0.0.1"]);
+		});
+
+		it("still appends the peer when the inbound Connection names X-Forwarded-For, without the caller's entries", async () => {
+			const res = await request(front)
+				.get("/resource")
+				.set("Connection", "X-Forwarded-For")
+				.set("X-Forwarded-For", "203.0.113.9");
+
+			expect(res.status).toBe(200);
+			expect(sent(received[0], "x-forwarded-for")).toEqual(["127.0.0.1"]);
+		});
+
+		// Node joins repeated lines of these fields into one value in
+		// `req.headers`, so a second line is one more claim, read the same way.
+		it("treats repeated lines of the forwarding fields as one each", async () => {
+			const { port } = front.address() as AddressInfo;
+			const socket = connect(port, "127.0.0.1");
+			const closed = new Promise<void>((resolve) => socket.on("close", () => resolve()));
+			socket.resume();
+			socket.write(
+				[
+					"GET /resource HTTP/1.1",
+					"Host: app.example",
+					"X-Forwarded-For: 203.0.113.9",
+					"X-Forwarded-For: 198.51.100.7",
+					"X-Real-IP: 203.0.113.9",
+					"X-Real-IP: 198.51.100.7",
+					"X-Forwarded-Host: evil.example",
+					"X-Forwarded-Host: other.example",
+					"Forwarded: for=203.0.113.9",
+					"forwarded: host=evil.example",
+					"Connection: close",
+					"",
+					"",
+				].join("\r\n"),
+			);
+			await closed;
+
+			expect(received).toHaveLength(1);
+			expect(sent(received[0], "x-forwarded-for")).toEqual(["203.0.113.9, 198.51.100.7, 127.0.0.1"]);
+			expect(sent(received[0], "x-real-ip")).toEqual(["127.0.0.1"]);
+			expect(sent(received[0], "x-forwarded-host")).toEqual(["app.example"]);
+			expect(sent(received[0], "forwarded")).toEqual([]);
+		});
+
+		it("still sends the proxy's X-Real-IP and X-Forwarded-Host when the inbound Connection names them", async () => {
+			const res = await request(front)
+				.get("/resource")
+				.set("Host", "app.example")
+				.set("Connection", "X-Real-IP, X-Forwarded-Host")
+				.set("X-Real-IP", "203.0.113.9")
+				.set("X-Forwarded-Host", "evil.example");
+
+			expect(res.status).toBe(200);
+			expect(sent(received[0], "x-real-ip")).toEqual(["127.0.0.1"]);
+			expect(sent(received[0], "x-forwarded-host")).toEqual(["app.example"]);
+		});
+
+		it("sends the peer as X-Real-IP, in place of the caller's", async () => {
+			const res = await request(front).get("/resource").set("X-Real-IP", "203.0.113.9");
+
+			expect(res.status).toBe(200);
+			expect(sent(received[0], "x-real-ip")).toEqual(["127.0.0.1"]);
+		});
+
+		// The library sends the upstream's own Host; the one the proxy received
+		// goes as X-Forwarded-Host, in place of the caller's.
+		it("sends the Host the proxy received as X-Forwarded-Host, in place of the caller's", async () => {
+			const res = await request(front)
+				.get("/resource")
+				.set("Host", "app.example:8443")
+				.set("X-Forwarded-Host", "evil.example");
+
+			expect(res.status).toBe(200);
+			expect(sent(received[0], "x-forwarded-host")).toEqual(["app.example:8443"]);
+		});
+
+		it("sends no Forwarded, though the request arrived with one", async () => {
+			const res = await request(front).get("/resource").set("Forwarded", 'for=203.0.113.9;host=evil.example;proto=https');
+
+			expect(res.status).toBe(200);
+			expect(sent(received[0], "forwarded")).toEqual([]);
+		});
+
+		// The proxy listens on plain HTTP, behind whatever terminates TLS: only
+		// that hop can say the scheme.
+		it("sends X-Forwarded-Proto on as it arrived", async () => {
+			const res = await request(front).get("/resource").set("X-Forwarded-Proto", "https");
+
+			expect(res.status).toBe(200);
+			expect(sent(received[0], "x-forwarded-proto")).toEqual(["https"]);
+		});
+
+		it("sends no X-Forwarded-Host when the request arrived without a Host", async () => {
+			const { port } = front.address() as AddressInfo;
+			const socket = connect(port, "127.0.0.1");
+			const closed = new Promise<void>((resolve) => socket.on("close", () => resolve()));
+			socket.resume();
+			socket.write("GET /resource HTTP/1.0\r\nX-Forwarded-Host: evil.example\r\n\r\n");
+			await closed;
+
+			expect(received).toHaveLength(1);
+			expect(sent(received[0], "x-forwarded-host")).toEqual([]);
+		});
+	});
 });
 
 /**
