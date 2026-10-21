@@ -58,6 +58,12 @@ export const CUT_PATH = "/__upstream_cuts_off";
 export const HEAD_ONLY_PATH = "/__upstream_sends_only_the_head";
 
 /**
+ * A path the upstream answers with fields the proxy sets too: its own request
+ * id, a CORS grant to any origin, its own `Vary` and `X-Powered-By`.
+ */
+export const PROXY_FIELDS_PATH = "/__upstream_sets_the_proxys_fields";
+
+/**
  * A path the upstream starts answering and then keeps open, sending nothing
  * more until the connection closes: a download a caller can leave midway.
  */
@@ -111,6 +117,18 @@ export const startRecordingUpstream = async (): Promise<RecordingUpstream> => {
 				});
 				res.flushHeaders();
 				req.socket.end();
+				return;
+			}
+			if (path.endsWith(PROXY_FIELDS_PATH)) {
+				res.writeHead(200, {
+					"Content-Type": "application/json",
+					"X-Request-Id": "upstream-id",
+					"Access-Control-Allow-Origin": "*",
+					"Access-Control-Allow-Credentials": "true",
+					Vary: "Cookie",
+					"X-Powered-By": "upstream-framework",
+				});
+				res.end(JSON.stringify(upstreamBody(path)));
 				return;
 			}
 			if (path.endsWith(CUT_PATH)) {

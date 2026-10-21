@@ -28,6 +28,11 @@
  * (RFC 9110 §9.3.7), so `Vary: Origin` says nothing on it, and a browser
  * cannot send one cross-origin, since the preflight's allowed methods leave
  * `OPTIONS` out. Every other method gets the grant's fields and goes on.
+ *
+ * While the proxy answers CORS, the grant on an answer is the proxy's alone:
+ * the upstream stage drops the upstream's `Access-Control-Allow-Origin` and
+ * `Access-Control-Allow-Credentials` (`proxyOwnedCorsFields`), whether or not
+ * the proxy granted the origin, so the upstream cannot widen the pattern.
  */
 
 import type { IncomingMessage } from "node:http";
@@ -39,6 +44,21 @@ export interface CorsConfig {
 	http: { cors: { origin: { pattern: string | null } } };
 }
 
+/** Whether the proxy answers CORS: a pattern is set, and not empty. */
+const answersCors = (config: CorsConfig): boolean => Boolean(config.http.cors.origin.pattern);
+
+/** The fields that grant an origin access to an answer, lower-cased. */
+const GRANT_FIELDS: readonly string[] = ["access-control-allow-origin", "access-control-allow-credentials"];
+
+/**
+ * The CORS fields only the proxy sets on an answer: the grant while it
+ * answers CORS, none otherwise. Other `Access-Control-*` fields are the
+ * upstream's to send — `Access-Control-Expose-Headers` names its own fields,
+ * and the proxy sets none.
+ */
+export const proxyOwnedCorsFields = (config: CorsConfig): readonly string[] =>
+	answersCors(config) ? GRANT_FIELDS : [];
+
 /** A CORS preflight, as the Fetch standard defines one. */
 const isPreflight = (req: IncomingMessage): boolean =>
 	req.method === "OPTIONS" &&
@@ -48,7 +68,7 @@ const isPreflight = (req: IncomingMessage): boolean =>
 /** The CORS middleware, as the header of this file describes it. */
 export const createCors = (config: CorsConfig): RequestHandler => {
 	const { pattern } = config.http.cors.origin;
-	if (!pattern) return (_req, _res, next) => next();
+	if (!answersCors(config) || pattern === null) return (_req, _res, next) => next();
 	const answer = cors({ origin: new RegExp(pattern), credentials: true });
 	return (req, res, next) => {
 		if (req.method === "OPTIONS" && !isPreflight(req)) return next();

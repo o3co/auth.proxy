@@ -55,7 +55,7 @@ describe("createUpstreamProxy on the wire", () => {
 		app = express();
 		app.use(
 			createUpstreamProxy({
-				http: { bodyLimitSize: "1mb" },
+				http: { bodyLimitSize: "1mb", cors: { origin: { pattern: null } } },
 				upstream: { baseURL: `http://127.0.0.1:${port}` },
 			}),
 		);
@@ -259,7 +259,7 @@ describe("createUpstreamProxy on the wire, the upstream's answer", () => {
 		});
 		app.use(
 			createUpstreamProxy({
-				http: { bodyLimitSize: "1mb" },
+				http: { bodyLimitSize: "1mb", cors: { origin: { pattern: null } } },
 				upstream: { baseURL: `http://127.0.0.1:${port}` },
 			}),
 		);
@@ -399,5 +399,129 @@ describe("createUpstreamProxy on the wire, the upstream's answer", () => {
 		const head = text.slice(0, text.indexOf("\r\n\r\n")).toLowerCase();
 
 		expect(head).toMatch(/\r\ndate: /);
+	});
+});
+
+/**
+ * Whose value a proxied answer carries where the proxy and the upstream both
+ * set a field. The proxy's own — set before the stage, as the request id
+ * middleware and CORS do — stands; `Vary` lists both sides' members; while
+ * the proxy answers CORS, the grant is the proxy's alone.
+ */
+describe("createUpstreamProxy on the wire, fields both the proxy and the upstream set", () => {
+	let upstream: Server;
+	let baseURL: string;
+
+	beforeEach(async () => {
+		upstream = createServer((req, res) => {
+			const vary = req.headers["x-test-upstream-vary"];
+			if (vary !== undefined) res.setHeader("Vary", vary);
+			res.setHeader("X-Request-Id", "rid-upstream");
+			res.setHeader("Access-Control-Allow-Origin", "https://evil.example");
+			res.setHeader("Access-Control-Allow-Credentials", "true");
+			res.setHeader("Access-Control-Expose-Headers", "X-Total");
+			res.setHeader("X-Powered-By", "upstream-framework");
+			res.end("upstream answer");
+		});
+		await new Promise<void>((resolve) => upstream.listen(0, "127.0.0.1", resolve));
+		const { port } = upstream.address() as AddressInfo;
+		baseURL = `http://127.0.0.1:${port}`;
+	});
+
+	afterEach(async () => {
+		upstream.closeAllConnections();
+		await new Promise<void>((resolve, reject) => upstream.close((err) => (err ? reject(err) : resolve())));
+	});
+
+	/**
+	 * The stage behind a stand-in for what the proxy sets before it. The app
+	 * announces no `X-Powered-By` of its own, as `app.mts` does not.
+	 */
+	const proxyApp = (pattern: string | null, before: Record<string, string>) => {
+		const app = express().disable("x-powered-by");
+		app.use((_req, res, next) => {
+			for (const [name, value] of Object.entries(before)) res.setHeader(name, value);
+			next();
+		});
+		app.use(
+			createUpstreamProxy({
+				http: { bodyLimitSize: "1mb", cors: { origin: { pattern } } },
+				upstream: { baseURL },
+			}),
+		);
+		return app;
+	};
+
+	/** What `cors` sets on an answer to an origin the pattern admits. */
+	const GRANTED = {
+		"Access-Control-Allow-Origin": "https://app.example",
+		"Access-Control-Allow-Credentials": "true",
+		Vary: "Origin",
+	};
+	const PATTERN = "^https://app\\.example$";
+
+	it("keeps the proxy's request id, not the upstream's", async () => {
+		const res = await request(proxyApp(null, { "x-request-id": "rid-proxy" })).get("/resource");
+
+		expect(res.status).toBe(200);
+		expect(res.headers["x-request-id"]).toBe("rid-proxy");
+	});
+
+	it("keeps the proxy's CORS grant while it answers CORS, and passes the upstream's Expose-Headers on", async () => {
+		const res = await request(proxyApp(PATTERN, { "x-request-id": "rid-proxy", ...GRANTED })).get("/resource");
+
+		expect(res.status).toBe(200);
+		expect(res.headers["access-control-allow-origin"]).toBe("https://app.example");
+		expect(res.headers["access-control-allow-credentials"]).toBe("true");
+		expect(res.headers["access-control-expose-headers"]).toBe("X-Total");
+	});
+
+	// `cors` sets Vary: Origin, and no grant, for an origin it refuses.
+	it("drops the upstream's CORS grant while the proxy answers CORS, though the proxy granted nothing", async () => {
+		const res = await request(proxyApp(PATTERN, { Vary: "Origin" })).get("/resource");
+
+		expect(res.status).toBe(200);
+		expect(res.headers["access-control-allow-origin"]).toBeUndefined();
+		expect(res.headers["access-control-allow-credentials"]).toBeUndefined();
+	});
+
+	it("passes the upstream's CORS grant on when the proxy does not answer CORS", async () => {
+		const res = await request(proxyApp(null, {})).get("/resource");
+
+		expect(res.status).toBe(200);
+		expect(res.headers["access-control-allow-origin"]).toBe("https://evil.example");
+		expect(res.headers["access-control-allow-credentials"]).toBe("true");
+	});
+
+	it("passes the upstream's X-Powered-By on, the proxy announcing none", async () => {
+		const res = await request(proxyApp(null, {})).get("/resource");
+
+		expect(res.headers["x-powered-by"]).toBe("upstream-framework");
+	});
+
+	// RFC 9110 §12.5.5: the answer varies by what either side's choice read.
+	it.for([
+		{ name: "after the proxy's members", proxy: "Origin", upstream: "Cookie", vary: "Origin, Cookie" },
+		{
+			name: "once each, compared case-insensitively",
+			proxy: "Origin",
+			upstream: "origin, Accept-Encoding",
+			vary: "Origin, Accept-Encoding",
+		},
+		{ name: "as *, when the upstream's is *", proxy: "Origin", upstream: "*", vary: "*" },
+		{ name: "as the upstream's own, when the proxy set none", proxy: undefined, upstream: "Cookie", vary: "Cookie" },
+	])("lists the upstream's Vary members $name", async ({ proxy, upstream: upstreamVary, vary }) => {
+		const res = await request(proxyApp(null, proxy === undefined ? {} : { Vary: proxy }))
+			.get("/resource")
+			.set("x-test-upstream-vary", upstreamVary);
+
+		expect(res.status).toBe(200);
+		expect(res.headers.vary).toBe(vary);
+	});
+
+	it("keeps the proxy's Vary when the upstream sends none", async () => {
+		const res = await request(proxyApp(null, { Vary: "Origin" })).get("/resource");
+
+		expect(res.headers.vary).toBe("Origin");
 	});
 });

@@ -42,7 +42,9 @@ const config: AppConfig = validate(
 	AppConfigSchema,
 );
 
-const app = express();
+// The proxy announces no framework of its own; a proxied answer carries the
+// upstream's `X-Powered-By`, if any.
+const app = express().disable("x-powered-by");
 
 const server = app
 	.use(routers.Healthcheck.createRouter())

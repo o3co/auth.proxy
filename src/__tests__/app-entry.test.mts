@@ -22,7 +22,12 @@ import { afterAll, afterEach, beforeAll, describe, expect, it, vi } from "vitest
 import { bootProxy, type ProxyProcess, SUITE_TIMEOUT_MS, send, startProxy } from "./app-process.mjs";
 import { expectContinue } from "./expect-continue.mjs";
 import { type FakeProvider, json, startFakeProvider } from "./fake-provider.mjs";
-import { type RecordingUpstream, startRecordingUpstream, upstreamBody } from "./recording-upstream.mjs";
+import {
+	PROXY_FIELDS_PATH,
+	type RecordingUpstream,
+	startRecordingUpstream,
+	upstreamBody,
+} from "./recording-upstream.mjs";
 
 // Above the harness's boot deadline and stop grace, so a stuck child fails on
 // those — killed, with its stderr — rather than on vitest's timer.
@@ -343,6 +348,52 @@ describe("the entry point's mounts: healthcheck at the root, the mode router und
 		expect(upstream.receivedFor(requestId).map((request) => request.method)).toEqual(["OPTIONS"]);
 		expect(fake.requests).toHaveLength(1);
 		expect((await proxy.linesFor(requestId)).map((line) => line.event)).toEqual(["validation.incoming_request"]);
+	});
+
+	// The request id and the CORS grant are the proxy's; Vary lists what both
+	// sides' choices read; X-Powered-By is the upstream's, the proxy announcing
+	// none of its own.
+	it("keeps the proxy's request id and CORS grant on a proxied answer, merges Vary, and passes X-Powered-By on", async () => {
+		fake.respond("/oauth/introspect", json(200, { active: true }));
+		const res = await send(proxy.origin, {
+			path: `/api${PROXY_FIELDS_PATH}`,
+			headers: { "x-request-id": "entry-fields", origin: "https://app.example", authorization: "Bearer tok-fields" },
+		});
+
+		expect(res.status).toBe(200);
+		expect(upstream.receivedFor("entry-fields")).toHaveLength(1);
+		expect(res.headers["x-request-id"]).toBe("entry-fields");
+		expect(res.headers["access-control-allow-origin"]).toBe("https://app.example");
+		expect(res.headers["access-control-allow-credentials"]).toBe("true");
+		expect(res.headers.vary).toBe("Origin, Cookie");
+		expect(res.headers["x-powered-by"]).toBe("upstream-framework");
+	});
+
+	it("grants an origin the pattern does not admit nothing, though the upstream grants any", async () => {
+		fake.respond("/oauth/introspect", json(200, { active: true }));
+		const res = await send(proxy.origin, {
+			path: `/api${PROXY_FIELDS_PATH}`,
+			headers: {
+				"x-request-id": "entry-fields-refused",
+				origin: "https://evil.example",
+				authorization: "Bearer tok-fields-refused",
+			},
+		});
+
+		expect(res.status).toBe(200);
+		expect(upstream.receivedFor("entry-fields-refused")).toHaveLength(1);
+		expect(res.headers["access-control-allow-origin"]).toBeUndefined();
+	});
+
+	it("announces no X-Powered-By on an answer of its own", async () => {
+		const answers = await Promise.all([
+			send(proxy.origin, { path: "/_healthcheck" }),
+			send(proxy.origin, { path: "/resource" }),
+			send(proxy.origin, { path: "/api/resource", headers: { authorization: "Basic eDp5" } }),
+		]);
+
+		expect(answers.map((res) => res.status)).toEqual([200, 404, 400]);
+		for (const res of answers) expect(res.headers["x-powered-by"]).toBeUndefined();
 	});
 
 	it("does not route a request outside the prefix to the mode router: 404, nothing upstream, nothing logged", async () => {
