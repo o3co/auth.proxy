@@ -5,16 +5,18 @@
  * The upstream stage on the wire, through the real express-http-proxy.
  *
  * `upstream.test.mts` pins the options the stage hands to the library; this
- * file pins what the reasons for keeping the decorator rest on: how the body
- * is framed on the way to a real upstream, which fields reach it, and the
- * header name bytes it receives. Node lower-cases every inbound name in
- * `req.headers`, and the library copies `req.headers` onto the outbound
- * request, so without the decorator an upstream would read `authorization`.
+ * file pins what the stage keeps on the way to a real upstream: the body's
+ * bytes and how they are framed, the connection they go on, which fields
+ * reach the upstream, and the header name bytes it receives.
+ *
+ * On the names: Node lower-cases every inbound name in `req.headers`, and the
+ * library copies `req.headers` onto the outbound request, so without the
+ * decorator an upstream would read `authorization`.
  * The names are read from `rawHeaders`, because `req.headers` lower-cases them
  * again on the upstream side and would hide the difference.
  */
 import { createServer, type Server } from "node:http";
-import { type AddressInfo, connect } from "node:net";
+import { type AddressInfo, connect, createServer as createNetServer, type Server as NetServer, type Socket } from "node:net";
 import express from "express";
 import request from "supertest";
 import { afterEach, beforeEach, describe, expect, it } from "vitest";
@@ -150,6 +152,24 @@ describe("createUpstreamProxy on the wire", () => {
 		expect(rawPairs(received[0], "content-length").map(([, value]) => value)).toEqual(["8"]);
 	});
 
+	// The library's own sender re-serialises a form body that parses as JSON,
+	// unencoded: an upstream verifying a signature over the body, or a WAF
+	// reading it, would see other bytes than the caller sent.
+	it.for([
+		{ name: "a JSON object whose values hold & and a space", body: '{"a":"1&role=admin","b":"x y"}' },
+		{ name: "a bare JSON number", body: "42" },
+		{ name: "a bare JSON true", body: "true" },
+	])("sends a form-encoded body that parses as JSON on unchanged: $name", async ({ body }) => {
+		const res = await request(app)
+			.post("/upload")
+			.set("content-type", "application/x-www-form-urlencoded")
+			.send(body);
+
+		expect(res.status).toBe(200);
+		expect(bodies.map((sent) => sent.toString("latin1"))).toEqual([body]);
+		expect(rawPairs(received[0], "content-length").map(([, value]) => value)).toEqual([String(body.length)]);
+	});
+
 	// The stage has the whole body before it sends the request on, so there
 	// is nothing to ask the upstream to wait for. Forwarded, the expectation
 	// makes Node send the request's headers at once, before the library sets
@@ -275,6 +295,126 @@ describe("createUpstreamProxy on the wire", () => {
 				front.close();
 			}
 		});
+	});
+});
+
+/**
+ * The upstream connection itself. The stage sends `connection: close`, so it
+ * may not send another request on that connection (RFC 9112 §9.6), whatever
+ * the upstream answers. This upstream answers without `Connection: close` and
+ * keeps the socket open, as one that ignores the request's `close` would.
+ */
+describe("createUpstreamProxy on the wire, the upstream connection", () => {
+	let upstream: NetServer;
+	/** Which upstream connection, by the order it was accepted, carried each request. */
+	let carriedBy: number[];
+	let sockets: Socket[];
+	let app: express.Express;
+
+	beforeEach(async () => {
+		carriedBy = [];
+		sockets = [];
+		upstream = createNetServer((socket) => {
+			sockets.push(socket);
+			const id = sockets.length;
+			let buffered = "";
+			socket.on("data", (part: Buffer) => {
+				buffered += part.toString("latin1");
+				for (let end = buffered.indexOf("\r\n\r\n"); end !== -1; end = buffered.indexOf("\r\n\r\n")) {
+					const length = Number(/\r\ncontent-length: *(\d+)/i.exec(buffered.slice(0, end))?.[1] ?? 0);
+					buffered = buffered.slice(end + 4 + length);
+					carriedBy.push(id);
+					socket.write("HTTP/1.1 200 OK\r\nContent-Length: 2\r\n\r\nok");
+				}
+			});
+			socket.on("error", () => {});
+		});
+		await new Promise<void>((resolve) => upstream.listen(0, "127.0.0.1", resolve));
+		const { port } = upstream.address() as AddressInfo;
+		app = express();
+		app.use(
+			createUpstreamProxy({
+				http: { bodyLimitSize: "1mb", cors: { origin: { pattern: null } } },
+				upstream: { baseURL: `http://127.0.0.1:${port}` },
+			}),
+		);
+	});
+
+	afterEach(async () => {
+		for (const socket of sockets) socket.destroy();
+		await new Promise<void>((resolve) => upstream.close(() => resolve()));
+	});
+
+	it("sends each caller's request on a connection of its own, though the upstream keeps it open", async () => {
+		for (const path of ["/first", "/second", "/third"]) {
+			const res = await request(app).get(path);
+			expect(res.status).toBe(200);
+		}
+
+		expect(carriedBy).toEqual([1, 2, 3]);
+	});
+});
+
+/**
+ * An upstream that answers before it has read the whole body — a `413` on
+ * the headers — and then stops reading but keeps its connection open. The
+ * caller's answer is complete while the request to the upstream is still
+ * writing; the stage ends that request once the caller's answer is done,
+ * rather than hold the connection and go on sending the body.
+ */
+describe("createUpstreamProxy on the wire, an upstream that answers early", () => {
+	const BODY_BYTES = 10 * 1024 * 1024;
+	let upstream: NetServer;
+	let sockets: Socket[];
+	let app: express.Express;
+
+	beforeEach(async () => {
+		sockets = [];
+		upstream = createNetServer((socket) => {
+			sockets.push(socket);
+			socket.once("data", () => {
+				socket.write("HTTP/1.1 413 Payload Too Large\r\nContent-Length: 0\r\n\r\n");
+				socket.pause();
+			});
+			socket.on("error", () => {});
+		});
+		await new Promise<void>((resolve) => upstream.listen(0, "127.0.0.1", resolve));
+		const { port } = upstream.address() as AddressInfo;
+		app = express();
+		app.use(
+			createUpstreamProxy({
+				http: { bodyLimitSize: "64mb", cors: { origin: { pattern: null } } },
+				upstream: { baseURL: `http://127.0.0.1:${port}` },
+			}),
+		);
+	});
+
+	afterEach(async () => {
+		for (const socket of sockets) socket.destroy();
+		await new Promise<void>((resolve) => upstream.close(() => resolve()));
+	});
+
+	// While the upstream reads nothing, a connection the proxy closed cannot be
+	// seen from its end. So once the caller has its answer, the upstream reads
+	// again: an upstream request still open sends the whole body and is only
+	// then done with; one the stage ended stops short of it.
+	it("ends the upstream request once the caller has the answer, without sending the rest of the body", async () => {
+		const res = await request(app)
+			.post("/upload")
+			.set("content-type", "application/octet-stream")
+			.send(Buffer.alloc(BODY_BYTES));
+
+		expect(res.status).toBe(413);
+		expect(sockets).toHaveLength(1);
+		const socket = sockets[0] as Socket;
+		await new Promise((resolve) => setTimeout(resolve, 100));
+		socket.on("data", () => {});
+		const ended = new Promise<void>((resolve) => socket.once("close", () => resolve()));
+		socket.resume();
+		await Promise.race([ended, new Promise((resolve) => setTimeout(resolve, 2_000))]);
+
+		expect(socket.destroyed).toBe(true);
+		expect(socket.bytesRead).toBeLessThan(BODY_BYTES);
 	});
 });
 

@@ -20,7 +20,7 @@
  * do, and why it is kept, is the doc comment on the function.
  */
 
-import type { IncomingMessage, ServerResponse } from "node:http";
+import type { ClientRequest, IncomingMessage, RequestOptions, ServerResponse } from "node:http";
 import type { NextFunction, RequestHandler } from "express";
 import proxy from "express-http-proxy";
 import { bodyLimitBytes } from "./body-limit.mjs";
@@ -117,9 +117,9 @@ const THIS_HOP_ONLY = ["keep-alive", "proxy-connection", "te", "upgrade", "proxy
  * Fields the proxy decides what the upstream receives for. A caller naming
  * one in `Connection` does not remove it: that would let the caller take away
  * the token the proxy forwards or injected, the request id it correlates by,
- * or the library's `connection: close`, which keeps one upstream connection
- * per request. `Content-Length` and `Host` need no entry: the library and
- * Node set them again after the decorator.
+ * or the library's `connection: close`, which tells the upstream the
+ * connection carries this one request. `Content-Length` and `Host` need no
+ * entry: the library and Node set them again after the decorator.
  */
 const PROXY_DECIDED = new Set(["authorization", "x-request-id", "connection"]);
 
@@ -277,6 +277,55 @@ const watchAnswer = (res: ServerResponse, next: NextFunction, restoreHead: () =>
 	});
 };
 
+/**
+ * The part of the library's per-request state that `sendAsReceived` reads
+ * and fills (`lib/scopeContainer.js` in express-http-proxy): the module and
+ * options for the upstream request, the body read, and where the library
+ * looks for the request it sent and the answer it pipes.
+ */
+interface LibraryExchange {
+	user: { res: ServerResponse };
+	proxy: {
+		requestModule: { request(options: RequestOptions, onAnswer: (answer: IncomingMessage) => void): ClientRequest };
+		reqBuilder: RequestOptions;
+		bodyContent: Buffer | string;
+		req?: ClientRequest;
+		res?: IncomingMessage;
+	};
+}
+
+/**
+ * Sends the upstream request with the body as the bytes that arrived. It
+ * takes the place of the library's own sender, which re-serialises an
+ * `application/x-www-form-urlencoded` body that parses as JSON, unencoded
+ * (`{"a":"1&b=2"}` goes as `a=1&b=2`, a bare `42` as nothing) — a different
+ * body from the one a signature covers or a firewall in front of the upstream
+ * read. Otherwise it does what that sender does with the stage's options,
+ * and only with them: the library has read the whole body (`parseReqBody`, its
+ * default) and set the `Content-Length` it is framed by; the upstream's answer
+ * is handed on as soon as its head arrives, for the library to stream, which
+ * it does only with no response decorator and no skip filter; there is no
+ * `timeout` to apply. Unlike that sender, it ends the upstream request
+ * whenever the caller's response closes, complete or not: a caller that left
+ * needs nothing more from it, and an upstream that answered before reading
+ * the whole body — a `413` on the headers — and stopped reading would
+ * otherwise hold the connection and the unsent body. The fields it reads are the library's own, not
+ * its documented API; `upstream-wire.test.mts` drives the real library
+ * through them.
+ */
+const sendAsReceived = (exchange: LibraryExchange): Promise<LibraryExchange> =>
+	new Promise((resolve, reject) => {
+		const { res } = exchange.user;
+		const sent = exchange.proxy.requestModule.request(exchange.proxy.reqBuilder, (answer) => {
+			exchange.proxy.res = answer;
+			resolve(exchange);
+		});
+		exchange.proxy.req = sent;
+		sent.on("error", reject);
+		res.on("close", () => sent.destroy());
+		sent.end(exchange.proxy.bodyContent);
+	});
+
 /** The config fields the stage reads. `AppConfig` satisfies it structurally. */
 export interface UpstreamStageConfig {
 	upstream: { baseURL: string };
@@ -347,9 +396,16 @@ const upstreamLimit = (bytes: number): number | string => (bytes === 0 ? "0" : b
  * `auth.proxy`. A caller naming `Via` in `Connection` drops its own members,
  * not the proxy's.
  *
+ * Last, it gives the request an agent of its own that keeps no connection
+ * alive (`agent: false`), so each request goes on a connection that carries
+ * no other, as its `connection: close` says (RFC 9112 §9.6) — Node's global
+ * agent would keep the connection for the next caller's request when the
+ * upstream answers keep-alive.
+ *
  * Outside the decorator, the stage turns off the library's own
  * `Accept-Charset` (`reqBodyEncoding: null`), which would replace the
- * caller's: the caller's goes on unchanged.
+ * caller's: the caller's goes on unchanged. And it sends the request itself
+ * (`sendAsReceived`), so the body goes on as the bytes that arrived.
  *
  * What the decorator does not do: choose which fields are forwarded, beyond
  * the body's framing, the expectation, the connection's own fields and `Via`.
@@ -392,14 +448,24 @@ export const createUpstreamProxy = (config: UpstreamStageConfig): RequestHandler
 	};
 };
 
+/**
+ * The library's options, with `sendProxyRequest`, which it reads
+ * (`app/steps/sendProxyRequest.js`) though its type declarations leave it out.
+ */
+type StageProxyOptions = proxy.ProxyOptions & {
+	sendProxyRequest: (exchange: LibraryExchange) => Promise<LibraryExchange>;
+};
+
 /** The library's handler, configured as `createUpstreamProxy` describes. */
-const proxyTo = (config: UpstreamStageConfig): RequestHandler =>
-	proxy(config.upstream.baseURL, {
+const proxyTo = (config: UpstreamStageConfig): RequestHandler => {
+	const options: StageProxyOptions = {
 		limit: upstreamLimit(bodyLimitBytes(config)),
 		// The library's default, utf-8, would be sent as `Accept-Charset` in
 		// place of the caller's; null sends the caller's on. The body goes on
-		// as the bytes that arrived, so no encoding is needed for it.
+		// as the bytes that arrived (`sendAsReceived`), so no encoding is
+		// needed for it.
 		reqBodyEncoding: null,
+		sendProxyRequest: sendAsReceived,
 		proxyErrorHandler: (err, res, next) => {
 			if (res.destroyed && !hasOwnStatus(err)) return;
 			next(toUpstreamFailure(err));
@@ -430,6 +496,15 @@ const proxyTo = (config: UpstreamStageConfig): RequestHandler =>
 			// After the connection's own fields, so a caller naming `Via` in
 			// `Connection` drops its members, not the proxy's.
 			proxyReqOpts.headers.via = appendVia(proxyReqOpts.headers.via, srcReq.httpVersion);
+			// A fresh agent that keeps no connection alive: the request says
+			// `connection: close`, so its connection carries no other request
+			// (RFC 9112 §9.6), whatever the upstream answers. Node's global
+			// agent would keep it for the next caller's request. A forward proxy
+			// from the environment (`NODE_USE_ENV_PROXY`), which Node applies
+			// through that agent, does not apply here.
+			proxyReqOpts.agent = false;
 			return proxyReqOpts;
 		},
-	});
+	};
+	return proxy(config.upstream.baseURL, options);
+};
