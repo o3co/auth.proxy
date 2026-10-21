@@ -45,11 +45,11 @@ One deployment runs one of two modes:
 
 ### Validation mode (`auth.mode = "validation"`)
 
-Validates inbound `Authorization: Bearer <token>` headers against the provider's introspection endpoint. A request with no `Authorization` header, or an empty one, is forwarded unchanged (public endpoints remain reachable). A request whose `Authorization` is anything other than `Bearer <token>` — another scheme, a lowercase `bearer`, a `Bearer` with no usable token — is refused `400 Invalid Token Type` (see the challenge table below).
+Validates inbound `Authorization: Bearer <token>` headers against the provider's introspection endpoint. A request with no `Authorization` header, or an empty one, is forwarded unchanged (public endpoints remain reachable). A request whose `Authorization` is anything other than exactly `Bearer`, one space and an RFC 6750 §2.1 `b64token` (letters, digits, `-._~+/`, then any `=` padding) — another scheme, a lowercase `bearer`, a `Bearer` with no token, two spaces, or anything after the token — is refused `400 Invalid Token Type` (see the challenge table below), and so is a request with more than one `Authorization` header line. Whenever a token is forwarded, the header the upstream receives is therefore `Bearer` and the one token that was introspected: no upstream that reads the header its own way (the last word, a regex to the end of the line) can find in it a token the provider never saw. Whitespace around the whole value is not part of it (RFC 9110 §5.5) and is dropped before either side reads it.
 
 Flow:
 
-1. Detects `Authorization: Bearer <token>` header (passes through if there is no `Authorization` header, or an empty one; any other `Authorization` is `400`).
+1. Detects `Authorization: Bearer <token>` header (passes through if there is no `Authorization` header, or an empty one; any other `Authorization`, or more than one, is `400`).
 2. Checks in-memory cache keyed by SHA-256 of the token.
 3. On cache miss, calls provider's `POST /oauth/introspect`. A redirect from it is not followed — the endpoint is configuration — and is answered `502 Provider Configuration Error`. Concurrent misses on the same token coalesce into a single provider call (single-flight), as they do in injection mode.
 4. Returns `401` if `active: false`; forwards the request if `active: true`. Only a `200` is read as an answer: another `2xx`, even one carrying `active: true`, is a provider failure (see the logging table below).
@@ -59,8 +59,8 @@ Challenges, without and with `VALIDATION_REALM` (here `api`):
 | Refusal | No realm | Realm set |
 | --- | --- | --- |
 | `401`: an access token the proxy would not accept (RFC 6750 §3) | `Bearer error="invalid_token"` | `Bearer realm="api", error="invalid_token"` |
-| `400`: a `Bearer` credential too malformed to read (`Bearer`, `Bearer  t`) | `Bearer error="invalid_request"` | `Bearer realm="api", error="invalid_request"` |
-| `400`: another method (`Basic …`, or a lowercase `bearer`, which this proxy does not admit) — no error code, as §3.1 says | none | `Bearer realm="api"` |
+| `400`: a `Bearer` credential that is not exactly `Bearer <b64token>` (`Bearer`, `Bearer  t`, `Bearer t extra`), or more than one `Authorization` line when any of them names the `Bearer` scheme | `Bearer error="invalid_request"` | `Bearer realm="api", error="invalid_request"` |
+| `400`: another method (`Basic …`, or a lowercase `bearer`, which this proxy does not admit), one line or several — no error code, as §3.1 says | none | `Bearer realm="api"` |
 
 A `413`, `500`, `501`, `502` or `504` carries none, because none of them is a statement about the caller's Bearer credential. Injection mode answers no challenge on any path, deliberately: its caller holds a session cookie, not a Bearer token.
 

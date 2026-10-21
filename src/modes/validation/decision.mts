@@ -25,11 +25,12 @@ import { extractBearerToken, namesBearerScheme } from "../../express/bearer.mjs"
 import type { Logger } from "../../logger.mjs";
 import { IntrospectHttpError, type IntrospectionResult } from "./introspection-client.mjs";
 
-/** The two header values the decision reads — plain strings, no request object. */
+/** The two headers the decision reads — plain strings, no request object. */
 export interface ValidationInputs {
 	/** As normalised by `express/requestId`; `""` when that middleware is not mounted first. */
 	requestId: string;
-	authorization: string | undefined;
+	/** Every `Authorization` field line the request carried, in order; empty when it carried none. */
+	authorization: readonly string[];
 }
 
 /**
@@ -130,10 +131,16 @@ const reject = (
  * the introspector and says what happens to the request. It never sees
  * Express; `router.mts` reads the headers and applies the outcome.
  *
- *   - no Authorization: forward, the provider not consulted.
- *   - not `Bearer <token>`: 400 Invalid Token Type — with
- *     `error="invalid_request"` when it named Bearer, the realm alone when it
- *     used another method.
+ *   - no Authorization, or one empty line: forward, the provider not
+ *     consulted.
+ *   - more than one Authorization line: 400 Invalid Token Type —
+ *     `Authorization` is not a list field (RFC 9110 §5.3), so the request is
+ *     malformed whichever line a hop would keep — with
+ *     `error="invalid_request"` when any line named Bearer, the realm alone
+ *     otherwise.
+ *   - not exactly `Bearer <b64token>` (`extractBearerToken`): 400 Invalid
+ *     Token Type — with `error="invalid_request"` when it named Bearer, the
+ *     realm alone when it used another method.
  *   - `active: false`: 401 Invalid Token.
  *   - the provider answers 401: 401 Invalid Token, or 502 Provider
  *     Configuration Error when it refused the proxy's own client
@@ -146,8 +153,8 @@ const reject = (
  *   - `active: true`: forward.
  *
  * What is forwarded is decided by `req.headers`, which the middleware never
- * modifies on this path: the first SP-delimited word is introspected, the
- * inbound bytes go upstream.
+ * modifies on this path: the inbound bytes go upstream, and they are exactly
+ * `Bearer`, one SP and the token that was introspected.
  *
  * Every challenge carries `policy.realm` when one is configured.
  *
@@ -165,25 +172,35 @@ export const decideValidation = async (
 ): Promise<ValidationOutcome> => {
 	const invalidToken = challengeFor(policy, "invalid_token");
 
-	if (!authorization) {
+	if (authorization.length === 0 || (authorization.length === 1 && authorization[0] === "")) {
 		return { kind: "forward" };
 	}
 
-	const token = extractBearerToken(authorization);
-	// Truthiness rather than `=== null`, matching the `!authorization` check
-	// above it: the empty string is the only other falsy value a `string | null`
-	// can hold, it is not a credential, and refusing it here is the safe
-	// direction if the parser ever stops ruling it out.
+	if (authorization.length > 1) {
+		return reject(
+			400,
+			"Invalid Token Type",
+			challengeFor(policy, authorization.some(namesBearerScheme) ? "invalid_request" : null),
+		);
+	}
+
+	const [header] = authorization;
+	const token = extractBearerToken(header);
+	// Truthiness rather than `=== null`: the empty string is the only other
+	// falsy value a `string | null` can hold, it is not a credential, and
+	// refusing it here is the safe direction if the parser ever stops ruling
+	// it out.
 	if (!token) {
-		// One status, two challenges. A `Bearer` with no usable token
-		// after it is §3.1's "otherwise malformed" request: `invalid_request`.
+		// One status, two challenges. A `Bearer` that is not exactly `Bearer`,
+		// one SP and a b64token is §3.1's "otherwise malformed" request:
+		// `invalid_request`.
 		// Another method — `Basic`, or a lowercase `bearer` this parser does not
 		// admit — "SHOULD NOT" carry an error code (§3.1's last paragraph), so it
 		// gets the realm alone, or nothing when none is configured.
 		return reject(
 			400,
 			"Invalid Token Type",
-			challengeFor(policy, namesBearerScheme(authorization) ? "invalid_request" : null),
+			challengeFor(policy, namesBearerScheme(header) ? "invalid_request" : null),
 		);
 	}
 

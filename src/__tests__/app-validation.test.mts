@@ -238,12 +238,11 @@ const casesFor = (setup: Setup): Case[] => [
 		lines: [INCOMING],
 	},
 	{
-		name: "introspects the first word of `Bearer <token> extra` and forwards the header as received",
-		authorization: (token) => `Bearer ${token} extra`,
-		introspection: json(200, { active: true }),
-		status: 200,
-		answer: "forwarded",
-		challenge: null,
+		name: "refuses `Bearer <token> <second token>` without asking the provider: 400 Invalid Token Type with the invalid_request challenge",
+		authorization: (token) => `Bearer ${token} eyJhbGciOiJub25lIn0.eyJzdWIiOiJhZG1pbiJ9.`,
+		status: 400,
+		answer: { code: 400, message: "Invalid Token Type" },
+		challenge: setup.challenge.invalidRequest,
 		lines: [INCOMING],
 	},
 	{
