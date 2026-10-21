@@ -262,7 +262,7 @@ const UNKNOWN_SESSION_FAILURE: SessionFailureLine = {
 };
 
 /**
- * The session decision: the one place that reads the cookie, consults
+ * The session decision: the one place that reads the cookie's value, consults
  * the cache, the flight table and the grant client, and says what happens to
  * the request. It never sees Express; `router.mts` reads the headers and
  * applies the outcome.
