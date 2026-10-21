@@ -946,3 +946,164 @@ describe("proxy config — mode selection", () => {
 		).toThrow();
 	});
 });
+
+// Values the environment gets wrong easily — an empty override, a missing
+// scheme or slash, a negative number — that the proxy would otherwise run on
+// and misbehave with. Each is refused at boot, the message naming the key.
+describe("proxy config — values refused at boot rather than misread", () => {
+	const VALIDATION = { AUTH_MODE: "validation" };
+	const INJECTION = { AUTH_MODE: "injection", INJECTION_CLIENT_ID: "my-spa", INJECTION_SCOPE: "api" };
+	const load = (env: Record<string, string>) => validate(parseFile(confPath, { env }), AppConfigSchema);
+	const refusal = (env: Record<string, string>): string => {
+		try {
+			load(env);
+		} catch (err) {
+			return (err as Error).message;
+		}
+		throw new Error("expected the configuration to be refused");
+	};
+
+	// express-http-proxy keeps only the host and port of its target, so a path
+	// would be dropped without a word and the upstream's whole path space
+	// exposed; a value without a scheme fails every request, and an empty one
+	// crashes at boot without naming the key.
+	describe("upstream.baseURL", () => {
+		it.each([
+			["http://backend:4000", "http://backend:4000"],
+			["https://backend.example/", "https://backend.example"],
+			["http://[::1]:4000", "http://[::1]:4000"],
+			["HTTP://Backend.Example:80", "http://backend.example"],
+		])("reads %j as the origin %j", (value, origin) => {
+			expect(load({ ...VALIDATION, UPSTREAM_BASEURL: value }).upstream.baseURL).toBe(origin);
+		});
+
+		it.each([
+			"",
+			"backend:4000",
+			"backend",
+			"http://backend:4000/v1",
+			"http://backend:4000/v1/",
+			"http://backend:4000/a/..",
+			"http://backend:4000?x=1",
+			"http://backend:4000#f",
+			"http://user:pass@backend:4000",
+			"http://@backend:4000",
+			"ftp://backend",
+			"http://",
+			"http://backend:0",
+		])("refuses UPSTREAM_BASEURL=%j, naming the key", (value) => {
+			expect(refusal({ ...VALIDATION, UPSTREAM_BASEURL: value })).toMatch(/upstream\.baseURL must be/);
+		});
+
+		it("never quotes a refused value, which may carry a credential", () => {
+			expect(refusal({ ...VALIDATION, UPSTREAM_BASEURL: "http://u:hunter2@backend" })).not.toMatch(/hunter2/);
+		});
+	});
+
+	// An empty HTTP_PORT coerced to 0, a port the OS picks at random.
+	describe("http.port", () => {
+		it.each([["1", 1], ["8080", 8080], ["65535", 65535], [" 80 ", 80]])("reads HTTP_PORT=%j", (value, port) => {
+			expect(load({ ...VALIDATION, HTTP_PORT: value }).http.port).toBe(port);
+		});
+
+		it.each(["", " ", "0", "65536", "-1", "+80", "80.5", "eighty", "1e3", "0x50"])(
+			"refuses HTTP_PORT=%j, naming the key",
+			(value) => {
+				expect(refusal({ ...VALIDATION, HTTP_PORT: value })).toMatch(/http\.port must be an integer from 1 to 65535/);
+			},
+		);
+	});
+
+	describe("http.hostname", () => {
+		it.each(["", " ", " localhost", "local host"])("refuses HTTP_HOSTNAME=%j, naming the key", (value) => {
+			expect(refusal({ ...VALIDATION, HTTP_HOSTNAME: value })).toMatch(/http\.hostname/);
+		});
+	});
+
+	// Express mounts a prefix without its leading slash nowhere, and reads `:`,
+	// `*`, `(` and the like as route syntax; a trailing slash mounts the same as
+	// none.
+	describe("http.pathPrefix", () => {
+		it.each(["/", "/api", "/api/", "/api/v1", "/a-b_c.d~e/v2"])("reads HTTP_PATH_PREFIX=%j", (value) => {
+			expect(load({ ...VALIDATION, HTTP_PATH_PREFIX: value }).http.pathPrefix).toBe(value);
+		});
+
+		it.each(["", "api", "api/", "//", "/api//", "//api", "/:tenant", "/api/*", "/api(v1)", "/a b", "/%7Eu", "/.", "/api/..", "/a?b", "/a#b"])(
+			"refuses HTTP_PATH_PREFIX=%j, naming the key",
+			(value) => {
+				expect(refusal({ ...VALIDATION, HTTP_PATH_PREFIX: value })).toMatch(/http\.pathPrefix must be/);
+			},
+		);
+	});
+
+	it("refuses an INJECTION_PROVIDER_ORIGIN on port 0, naming the key", () => {
+		expect(refusal({ ...INJECTION, INJECTION_PROVIDER_ORIGIN: "http://provider:0" })).toMatch(
+			/auth\.injection\.providerOrigin/,
+		);
+	});
+
+	describe("http.cors.origin.pattern", () => {
+		it("is unset by default, and when CORS_ORIGIN_PATTERN is empty", () => {
+			expect(load(VALIDATION).http.cors.origin.pattern).toBeNull();
+			expect(load({ ...VALIDATION, CORS_ORIGIN_PATTERN: "" }).http.cors.origin.pattern).toBeNull();
+		});
+
+		it("reads a pattern", () => {
+			const pattern = "^https://app\\.example\\.com$";
+			expect(load({ ...VALIDATION, CORS_ORIGIN_PATTERN: pattern }).http.cors.origin.pattern).toBe(pattern);
+		});
+
+		it.each(["(", "[a-", "a{2,1}", "*"])("refuses CORS_ORIGIN_PATTERN=%j, which does not compile, naming the key", (value) => {
+			expect(refusal({ ...VALIDATION, CORS_ORIGIN_PATTERN: value })).toMatch(
+				/http\.cors\.origin\.pattern must be a regular expression/,
+			);
+		});
+	});
+
+	// 0 is the documented "off": nothing is cached. A negative or a non-number
+	// is a mistake, which used to turn the cache off just the same.
+	describe("auth.validation.introspect.cacheTtlSec", () => {
+		const ttlOf = (value: string) => {
+			const config = load({ ...VALIDATION, INTROSPECT_CACHE_TTL_SEC: value });
+			if (config.auth.mode !== "validation") throw new Error("narrow");
+			return config.auth.validation.introspect.cacheTtlSec;
+		};
+
+		it.each([["0", 0], ["1", 1], ["3600", 3600]])("reads INTROSPECT_CACHE_TTL_SEC=%j", (value, ttl) => {
+			expect(ttlOf(value)).toBe(ttl);
+		});
+
+		it.each(["", "-5", "1.5", "thirty"])("refuses INTROSPECT_CACHE_TTL_SEC=%j, naming the key", (value) => {
+			expect(refusal({ ...VALIDATION, INTROSPECT_CACHE_TTL_SEC: value })).toMatch(
+				/auth\.validation\.introspect\.cacheTtlSec must be an integer of at least 0/,
+			);
+		});
+	});
+
+	// An empty value coerced to 0, which a non-negative key accepted; a timeout
+	// above what a Node timer holds fires after 1 ms.
+	describe.each([
+		{ key: "auth.validation.introspect.cacheMaxEntries", env: { ...VALIDATION }, name: "INTROSPECT_CACHE_MAX_ENTRIES", refused: ["", "0", "-1", "1.5", "many"] },
+		{ key: "auth.validation.introspect.timeoutMs", env: { ...VALIDATION }, name: "INTROSPECT_TIMEOUT_MS", refused: ["", "0", "-1", "1.5", "2147483648"] },
+		{ key: "auth.injection.tokenCache.ttlSeconds", env: { ...INJECTION }, name: "INJECTION_TOKEN_CACHE_TTL_SEC", refused: ["", "0", "-1", "1.5"] },
+		{ key: "auth.injection.tokenCache.maxEntries", env: { ...INJECTION }, name: "INJECTION_TOKEN_CACHE_MAX_ENTRIES", refused: ["", "0", "-1", "1.5"] },
+		{ key: "auth.injection.tokenCache.safetyMarginSeconds", env: { ...INJECTION }, name: "INJECTION_TOKEN_CACHE_SAFETY_MARGIN_SEC", refused: ["", "-1", "1.5"] },
+		{ key: "auth.injection.timeoutMs", env: { ...INJECTION }, name: "INJECTION_TIMEOUT_MS", refused: ["", "0", "-1", "1.5", "2147483648"] },
+	])("$key", ({ key, env, name, refused }) => {
+		it.each(refused)(`refuses ${name}=%j, naming the key`, (value) => {
+			expect(refusal({ ...env, [name]: value })).toMatch(new RegExp(`${key.replaceAll(".", "\\.")} must be an integer`));
+		});
+	});
+
+	it("reads the largest timeout a Node timer holds", () => {
+		const config = load({ ...VALIDATION, INTROSPECT_TIMEOUT_MS: "2147483647" });
+		if (config.auth.mode !== "validation") throw new Error("narrow");
+		expect(config.auth.validation.introspect.timeoutMs).toBe(2147483647);
+	});
+
+	it("reads a safety margin of 0 seconds", () => {
+		const config = load({ ...INJECTION, INJECTION_TOKEN_CACHE_SAFETY_MARGIN_SEC: "0" });
+		if (config.auth.mode !== "injection") throw new Error("narrow");
+		expect(config.auth.injection.tokenCache.safetyMarginSeconds).toBe(0);
+	});
+});
