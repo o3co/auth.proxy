@@ -421,6 +421,14 @@ describe("createUpstreamProxy on the wire, fields both the proxy and the upstrea
 			res.setHeader("Access-Control-Allow-Credentials", "true");
 			res.setHeader("Access-Control-Expose-Headers", "X-Total");
 			res.setHeader("X-Powered-By", "upstream-framework");
+			const connection = req.headers["x-test-upstream-connection"];
+			if (connection !== undefined) res.setHeader("Connection", connection);
+			if (req.headers["x-test-upstream-head-only"] !== undefined) {
+				res.setHeader("Content-Length", "100");
+				res.flushHeaders();
+				req.socket.end();
+				return;
+			}
 			res.end("upstream answer");
 		});
 		await new Promise<void>((resolve) => upstream.listen(0, "127.0.0.1", resolve));
@@ -449,6 +457,10 @@ describe("createUpstreamProxy on the wire, fields both the proxy and the upstrea
 				upstream: { baseURL },
 			}),
 		);
+		// The proxy's own answer after the stage, as the router's error handler gives.
+		app.use((_err: unknown, _req: express.Request, res: express.Response, _next: express.NextFunction) => {
+			res.status(502).json({ error: "upstream_unavailable" });
+		});
 		return app;
 	};
 
@@ -476,9 +488,19 @@ describe("createUpstreamProxy on the wire, fields both the proxy and the upstrea
 		expect(res.headers["access-control-expose-headers"]).toBe("X-Total");
 	});
 
-	// `cors` sets Vary: Origin, and no grant, for an origin it refuses.
+	// For an origin it refuses, `cors` sets Vary: Origin and
+	// Access-Control-Allow-Credentials: true, and no Access-Control-Allow-Origin.
 	it("drops the upstream's CORS grant while the proxy answers CORS, though the proxy granted nothing", async () => {
-		const res = await request(proxyApp(PATTERN, { Vary: "Origin" })).get("/resource");
+		const refused = { "Access-Control-Allow-Credentials": "true", Vary: "Origin" };
+		const res = await request(proxyApp(PATTERN, refused)).get("/resource");
+
+		expect(res.status).toBe(200);
+		expect(res.headers["access-control-allow-origin"]).toBeUndefined();
+		expect(res.headers["access-control-allow-credentials"]).toBe("true");
+	});
+
+	it("drops the upstream's CORS grant while the proxy answers CORS, when the proxy set no field at all", async () => {
+		const res = await request(proxyApp(PATTERN, {})).get("/resource");
 
 		expect(res.status).toBe(200);
 		expect(res.headers["access-control-allow-origin"]).toBeUndefined();
@@ -523,5 +545,31 @@ describe("createUpstreamProxy on the wire, fields both the proxy and the upstrea
 		const res = await request(proxyApp(null, { Vary: "Origin" })).get("/resource");
 
 		expect(res.headers.vary).toBe("Origin");
+	});
+
+	// Named in the upstream's Connection, its Vary members were for its hop.
+	it("keeps only the proxy's Vary members when the upstream's Connection names Vary", async () => {
+		const res = await request(proxyApp(null, { Vary: "Origin" }))
+			.get("/resource")
+			.set("x-test-upstream-vary", "Cookie")
+			.set("x-test-upstream-connection", "Vary");
+
+		expect(res.status).toBe(200);
+		expect(res.headers.vary).toBe("Origin");
+	});
+
+	// An answer cut off after its head only is the proxy's own: its head is
+	// the one the proxy set, none of the upstream's.
+	it("answers with the proxy's Vary and grant alone when the upstream sends only its head", async () => {
+		const res = await request(proxyApp(PATTERN, GRANTED))
+			.get("/resource")
+			.set("x-test-upstream-vary", "Cookie")
+			.set("x-test-upstream-head-only", "1");
+
+		expect(res.status).toBe(502);
+		expect(res.headers.vary).toBe("Origin");
+		expect(res.headers["access-control-allow-origin"]).toBe("https://app.example");
+		expect(res.headers["x-request-id"]).toBeUndefined();
+		expect(res.headers["access-control-expose-headers"]).toBeUndefined();
 	});
 });

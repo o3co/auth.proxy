@@ -18,7 +18,9 @@
  * CORS, which the proxy answers itself when `http.cors.origin.pattern` is set
  * and `app.mts` mounts under `http.pathPrefix`, ahead of the mode router. An
  * origin the pattern admits is granted, with credentials; any other is
- * granted nothing. Without a pattern the proxy does no CORS.
+ * granted nothing — no `Access-Control-Allow-Origin`, though `cors` still
+ * sends `Access-Control-Allow-Credentials: true`. Without a pattern the proxy
+ * does no CORS.
  *
  * Only a CORS preflight (Fetch: `OPTIONS` with `Origin` and
  * `Access-Control-Request-Method`) is answered here, `204`, before the mode
@@ -32,7 +34,9 @@
  * While the proxy answers CORS, the grant on an answer is the proxy's alone:
  * the upstream stage drops the upstream's `Access-Control-Allow-Origin` and
  * `Access-Control-Allow-Credentials` (`proxyOwnedCorsFields`), whether or not
- * the proxy granted the origin, so the upstream cannot widen the pattern.
+ * the proxy granted the origin, so the upstream cannot widen the pattern —
+ * an upstream's `Access-Control-Allow-Origin` beside the proxy's
+ * `Access-Control-Allow-Credentials` would grant an origin it refused.
  */
 
 import type { IncomingMessage } from "node:http";
@@ -44,8 +48,8 @@ export interface CorsConfig {
 	http: { cors: { origin: { pattern: string | null } } };
 }
 
-/** Whether the proxy answers CORS: a pattern is set, and not empty. */
-const answersCors = (config: CorsConfig): boolean => Boolean(config.http.cors.origin.pattern);
+/** The pattern the proxy answers CORS by, or null when it does no CORS: none is set, or an empty one. */
+const corsPattern = (config: CorsConfig): string | null => config.http.cors.origin.pattern || null;
 
 /** The fields that grant an origin access to an answer, lower-cased. */
 const GRANT_FIELDS: readonly string[] = ["access-control-allow-origin", "access-control-allow-credentials"];
@@ -57,7 +61,7 @@ const GRANT_FIELDS: readonly string[] = ["access-control-allow-origin", "access-
  * and the proxy sets none.
  */
 export const proxyOwnedCorsFields = (config: CorsConfig): readonly string[] =>
-	answersCors(config) ? GRANT_FIELDS : [];
+	corsPattern(config) === null ? [] : GRANT_FIELDS;
 
 /** A CORS preflight, as the Fetch standard defines one. */
 const isPreflight = (req: IncomingMessage): boolean =>
@@ -67,8 +71,8 @@ const isPreflight = (req: IncomingMessage): boolean =>
 
 /** The CORS middleware, as the header of this file describes it. */
 export const createCors = (config: CorsConfig): RequestHandler => {
-	const { pattern } = config.http.cors.origin;
-	if (!answersCors(config) || pattern === null) return (_req, _res, next) => next();
+	const pattern = corsPattern(config);
+	if (pattern === null) return (_req, _res, next) => next();
 	const answer = cors({ origin: new RegExp(pattern), credentials: true });
 	return (req, res, next) => {
 		if (req.method === "OPTIONS" && !isPreflight(req)) return next();

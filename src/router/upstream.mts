@@ -164,15 +164,19 @@ const connectionOptions = (connection: string | undefined): string[] =>
  * the upstream's fields onto `res` one by one through `setHeader` and then
  * pipes the body, so the stage takes over `setHeader` for this response: the
  * upstream's `Connection` is held back rather than set, and so are
- * `UPSTREAM_HOP_ONLY` and `proxyOnly`, the fields only the proxy sets. A field
- * the proxy had set before the stage keeps the proxy's value — the request
- * id, `cors`'s grant — except `Vary`, which lists both sides' members
- * (`mergeVary`). As the head is written — Node writes it through
- * `writeHead`, on the first write too — the fields that `Connection` names are
- * removed where the upstream set them. A field the proxy had set before the
- * stage (the request id, `cors`'s) is the proxy's answer, not the upstream's
- * hop: named, it goes back to the proxy's value. A name the response does not
- * carry is left alone, since Node takes removing `Transfer-Encoding`,
+ * `UPSTREAM_HOP_ONLY` and `proxyOnly`, the fields only the proxy sets.
+ *
+ * A field the proxy had set before the stage — the request id, `cors`'s — is
+ * the proxy's answer: the upstream's value for it is dropped, except for
+ * `Vary`, whose members both sides add to (`mergeVary`). So a stage before
+ * this one sets only fields the proxy decides whole, or `Vary`; a list field
+ * such as `Set-Cookie` set there would drop the upstream's.
+ *
+ * As the head is written — Node writes it through `writeHead`, on the first
+ * write too — the fields that `Connection` names are removed where the
+ * upstream set them; one the proxy had set goes back to the proxy's value,
+ * the upstream's `Vary` members with it. A name the response does not carry
+ * is left alone, since Node takes removing `Transfer-Encoding`,
  * `Content-Length`, `Connection` or `Date` as a decision about framing or the
  * announcement, though nothing was there. Its own response decorator would
  * read the whole body first, so the answer still streams.
