@@ -5,6 +5,296 @@ All notable changes to this project are documented in this file.
 The format is based on [Keep a Changelog](https://keepachangelog.com/en/1.1.0/),
 and this project adheres to [Semantic Versioning](https://semver.org/spec/v2.0.0.html).
 
+## [0.10.0] — 2026-10-21
+
+This release hardens what the proxy forwards and how it boots, and most of it
+is breaking: read every **BREAKING** entry under Changed before upgrading. In
+short, the image listens on 8080 as uid 1000; configuration values that used
+to misbehave quietly now stop the boot; the upstream no longer receives the
+session cookie, a caller's `Forwarded` or a caller-chosen `X-Real-IP`, and
+validation mode refuses any `Authorization` that is not exactly one RFC 6750
+Bearer credential; and with `CORS_ORIGIN_PATTERN` set, CORS answers only
+preflights under `HTTP_PATH_PREFIX` and the CORS grant is the proxy's alone.
+
+### Changed
+
+Eleven of the changes below are breaking, marked **BREAKING**. Each says what
+an operator sees and what to do.
+
+- **BREAKING: CORS answers only preflights, and only under
+  `HTTP_PATH_PREFIX` (#148, #181).** Applies while `CORS_ORIGIN_PATTERN` is
+  set. `cors` was mounted at the root and answered every `OPTIONS` `204`,
+  outside the prefix and without `Origin`. Now a preflight — `OPTIONS` with
+  `Origin` and `Access-Control-Request-Method` — under the prefix is answered
+  `204`, neither forwarded nor logged; an `OPTIONS` outside the prefix is
+  `404`, as any other method there is; any other `OPTIONS` under the prefix is
+  an ordinary request, without CORS fields: the mode handles it as it handles
+  any other request, and forwards it upstream and logs it. **Action:** a
+  health check that probes with `OPTIONS` — HAProxy's `option httpchk` sends
+  `OPTIONS /` by default — no longer gets the proxy's `204`, but the
+  upstream's answer (under the prefix) or `404` (outside it); probe
+  `GET /_healthcheck`. An upstream now receives the non-preflight `OPTIONS`
+  requests under the prefix.
+- **BREAKING: the CORS grant on a proxied answer is the proxy's alone
+  (#170, #181).** Applies while `CORS_ORIGIN_PATTERN` is set. An upstream's
+  `Access-Control-Allow-Origin` and `Access-Control-Allow-Credentials` no
+  longer reach the caller, whether or not the proxy granted the origin; its
+  other `Access-Control-*` fields, such as `Access-Control-Expose-Headers`,
+  still do. Until now the upstream's value replaced the proxy's.
+  **Action:** `CORS_ORIGIN_PATTERN` is now the only gate on credentialed
+  cross-origin reads. Anchor it (`^…$`); an unanchored
+  `https://app\.example\.com` also admits `https://app.example.com.evil.net`,
+  and a pattern matching `null` admits sandboxed frames, `file:` pages and
+  some redirected requests. Add to it any origin that relied on the
+  upstream's own grant. Boot now warns about such patterns (see Added).
+- **BREAKING: configuration values that misbehaved quietly now stop the boot,
+  naming the key (#184).** Each was accepted before and then went wrong
+  without a word:
+  - `UPSTREAM_BASEURL` (`upstream.baseURL`) must be an http(s) origin,
+    `scheme://host[:port]` with at most one trailing `/`. A path was dropped
+    (`http://h/v1` never sent `/v1`), `upstream:8080` failed every request
+    with `ENOTFOUND`, and `""` crashed with a raw `AssertionError`; a path,
+    query, fragment, userinfo, a missing scheme, `""` and port `0` are now
+    refused. The value is held as its origin.
+  - `HTTP_PORT` must be an integer from 1 to 65535; `""` listened on a random
+    port, and `0` is refused too.
+  - `HTTP_PATH_PREFIX` must be `/` or `/`-separated segments of letters,
+    digits and `- . _ ~`, starting with `/` (one trailing `/` is allowed).
+    `api` made every request `404`, `/:x` mounted under every first segment;
+    route syntax, empty segments, `.`/`..` segments and other characters are
+    refused.
+  - `HTTP_HOSTNAME` may not be empty or contain whitespace; `""` listened on
+    every interface.
+  - `CORS_ORIGIN_PATTERN` that does not compile is refused naming the key; it
+    used to crash with a raw `SyntaxError`.
+  - `INTROSPECT_CACHE_TTL_SEC` must be an integer of at least 0 (`0` turns the
+    cache off, as documented); `""` and negative values silently turned it
+    off, and a fraction was accepted.
+  - `INTROSPECT_TIMEOUT_MS` and `INJECTION_TIMEOUT_MS` may not exceed
+    2147483647: above that a Node timer fires after 1 ms, so every provider
+    call aborted.
+  - `INJECTION_TOKEN_CACHE_SAFETY_MARGIN_SEC` may not be `""`, which was read
+    as `0`.
+  - `INJECTION_PROVIDER_ORIGIN` and `INJECTION_PUBLIC_ORIGIN` may not name
+    port `0`.
+
+  Every integer key — these and `INTROSPECT_CACHE_MAX_ENTRIES`,
+  `INJECTION_TOKEN_CACHE_TTL_SEC` and `INJECTION_TOKEN_CACHE_MAX_ENTRIES`,
+  whose ranges are unchanged — is read from decimal digits, with whitespace
+  around them allowed; `1e3`, `0x50` and `+80`, which were read as numbers,
+  are refused.
+  **Action:** start the new version against each deployment's configuration
+  before rolling it out, and fix every key it names: drop the path from
+  `UPSTREAM_BASEURL` (it was never applied), give `HTTP_PATH_PREFIX` its
+  leading `/`, and write integers as plain decimal digits.
+- **BREAKING: injection mode no longer forwards the session cookie upstream
+  (#183).** Every pair named `INJECTION_SESSION_COOKIE_NAME`
+  (`auth.injection.sessionCookieName`) is removed from `Cookie` on every
+  request the mode forwards — with a minted token, without one, and on the
+  exchange path. The other cookies still arrive, in order; when the session
+  cookie was the only one, `Cookie` is absent. A `Cookie` without the session
+  cookie is forwarded byte for byte. There is no setting to keep forwarding
+  it. **Action:** an upstream that read the session cookie — for example a
+  synchronizer-token CSRF check keyed on the session — must switch to its own
+  CSRF cookie (double-submit), an `Origin` / `Sec-Fetch-Site` check, or a
+  claim in the injected token; the README's CSRF section says so.
+- **BREAKING: validation mode refuses a `Bearer` credential that is not
+  exactly RFC 6750 (#185).** `Authorization` must be `Bearer`, one space and
+  a `b64token` (`A-Za-z0-9-._~+/`, then `=` padding), and nothing else.
+  Anything after the token (`Bearer t extra`), or any other character, is
+  answered `400 Invalid Token Type` with
+  `WWW-Authenticate: Bearer error="invalid_request"` (and `realm` when
+  configured). Until now the first word after `Bearer` was introspected and
+  the whole header was forwarded. No `Authorization`, or an empty one, is
+  still forwarded; another scheme (`Basic …`, a lowercase `bearer`) is still
+  `400` with the realm-only challenge, or none without a realm. **Action:**
+  make clients send exactly `Bearer <token>`; a client that appended data
+  after the token is now refused.
+- **BREAKING: validation mode refuses a request with more than one
+  `Authorization` line (#185).** `400 Invalid Token Type`, with
+  `error="invalid_request"` when any line names `Bearer`. Until now Node kept
+  the first line and the proxy read only that. **Action:** make sure no
+  client or hop in front adds a second `Authorization` line.
+- **BREAKING: the upstream is told where a request came from, as this proxy
+  saw it (#195).** Until now the caller's `X-Forwarded-For`,
+  `X-Forwarded-Host`, `Forwarded` and `X-Real-IP` reached the upstream as
+  sent, and the proxy added none.
+  - `X-Forwarded-For`: the inbound entries, then the proxy's peer address
+    (`unknown` if the socket no longer has one). On `HTTP_HOSTNAME=::` an IPv4
+    peer is written IPv4-mapped (`::ffff:10.0.0.5`).
+  - `X-Real-IP`: the proxy's peer address.
+  - `X-Forwarded-Host`: the `Host` the proxy received, replacing any inbound
+    value; absent when the request had no `Host`.
+  - `Forwarded`: removed.
+  - `X-Forwarded-Proto`: passed on as received.
+
+  A caller can no longer choose the address the upstream reads from these
+  fields; it still chooses `Host`, unless a hop in front admits only the
+  public hosts. **Action:**
+  - count this proxy as one more trusted hop in the upstream's
+    `X-Forwarded-For` handling (Express `trust proxy` goes from 1 to 2 behind
+    one load balancer), or list its address where trust is by range;
+  - read the client address from `X-Forwarded-For`, not `X-Real-IP`, which
+    behind a load balancer is now the balancer;
+  - an upstream that read `Forwarded` falls back to `X-Forwarded-*`;
+  - if a hop in front rewrites `Host`, make it pass the public host as `Host`;
+    an `X-Forwarded-Host` it sets is replaced;
+  - have the TLS terminator in front set `X-Forwarded-Proto`, and keep clients
+    from reaching the proxy directly where the upstream relies on it;
+  - an upstream that builds absolute URLs checks the host against its own
+    list;
+  - read no other forwarding-style field (`X-Client-IP`, `True-Client-IP`,
+    `X-Forwarded-Port`, …): they arrive as the caller sent them.
+- **BREAKING: upstream requests no longer go through a forward proxy from
+  the environment (#182).** Node applies `NODE_USE_ENV_PROXY` with
+  `HTTP_PROXY` / `HTTPS_PROXY` through its global agent, which the upstream
+  request no longer uses (see "One upstream connection per request" below).
+  **Action:** a deployment that set `NODE_USE_ENV_PROXY=1` to reach the
+  upstream through a forward proxy must make the upstream reachable directly;
+  the proxy has no forward-proxy setting.
+- **BREAKING: the image listens on 8080, not 80 (#187).** The image sets
+  `HTTP_PORT=8080` and `EXPOSE 8080`, a port a non-root process can bind;
+  the configuration's own default, 80, still applies outside the image.
+  **Action:** publish `-p <host>:8080`, or point the Service or load balancer
+  target port at 8080. Setting `HTTP_PORT=80` instead also needs
+  `net.ipv4.ip_unprivileged_port_start=0` or `CAP_NET_BIND_SERVICE`, since the
+  process is no longer root.
+- **BREAKING: the image runs as `node` (uid 1000), not root (#187).** Its
+  files, and `/home/node` that holds them, belong to root and are only read,
+  so the process cannot replace its own code or configuration; the image
+  also runs with a read-only root filesystem, which the operator turns on.
+  **Action:** a file mounted into the container — a replacement
+  `application.conf` at `/home/node/dist/config/application.conf`, for
+  instance — must be readable by uid 1000.
+- **BREAKING: building the image needs Docker Engine 25 or later (#187).**
+  The `HEALTHCHECK` uses `--start-interval`. **Action:** build with Docker
+  Engine 25 or later.
+- **A proxied answer carries the proxy's `x-request-id` (#170, #181).** It
+  is the id the proxy logs under and sends upstream; an upstream's own id no
+  longer replaces it.
+- **The caller's `Accept-Charset` reaches the upstream unchanged (#166,
+  #180).** The upstream received `Accept-Charset: utf-8` on every request in
+  place of the caller's; now it receives the caller's, or none.
+- **No `X-Powered-By: Express` (#181).** The proxy's own answers carry no
+  `X-Powered-By`; a proxied answer carries the upstream's, if it sends one.
+- **No upstream connection is reused (#182).** Each proxied request opens its
+  own connection to the upstream and closes it after the answer, so each
+  costs a TCP connect, plus a full TLS handshake toward an `https` upstream.
+  Expect more connection churn and connect latency toward the upstream.
+- **The image runs `node` directly as PID 1 (#187).** SIGTERM reaches the
+  graceful shutdown with no package manager in between, and stdout carries
+  only the proxy's NDJSON lines: no pnpm banner, no `ELIFECYCLE` line.
+- **`pnpm run build` compiles `tsconfig.build.json` (#187).** `dist/` no
+  longer contains the tests (`**/__tests__`), type declarations or
+  declaration maps.
+- **Dependencies (#179).** `@o3co/ts.hocon` `^1.14.3` (from 1.13.0), `zod`
+  `^4.6.7`.
+
+### Added
+
+- **`Via` on every upstream request (#166, #180).** RFC 9110 §7.6.3: the
+  proxy appends `<received HTTP version> auth.proxy` after the inbound
+  members (`Via: 1.1 auth.proxy`, or `Via: 1.1 lb, 1.1 auth.proxy`). It
+  names no host or port and has no setting; answers to the caller get no
+  `Via` of the proxy's. **Action:** nginx with `gzip_proxied off` (its
+  default) neither compresses answers to requests carrying `Via` nor serves
+  `gzip_static` files; set `gzip_proxied any;` on an nginx upstream.
+  Upstreams behind a front that already sent `Via` (CloudFront does) see
+  no difference.
+- **Boot warnings about a broad `CORS_ORIGIN_PATTERN` (#184).** The proxy
+  still boots and uses the pattern, and logs, at `warn`, once each:
+  `cors.origin_pattern_unanchored` (a top-level alternative is not `^…$`),
+  `cors.origin_pattern_admits_null`,
+  `cors.origin_pattern_admits_foreign_origin` (it admits
+  `https://attacker.invalid` or `http://attacker.invalid`),
+  `cors.origin_pattern_unescaped_dot` (`app.example` also admits
+  `appxexample`) and `cors.origin_pattern_unbounded_wildcard`
+  (`.*example\.com` also admits `evilexample.com`). The check is syntactic:
+  it can miss a broad pattern and flag a narrow one.
+- **A `HEALTHCHECK` in the image (#187).** busybox `wget` asks
+  `GET /_healthcheck` on `127.0.0.1:${HTTP_PORT}`, so `docker ps` shows
+  `healthy`. It is a liveness probe; Kubernetes ignores it. If
+  `HTTP_HOSTNAME` names an address `127.0.0.1` does not reach — `localhost`
+  among them, which resolves to `::1` in the image — override the
+  healthcheck.
+- **An Operations section in the README (#196).** What a deployment needs
+  beyond the settings: always set `UPSTREAM_BASEURL`, `INTROSPECT_URL` and
+  `INJECTION_PROVIDER_ORIGIN` (their defaults name `localhost:3000`); mount a
+  replacement configuration at `/home/node/dist/config/application.conf`;
+  keep the orchestrator's grace period above the 10-second drain (compose's
+  and `docker stop`'s 10-second default leaves no margin); size memory for
+  buffered request bodies; keep-alive behind nginx and ALB-style balancers;
+  what a preflight answer grants; and that **`DEBUG=express-http-proxy` (or
+  `DEBUG=*`) prints every proxied request's `Authorization` and cookies to
+  stderr** — never set it where real credentials pass. "Provider rate
+  limiting" adds that in validation mode one anonymous client sending random
+  tokens can spend the per-instance introspection budget; rate-limit
+  requests carrying `Authorization` or the session cookie at the ingress.
+
+### Removed
+
+- **From the image (#187):** pnpm (the base image's own npm and corepack
+  remain, never run), the compiled tests, `/home/node/config` (never read:
+  the entry point reads `/home/node/dist/config/application.conf`) and the
+  `src -> dist` symlink.
+- **`Forwarded` toward the upstream (#195).** See the BREAKING entry under
+  Changed.
+
+### Fixed
+
+- **`Vary` lists both sides (#170, #181).** An upstream's `Vary` replaced the
+  proxy's `Vary: Origin`, so a shared cache could serve one origin's CORS
+  answer to another. The proxy's members come first, then the upstream's
+  not already listed (case-insensitive); `*` from either side gives `*`.
+- **One upstream connection per request (#182).** On Node 19 and later the
+  global agent kept upstream connections alive, so when the upstream did not
+  answer `Connection: close`, several callers' requests went on one upstream
+  connection (RFC 9112 §9.6), and a caller could get a spurious `400` on a
+  connection the upstream had already closed. Each request now has a
+  connection of its own.
+- **An early upstream answer ends the upload (#182).** An upstream that
+  answers before reading the whole body (a `413` on the headers) is sent no
+  more of it, and its connection is closed once the caller has the answer.
+- **The README's shutdown period (#196).** The drain is a fixed 10 seconds,
+  exiting `0` when clean and `1` past the deadline; the README implied a
+  `drainTimeoutMs` setting that does not exist.
+
+### Security
+
+- **An origin the pattern refuses is granted nothing (#148, #181).** It, and
+  a request without `Origin`, received `Access-Control-Allow-Credentials:
+  true`, and on a preflight the allowed methods and its requested headers
+  echoed back. Now only `Vary: Origin` (and a preflight's `204`).
+- **An upstream can no longer widen `CORS_ORIGIN_PATTERN` (#170, #181).**
+  An upstream reflecting any `Origin` with credentials granted origins the
+  pattern refused. Also BREAKING under Changed.
+- **A form body reaches the upstream as the bytes that arrived (#182).** An
+  `application/x-www-form-urlencoded` body that parsed as JSON was
+  re-serialised without encoding: `{"a":"1&role=admin","b":"x y"}` reached
+  the upstream as `a=1&role=admin&b=x y`, and a bare JSON number or `true` as
+  nothing. That broke signed bodies and let a WAF in front of the upstream
+  read a different body from the upstream.
+- **The upstream receives only the `Authorization` that was introspected
+  (#185).** `Bearer good <second token>` was introspected as `good` and
+  forwarded whole, so an upstream reading the header differently read a
+  token the provider never checked. Also BREAKING under Changed.
+- **The session cookie stays at the proxy (#183).** It is the longer-lived
+  credential tokens are minted from; it no longer reaches the upstream, its
+  logs or its instrumentation. Also BREAKING under Changed.
+- **A caller can no longer choose the client address an upstream reads
+  (#195).** Its `X-Forwarded-For` gets the proxy's entry last, and its
+  `X-Real-IP`, `X-Forwarded-Host` and `Forwarded` are replaced or removed.
+  Also BREAKING under Changed.
+- **An inbound `x-request-id` is bounded (#186).** It goes on every log line
+  about the request and on every call the proxy makes for it, so one longer
+  than 200 characters, or with any character outside
+  `A-Z a-z 0-9 - . _ ~ + / =` (whitespace, controls, quotes, `\`, `,`, `;`,
+  other punctuation, non-ASCII), is replaced by a fresh id, as a missing one
+  is; so are two `x-request-id` lines, which Node joins with `, `. The
+  request is not refused, the replaced value is not logged, and the answer's
+  `x-request-id` carries the id in use. UUIDs, ULIDs, base64 / base64url, W3C
+  trace ids and the proxy's own ids are reused as before.
+
 ## [0.9.0] — 2026-10-20
 
 Injection mode works with auth.provider v0.18.0-rc.1 or later. That provider
