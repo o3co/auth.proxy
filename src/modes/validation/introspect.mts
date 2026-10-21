@@ -53,7 +53,7 @@ export interface IntrospectorConfig {
 	 * concurrency.
 	 */
 	singleFlight: SingleFlight<IntrospectionResult>;
-	/** `auth.validation.introspect.cacheTtlSec`; `0` or less disables the cache on both sides, but not the flight. */
+	/** `auth.validation.introspect.cacheTtlSec`; `0` disables the cache on both sides, but not the flight. */
 	cacheTtlSec: number;
 }
 
@@ -69,8 +69,9 @@ export interface IntrospectorConfig {
  * is a statement about the token and is held for the same bound as a positive
  * one, but "we refused to read this response" is not.
  *
- * `cacheTtlSec` is the one knob for the cache: at `0` or less nothing is read
- * from it and nothing is written to it. It does not reach the flight: with
+ * `cacheTtlSec` is the one knob for the cache: at `0` nothing is read from it
+ * and nothing is written to it. The schema refuses a negative value; a
+ * hand-built one is treated as `0`. It does not reach the flight: with
  * caching off, concurrent requests for one token still share a single
  * provider call.
  */

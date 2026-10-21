@@ -1,6 +1,6 @@
 # `config`
 
-Last updated: 2026-10-18
+Last updated: 2026-10-21
 
 The proxy's configuration contract: [`application.conf`](application.conf) is the shipped HOCON with an environment override per key, and [`application.schema.mts`](application.schema.mts) is the Zod schema that validates the parsed file and produces the [`AppConfig`](application.schema.mts) the code reads. The environment variables themselves are listed in the root README under [Configuration](../README.md#configuration). The boundary review behind this file is [#95](https://github.com/o3co/auth.proxy/issues/95).
 
@@ -21,7 +21,8 @@ The proxy's configuration contract: [`application.conf`](application.conf) is th
 ## Invariants
 
 - **The schema is authoritative (#95 F23).** Every default is declared twice — as a literal in the conf and as a Zod `.default()` — and the two must agree: the conf literal reaches the code when the environment is silent, the schema default when the key is absent altogether. No parameter default elsewhere in code repeats a configured value. The exceptions (keys whose default lives only in the conf, and keys the conf sets to a placeholder the schema refuses) are listed in the header of [`application.schema.mts`](application.schema.mts).
-- **Every key survives the environment round trip.** An override arrives as a string, so numbers are coerced, booleans accept exactly `true` / `false` (a coerced `"false"` would read as `true`), lists are whitespace-split and their entries must be expressible that way, and an empty optional string means unset.
+- **Every key survives the environment round trip.** An override arrives as a string, so a number is read from decimal digits only (a coerced empty override would read as `0`), booleans accept exactly `true` / `false` (a coerced `"false"` would read as `true`), lists are whitespace-split and their entries must be expressible that way, and an empty optional string means unset.
+- **A value its reader would misread is refused, not passed on.** The schema accepts only what the code uses as written: an origin where only the host and port are used (`upstream.baseURL`, held as its origin; `auth.injection.providerOrigin`), a path prefix express mounts where it reads (`http.pathPrefix`), an integer in the range its reader handles (a listen port, a timer's delay up to 2147483647 ms, a cache TTL where `0` is off), and a CORS pattern that compiles. Whether a CORS pattern admits too much is not decided here: [`src/router/cors.mts`](../src/router/cors.mts) warns about it at boot.
 - **Cross-field invariants live in the schema**; the conf cannot express them. The routers check again the shapes they build client credentials from, so a hand-built configuration that bypasses the schema is refused when the router is built rather than sent unauthenticated.
 - **Parsed once, at boot, and never re-read.** The schema never reads the environment — substitution happens in the HOCON parse. A violation stops the process before it listens, naming the key; there is no reload, so a change needs a restart. The parsed object is passed to the routers as an argument, not read from a global.
 - **The shipped conf is tested.** [`src/__tests__/config.test.mts`](../src/__tests__/config.test.mts) parses the shipped `application.conf` with environment overrides, so a conf literal that drifts from what a test asserts is caught there. That every conf literal equals its schema default is checked only for the keys those tests assert.
