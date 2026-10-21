@@ -1,9 +1,9 @@
 #!/usr/bin/env bash
 # Runs a built runtime image the way an orchestrator does and checks what an
 # operator relies on: it runs as a non-root user that cannot write to its
-# working directory, ships no tests, boots on a read-only root filesystem
-# without network access, turns healthy through its own HEALTHCHECK, and on
-# SIGTERM drains and exits 0 with nothing on stderr.
+# working directory, carries no pnpm, ships no tests, boots on a read-only
+# root filesystem without network access, turns healthy through its own
+# HEALTHCHECK, and on SIGTERM drains and exits 0 with nothing on stderr.
 #
 # Usage: image-smoke.sh <image>
 set -euo pipefail
@@ -25,6 +25,10 @@ uid="$(docker run --rm --entrypoint id "$image" -u)"
 
 if docker run --rm --entrypoint sh "$image" -c 'touch probe' 2>/dev/null; then
 	fail "the process can write to its working directory"
+fi
+
+if docker run --rm --entrypoint sh "$image" -c 'command -v pnpm' >/dev/null 2>&1; then
+	fail "the image carries pnpm"
 fi
 
 tests="$(docker run --rm --entrypoint find "$image" dist -name __tests__)"

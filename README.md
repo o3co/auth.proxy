@@ -423,9 +423,9 @@ make docker       # Build runtime image
 
 The runtime image (`--target runtime`):
 
-- **Runs as the unprivileged `node` user** (uid 1000). Its files, and `/home/node` that holds them, belong to root and are only read: the process cannot replace its own code or configuration, and the container also runs with a read-only root filesystem.
+- **Runs as the unprivileged `node` user** (uid 1000). Its files, and `/home/node` that holds them, belong to root and are only read: the process cannot replace its own code or configuration. The image also works with a read-only root filesystem, which the operator turns on (`docker run --read-only`, Kubernetes `readOnlyRootFilesystem: true`).
 - **Listens on port 8080.** The image sets `HTTP_PORT=8080`, a port a non-root process can bind; the configuration's own default, 80, applies outside the image. Publish it with `-p <host-port>:8080`, or set `HTTP_PORT`.
-- **Runs `node dist/src/app.mjs` as PID 1**, with no package manager in between: SIGTERM reaches the proxy and starts the graceful shutdown, and stdout carries only the proxy's NDJSON lines. The image holds neither corepack nor pnpm, and starts without network access.
+- **Runs `node dist/src/app.mjs` as PID 1**, with no package manager in between: SIGTERM reaches the proxy and starts the graceful shutdown, and stdout carries only the proxy's NDJSON lines. The image holds no pnpm (the base image's npm and corepack are present but never run), and starts without network access.
 - **Declares a `HEALTHCHECK`** that asks `GET /_healthcheck` on `127.0.0.1:${HTTP_PORT}` with the base image's busybox `wget`. It is a liveness probe: it says nothing about the provider or the upstream. If `HTTP_HOSTNAME` names an address that `127.0.0.1` does not reach, override the healthcheck — `localhost` among them, which resolves to `::1` inside the image. Kubernetes ignores `HEALTHCHECK`; give the pod its own probe on the same path.
 - **Ships no tests**: the build compiles `tsconfig.build.json`, which leaves `__tests__` out of `dist/`.
 

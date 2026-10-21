@@ -31,8 +31,8 @@ RUN pnpm prune --prod
 
 ##############################################
 # The runtime starts from the plain Node image, not from `base`: it runs node
-# itself, so it carries neither corepack nor pnpm, nor the `.npmrc` the build
-# installed with. The files, and the directory holding them, belong to root
+# itself, so it carries no pnpm and no `.npmrc` the build installed with. The
+# base image's own npm and corepack stay, unused. The files, and the directory holding them, belong to root
 # and are only read, so the process cannot replace its own code or
 # configuration, and the image can run with a read-only root filesystem.
 FROM node:24-alpine AS runtime
