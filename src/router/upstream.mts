@@ -315,21 +315,24 @@ const upstreamLimit = (bytes: number): number | string => (bytes === 0 ? "0" : b
  * `auth.proxy`. A caller naming `Via` in `Connection` drops its own members,
  * not the proxy's.
  *
- * What it does not do: choose which fields are forwarded, beyond the body's
- * framing, the expectation, the connection's own fields and `Via`. Every
- * other choice is made before this stage, on `req.headers`. The library's own
- * `Accept-Charset`, which would replace the caller's, is turned off
- * (`reqBodyEncoding: null`), so the caller's goes on unchanged. express-http-proxy
- * copies every inbound header except `connection` and `host` onto the
- * outbound request and sets `connection: close` before any decorator runs
- * (`reqHeaders` in `express-http-proxy/lib/requestOptions.js`). Node
- * lower-cases every inbound header name in `req.headers`, so that copy
+ * Outside the decorator, the stage turns off the library's own
+ * `Accept-Charset` (`reqBodyEncoding: null`), which would replace the
+ * caller's: the caller's goes on unchanged.
+ *
+ * What the decorator does not do: choose which fields are forwarded, beyond
+ * the body's framing, the expectation, the connection's own fields and `Via`.
+ * Every other choice is made before this stage, on `req.headers`.
+ * express-http-proxy copies every inbound header except `connection` and
+ * `host` onto the outbound request and sets `connection: close` before any
+ * decorator runs (`reqHeaders` in `express-http-proxy/lib/requestOptions.js`).
+ * Node lower-cases every inbound header name in `req.headers`, so that copy
  * already carries `authorization`. Node's `setHeader` dedups header names
  * case-insensitively and the last write wins, so the decorator's
  * `Authorization` replaces the name, not the value: `Authorization` is sent
- * once, and the `x-request-id` write changes nothing on the wire. That is why `stripInboundAuthorization` takes effect
- * by deleting the header from `req.headers`, in the `forward_stripped` case of
- * `injectionMiddleware` (`src/modes/injection/router.mts`), rather than here.
+ * once, and the `x-request-id` write changes nothing on the wire. That is why
+ * `stripInboundAuthorization` takes effect by deleting the header from
+ * `req.headers`, in the `forward_stripped` case of `injectionMiddleware`
+ * (`src/modes/injection/router.mts`), rather than here.
  *
  * On the way back, the upstream's connection fields stay on its hop: its
  * `Connection`, the fields that names — except those the proxy set before

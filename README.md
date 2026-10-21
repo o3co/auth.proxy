@@ -349,7 +349,7 @@ The upstream's connection fields stay on its hop in the same way. Its response's
 
 ### `Via` on the upstream request
 
-Every request sent upstream carries `Via` with the proxy's own member after those the request arrived with (RFC 9110 §7.6.3): the HTTP version the proxy received it by and the pseudonym `auth.proxy` — `Via: 1.1 auth.proxy`, or `Via: 1.1 lb, 1.1 auth.proxy` behind a balancer that sent its own. It names no host or port, and it is always sent; there is no setting. An upstream that takes `Via` as the sign of a proxied request now sees one: nginx, for one, does not compress answers to such requests while `gzip_proxied` is `off`, its default, so set `gzip_proxied any;` on an nginx upstream to keep them compressed. The proxy adds no `Via` to its answers to the caller; an upstream's own reaches the caller unchanged.
+Every request sent upstream carries `Via` with the proxy's own member after those the request arrived with (RFC 9110 §7.6.3): the HTTP version the proxy received it by and the pseudonym `auth.proxy` — `Via: 1.1 auth.proxy`, or `Via: 1.1 lb, 1.1 auth.proxy` behind a balancer that sent its own. It names no host or port, and it is always sent; there is no setting. An upstream that takes `Via` as the sign of a proxied request sees one: nginx, for one, neither compresses answers to such requests nor serves them its pre-compressed files (`gzip_static`) while `gzip_proxied` is `off`, its default, so set `gzip_proxied any;` on an nginx upstream to keep them compressed. The proxy adds no `Via` to its answers to the caller; an upstream's own is passed on like any other field.
 
 The caller's `Accept-Charset` reaches the upstream as it arrived; the proxy sends none of its own.
 

@@ -249,6 +249,19 @@ describe("createUpstreamProxy", () => {
 			expect(result.headers).toMatchObject({ via: "1.1 edge, 1.0 lb, 1.1 auth.proxy" });
 		});
 
+		it.each([[""], ["  "]])("takes an inbound Via of %j as none", async (empty) => {
+			const result = await decorate({ ...inbound, via: empty });
+			expect(result.headers).toMatchObject(VIA);
+		});
+
+		it("appends after inbound members the library hands on as a list", async () => {
+			const decorator = builtOptions().proxyReqOptDecorator as Decorator;
+			const proxyReqOpts = { headers: { ...libraryHeaders(inbound), via: ["1.1 edge", "1.0 lb"] } } as ProxyReqOpts;
+			const srcReq = { headers: inbound, httpVersion: "1.1" } as unknown as Parameters<Decorator>[1];
+			const result = await decorator(proxyReqOpts, srcReq);
+			expect(result.headers).toMatchObject({ via: "1.1 edge, 1.0 lb, 1.1 auth.proxy" });
+		});
+
 		it("drops the inbound members when the inbound Connection names Via, and still names the proxy", async () => {
 			const result = await decorate({ ...inbound, connection: "Via", via: "1.1 edge" });
 			expect(result.headers).toMatchObject(VIA);
