@@ -300,11 +300,15 @@ interface LibraryExchange {
  * `application/x-www-form-urlencoded` body that parses as JSON, unencoded
  * (`{"a":"1&b=2"}` goes as `a=1&b=2`, a bare `42` as nothing) — a different
  * body from the one a signature covers or a firewall in front of the upstream
- * read. Otherwise it does what that sender does with the stage's options: the
- * library has read the whole body and set the `Content-Length` it is framed
- * by; the upstream's answer is handed on as soon as its head arrives, for the
- * library to stream; and a caller that leaves before its answer is complete
- * ends the upstream request.
+ * read. Otherwise it does what that sender does with the stage's options,
+ * and only with them: the library has read the whole body (`parseReqBody`, its
+ * default) and set the `Content-Length` it is framed by; the upstream's answer
+ * is handed on as soon as its head arrives, for the library to stream, which
+ * it does only with no response decorator and no skip filter; there is no
+ * `timeout` to apply; and a caller that leaves before its answer is complete
+ * ends the upstream request. The fields it reads are the library's own, not
+ * its documented API; `upstream-wire.test.mts` drives the real library
+ * through them.
  */
 const sendAsReceived = (exchange: LibraryExchange): Promise<LibraryExchange> =>
 	new Promise((resolve, reject) => {
@@ -318,9 +322,7 @@ const sendAsReceived = (exchange: LibraryExchange): Promise<LibraryExchange> =>
 		res.on("close", () => {
 			if (!res.writableFinished) sent.destroy();
 		});
-		const body = exchange.proxy.bodyContent;
-		if (body.length > 0) sent.end(body);
-		else sent.end();
+		sent.end(exchange.proxy.bodyContent);
 	});
 
 /** The config fields the stage reads. `AppConfig` satisfies it structurally. */
@@ -496,7 +498,9 @@ const proxyTo = (config: UpstreamStageConfig): RequestHandler => {
 			// A fresh agent that keeps no connection alive: the request says
 			// `connection: close`, so its connection carries no other request
 			// (RFC 9112 §9.6), whatever the upstream answers. Node's global
-			// agent would keep it for the next caller's request.
+			// agent would keep it for the next caller's request. A forward proxy
+			// from the environment (`NODE_USE_ENV_PROXY`), which Node applies
+			// through that agent, does not apply here.
 			proxyReqOpts.agent = false;
 			return proxyReqOpts;
 		},
