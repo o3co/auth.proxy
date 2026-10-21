@@ -293,7 +293,7 @@ where `sent` is the instant the token request went out. `ttlSeconds` and `expire
 
 Active access tokens reside in process memory, and so does a configured client secret or private key, which also sits in the process environment. An attacker with read access to proxy process memory can extract all cached tokens and the proxy's own client credentials. Standard host-security practices apply (container isolation, minimal image, no unnecessary `ptrace` capabilities).
 
-Graceful shutdown does not clear the caches: the drain closes the listener and lets in-flight requests finish within `drainTimeoutMs` — during the drain a connection closes after its last answer, so a caller that keeps its connection alive does not hold the drain open; a caller that reuses the connection then may see one reset, for a request the proxy never read, which it can retry — after which the remaining connections are force-closed, and the cached tokens stay in memory until the process exits (#95 F21).
+Graceful shutdown does not clear the caches: the drain closes the listener and lets in-flight requests finish within 10 seconds, a fixed period with no setting (see [Shutdown and the grace period](#shutdown-and-the-grace-period)) — during the drain a connection closes after its last answer, so a caller that keeps its connection alive does not hold the drain open; a caller that reuses the connection then may see one reset, for a request the proxy never read, which it can retry — after which the remaining connections are force-closed, and the cached tokens stay in memory until the process exits (#95 F21).
 
 ### Provider rate limiting
 
@@ -316,10 +316,16 @@ Raise the budget on the provider side rather than working around it here:
 - `token-endpoint.requests` / `window` for `/oauth/token`, and `token-control.requests` / `window` for `/oauth/introspect`.
 - The counts live in the provider's store. In memory, each provider replica counts on its own, so a multi-replica provider wants a shared store such as Redis.
 
-Two things that make it worse:
+Three things that make it worse:
 
 - **Lowering `tokenCache.ttlSeconds` / `INTROSPECT_CACHE_TTL_SEC` multiplies the misses.** The shorter the TTL, the more of the same budget the same traffic spends. Their effects on revocation differ between injection and validation — see [Revocation and the access-token lifetime](#revocation-and-the-access-token-lifetime).
 - **Scaling out gives each instance its own cold cache.** A rollout therefore costs `instance count × active sessions` provider calls at once. Where the provider does not list the proxy, each instance also has its own count — unless several sit behind one NAT or egress gateway, present a single source address and share one.
+- **Random tokens from one anonymous client spend all of it (validation mode).**
+  - Introspection calls carry no `X-Forwarded-For`, so the provider counts all of an instance's introspections as one source: about 60 cache misses a minute with its defaults.
+  - Each random Bearer value is a new cache key, so a client that sends random tokens makes every request a miss and uses up the budget.
+  - After that, every legitimate token not yet in the cache is answered `502` until the window resets.
+
+  What to do now: rate-limit requests that carry `Authorization`, per client address, at the ingress in front of the proxy. Counting each introspection against its caller is planned ([#188](https://github.com/o3co/auth.proxy/issues/188)), subject to change.
 
 ### Request body limit
 
@@ -432,9 +438,10 @@ Shared environment variables:
 | `HTTP_HOSTNAME` | HTTP listen hostname (default: 0.0.0.0). |
 | `HTTP_PATH_PREFIX` | Path prefix for proxy routes (default: /). A request outside it, other than the healthcheck, is answered `404` with the text `Not Found`, without reading its body. CORS applies under it only. |
 | `HTTP_BODY_LIMIT_SIZE` | Request body size limit (default: 10mb). A number, optionally signed `+`, with an optional unit — `b`, `kb`, `mb`, `gb`, `tb`, `pb`; 1kb = 1024 bytes — or the proxy does not start. See [Request body limit](#request-body-limit). |
-| `UPSTREAM_BASEURL` | Upstream service base URL. |
+| `UPSTREAM_BASEURL` | Upstream service base URL (default: `http://localhost:3000`, for development only: always set it, see [Operations](#operations)). |
 | `CORS_ORIGIN_PATTERN` | CORS origin regex pattern (optional). When set, the proxy answers CORS under `HTTP_PATH_PREFIX`: an origin the pattern matches is granted, with credentials (`Access-Control-Allow-Origin` set to it, `Access-Control-Allow-Credentials: true`); any other origin, and a request without one, is granted nothing — the proxy sets no `Access-Control-*` field on its answer, on a preflight or otherwise, and on a proxied answer the upstream's grant is dropped as below. Anchor the pattern (`^…$`): an origin it matches is granted, and that includes `null`, the opaque origin of a sandboxed frame or a `file:` page, should the pattern match the text `null`. Every answer there carries `Origin` in `Vary` (or `Vary: *` from the upstream), but one to an `OPTIONS` that is not a preflight. A preflight — `OPTIONS` with `Origin` and `Access-Control-Request-Method` — is answered `204` before the mode, and is neither forwarded nor logged; any other `OPTIONS` is an ordinary request. The grant is the proxy's alone: an upstream's `Access-Control-Allow-Origin` and `Access-Control-Allow-Credentials` never reach the caller. Unset or empty, the proxy does no CORS and passes the upstream's on. |
 | `LOG_LEVEL` | pino log level — `trace`, `debug`, `info`, `warn`, `error`, `fatal` or `silent` (default: `info`). Read directly from the environment when the logger is created, not through the HOCON config. Output is NDJSON on stdout. In both modes, every line about a request — `incoming request` and each decision — carries the request id as `requestId` and an `event` named `injection.*` or `validation.*`. |
+| `DEBUG` | Not a setting of the proxy: read by the `debug` package its libraries use, and written to stderr outside the logger. Leave it unset. `DEBUG=express-http-proxy` prints live credentials; see [Logs and `DEBUG`](#logs-and-debug). |
 
 Validation mode:
 
@@ -444,7 +451,7 @@ Validation mode:
 | `CLIENT_SECRET` | Client secret for introspection auth (`client_secret_basic`; optional, with `CLIENT_ID`). |
 | `CLIENT_KEY` | Private JWK for introspection auth (`private_key_jwt`; optional, with `CLIENT_ID` and `VALIDATION_PROVIDER_ISSUER`). See [Client authentication with a private key](#client-authentication-with-a-private-key-private_key_jwt). |
 | `VALIDATION_PROVIDER_ISSUER` | The provider's issuer identifier, the client assertion's audience. **Required** with `CLIENT_KEY`, and refused without it. |
-| `INTROSPECT_URL` | Introspection endpoint URL: absolute `http(s)`, without userinfo. Anything else is refused at boot, naming the key — the proxy authenticates with its client credentials, never with the URL. |
+| `INTROSPECT_URL` | Introspection endpoint URL (default: `http://localhost:3000/oauth/introspect`, for development only: always set it, see [Operations](#operations)): absolute `http(s)`, without userinfo. Anything else is refused at boot, naming the key — the proxy authenticates with its client credentials, never with the URL. |
 | `VALIDATION_REALM` | RFC 6750 `realm` for `WWW-Authenticate` (optional; at most 256 printable ASCII characters, without `"`, `\` or surrounding spaces). Unset, a request using another auth scheme gets no challenge. |
 | `INTROSPECT_CACHE_TTL_SEC` | Cache TTL in seconds (default: 30). |
 | `INTROSPECT_CACHE_MAX_ENTRIES` | Cache max entries (default: 10000). |
@@ -475,6 +482,87 @@ Injection mode:
 | `INJECTION_EXCHANGE_AUDIENCE` | `audience` sent with the exchange (optional). |
 | `INJECTION_EXCHANGE_RESOURCE` | RFC 8707 `resource` sent with the exchange (optional). |
 | `INJECTION_EXCHANGE_ALLOWED_ISSUERS` | Optional prefilter on the unverified `iss`: a whitespace-separated list (default: empty = off). |
+
+## Operations
+
+What a deployment needs beyond the settings above. For the image itself (its user, its port and its `HEALTHCHECK`), see [Docker](#docker).
+
+### Always set the provider and upstream URLs
+
+The shipped `config/application.conf` gives these keys development defaults:
+
+| Variable | Default |
+| --- | --- |
+| `UPSTREAM_BASEURL` | `http://localhost:3000` |
+| `INTROSPECT_URL` | `http://localhost:3000/oauth/introspect` |
+| `INJECTION_PROVIDER_ORIGIN` | `http://localhost:3000` |
+
+The defaults suit a provider and an upstream on a developer's machine. Inside a container, `localhost` is the container itself, so a deployment that leaves them unset sends its traffic to the proxy itself or to nothing. Set every one the mode uses, in every deployment.
+
+### The configuration file
+
+The entry point, `dist/src/app.mjs`, reads `../config/application.conf` relative to itself. In the image that is `/home/node/dist/config/application.conf`.
+
+- To replace the file, mount over that path.
+- A file mounted at `/home/node/config/application.conf`, where the source tree keeps it, is never read.
+- A replacement file is the whole configuration. Keep the shipped file's `key = ${?ENV}` lines for every key you still want to set from the environment.
+- The mounted file must be readable by the image's user.
+
+### Liveness probe
+
+`GET /_healthcheck` answers `200 {"status":"ok"}`.
+
+- It is mounted at the root, outside `HTTP_PATH_PREFIX`.
+- It is never authenticated or forwarded, and carries no request id.
+- It is a liveness probe: it answers while the provider or the upstream is down, so do not use it as readiness.
+
+### Shutdown and the grace period
+
+On SIGTERM or SIGINT the proxy stops accepting connections and gives in-flight requests **10 seconds** to finish. The period is fixed in `src/app.mts`; there is no setting for it.
+
+- A clean drain exits `0`.
+- Past the 10 seconds, the remaining connections are cut and the process exits `1`.
+
+Keep the orchestrator's grace period above 10 s, so the proxy finishes its drain before SIGKILL. Kubernetes `terminationGracePeriodSeconds` and compose `stop_grace_period` both default to 30 s. A request that runs longer than 10 s at shutdown, such as a long download or a server-sent event stream, is cut.
+
+### Memory: request bodies are buffered
+
+A request the mode forwards has its body read whole into memory before it goes upstream, up to `HTTP_BODY_LIMIT_SIZE` (default 10 MB). In injection mode that includes requests without a session cookie. Answers are streamed, not buffered.
+
+Peak memory is therefore roughly the number of concurrent forwarded requests with a body × `HTTP_BODY_LIMIT_SIZE`: 100 concurrent 10 MB uploads hold about 1 GB. To keep it bounded:
+
+- size the container's memory limit for the concurrency you admit;
+- lower `HTTP_BODY_LIMIT_SIZE` to what the upstream really accepts;
+- cap concurrency at the ingress.
+
+### Keep-alive behind a load balancer
+
+The proxy keeps a caller's connection open between requests and closes it after 5 idle seconds. That is Node's default keep-alive timeout, and the proxy does not change it.
+
+A load balancer that pools connections to the proxy and keeps one idle for longer can send a request just as the proxy closes that connection, and answers that request `502`. Set the balancer's idle timeout toward the proxy below 5 s:
+
+- AWS ALB: the default idle timeout is 60 s;
+- nginx: `keepalive_timeout` in the `upstream` block (default 60 s).
+
+### CORS preflight answers
+
+With `CORS_ORIGIN_PATTERN` set, a preflight from an origin the pattern admits is answered `204` with:
+
+- `Access-Control-Allow-Origin` set to that origin, and `Access-Control-Allow-Credentials: true`;
+- `Access-Control-Allow-Methods: GET,HEAD,PUT,PATCH,POST,DELETE`, a fixed list;
+- `Access-Control-Allow-Headers` echoing the preflight's `Access-Control-Request-Headers`. Every header is allowed for an admitted origin, so the pattern is the only gate;
+- no `Access-Control-Max-Age`.
+
+Without `Max-Age`, browsers cache a preflight result for 5 seconds only, the Fetch standard's default. A page that keeps sending non-simple requests therefore preflights again every few seconds. The proxy answers each preflight itself, without reaching the provider or the upstream, but each one is a round trip for the browser.
+
+### Logs and `DEBUG`
+
+The proxy's own log lines (NDJSON on stdout) never carry a token, a cookie, a client secret or a key. Errors pass through an allowlist (`src/logger.mts`), and each event names what it leaves out.
+
+The `DEBUG` environment variable is outside that guarantee. It turns on the `debug` package that `express-http-proxy` and Express use, which writes to stderr unfiltered. **`DEBUG=express-http-proxy` (or `DEBUG=*`) prints the full outbound request options of every proxied request.** That includes the `Authorization` header (the caller's token or the token the proxy minted) and the cookies.
+
+- Never set `DEBUG` in a deployment that handles real credentials.
+- Treat the stderr of one that did as holding secrets.
 
 ## Related Projects
 
