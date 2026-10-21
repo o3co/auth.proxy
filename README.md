@@ -124,10 +124,10 @@ Translates an inbound session cookie into an outbound `Authorization: Bearer` to
 Flow:
 
 1. Extracts the session cookie named in `auth.injection.sessionCookieName`.
-2. If absent, forwards the request unchanged (the service layer decides whether authentication is required). A cookie that is present but refused (see [Cookie forwarding](#cookie-forwarding)) is forwarded the same way, but logged.
+2. If absent, forwards the request unchanged (the service layer decides whether authentication is required). A cookie that is present but refused (see [Cookie forwarding](#cookie-forwarding)) is forwarded the same way, but logged, and removed from `Cookie`.
 3. On cache hit, injects the cached Bearer and forwards — only for a request that showed it is same-origin (see [Cache behavior](#cache-behavior)).
 4. On cache miss, exchanges the cookie for an access token via the provider's `POST /oauth/token` with `grant_type=session`. Concurrent misses on the same cookie, among requests the [same-origin gate](#cache-behavior) admits, coalesce into a single provider call (single-flight).
-5. Injects `Authorization: Bearer <token>` and forwards upstream.
+5. Injects `Authorization: Bearer <token>` and forwards upstream, with the session cookie removed from `Cookie` (see [Cookie forwarding](#cookie-forwarding)).
 
 Opt-in, injection mode can also exchange an external credential presented as `Authorization: Bearer <JWT>` for a first-party token — see [External credential exchange](#external-credential-exchange-authinjectionexchange).
 
@@ -203,6 +203,8 @@ With `auth.injection.exchange.enabled` the pass-through is gone altogether: an i
 #### Cookie forwarding
 
 Only the cookie named in `auth.injection.sessionCookieName` is forwarded to the provider on the session grant call. Other cookies (analytics, CSRF tokens, third-party) do not reach the provider.
+
+**The upstream never receives the session cookie.** It is the credential tokens are minted from, and it outlives every token minted from it, so the upstream — and whatever logs or instruments its requests — is handed the token instead. Whenever the proxy forwards a request, every pair named `auth.injection.sessionCookieName` is removed from `Cookie`, whether it minted a token or was refused by the grammar check below; the other cookies go on, in order, joined by `; `, and the header is dropped when none is left. A `Cookie` header without the session cookie is forwarded byte for byte. Repeated `Cookie` header lines are one header by then (Node joins them with `; `), so a session cookie in any of them is removed. There is no setting to forward it: an upstream that needs the user's identity reads the token. Peer token handlers go further: Duende BFF removes the whole `Cookie` header from a proxied API call, and Curity's OAuth proxy removes cookie headers by default.
 
 The forwarded value must conform to the RFC 6265 section 4.1.1 `cookie-value` grammar: a run of `cookie-octet`s (printable US-ASCII excluding whitespace, DQUOTE, comma, semicolon, and backslash), optionally wrapped in exactly one surrounding DQUOTE pair. A surrounding DQUOTE pair is accepted and forwarded verbatim (quotes preserved) so the provider's own cookie parser decides how to read it. Anything else is refused — a `,`, whitespace, `\`, a control character, or a non-ASCII byte anywhere in the value, or a DQUOTE anywhere other than as that surrounding pair (interior or unbalanced), or an empty value: the request is forwarded without a minted `Authorization` and the provider is not called. With the exchange disabled, a client's own `Authorization` header still reaches the upstream unless `stripInboundAuthorization` is on; with the exchange enabled, an inbound `Authorization` is handed to the exchange before the cookie is considered, so it is exchanged or refused rather than passed through (see [Inbound Authorization headers](#inbound-authorization-headers)). Whitespace immediately after `=` is part of the value and is refused; SP / HTAB next to the `;` separator or at the ends of the header is separator slack and is ignored. `;` is the cookie-pair delimiter and never becomes part of a value. Default session stores (express-session `connect.sid`, hex / base64url / JWT session ids) always conform.
 

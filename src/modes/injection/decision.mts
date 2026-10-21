@@ -165,7 +165,8 @@ export interface ExchangeArgs {
  * The decision, as data. The middleware in `router.mts` applies it: `forward`
  * and `forward_stripped` call `next()` (the latter after deleting the inbound
  * `Authorization` from `req.headers`), `inject` sets `Authorization: Bearer
- * <token>` on `req.headers` and calls `next()`, `respond` writes the status,
+ * <token>` on `req.headers` and calls `next()` — each of the three after
+ * removing the session cookie from `Cookie` — `respond` writes the status,
  * the body and the provider's `Retry-After`, `exchange` calls the exchange
  * handler with `args`.
  */
