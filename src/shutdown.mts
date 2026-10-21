@@ -59,9 +59,9 @@ import type { Logger } from "./logger.mjs";
  * 6. **A `close` that fails is not reported as a clean drain.**
  *
  * Size `drainTimeoutMs` **below** the orchestrator's own kill grace period
- * (Kubernetes `terminationGracePeriodSeconds`, compose `stop_grace_period`,
- * both 30s by default), so the proxy closes on its own terms before SIGKILL
- * arrives.
+ * (Kubernetes `terminationGracePeriodSeconds`, 30s by default; compose
+ * `stop_grace_period` and `docker stop`, 10s by default), so the proxy closes
+ * on its own terms before SIGKILL arrives.
  */
 export interface GracefulShutdownOptions {
 	readonly logger: Logger;
