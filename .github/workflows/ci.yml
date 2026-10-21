@@ -33,3 +33,14 @@ jobs:
       - run: pnpm run lint
       - run: pnpm run build
       - run: pnpm run test
+
+  # Builds the runtime image (never pushed) and runs it: see the script for
+  # what it checks.
+  docker-image:
+    runs-on: ubuntu-latest
+    steps:
+      - uses: actions/checkout@v4
+      - name: Build the runtime image
+        run: docker build --target runtime --tag auth-proxy:ci .
+      - name: Run the image
+        run: .github/scripts/image-smoke.sh auth-proxy:ci
