@@ -353,6 +353,10 @@ Every request sent upstream carries `Via` with the proxy's own member after thos
 
 The caller's `Accept-Charset` reaches the upstream as it arrived; the proxy sends none of its own.
 
+### Request id (`x-request-id`)
+
+Every request gets one id, which every log line about it carries as `requestId`, which the proxy sends upstream and to the provider as `x-request-id`, and which it echoes to the caller on the answer. The caller's own `x-request-id` is reused when it is 1 to 200 characters drawn from letters, digits and `- . _ ~ + / =` — enough for a UUID, a ULID, base64 or base64url, or a W3C trace id. Any other value is replaced by a fresh id, as a missing one is: one longer than 200 characters, or one with whitespace, a control character, a quote, a backslash, `,`, `;`, any other punctuation or a non-ASCII character. Two `x-request-id` header lines are replaced too, since Node joins them with `, `. The request is not refused, and the replaced value is not logged; the caller learns the id in use from the answer's `x-request-id`. 200 is the bound Heroku's router applies to the same header.
+
 ### Client authentication with a private key (`private_key_jwt`)
 
 Wherever the proxy authenticates to the provider as a client, it can hold a private key instead of a shared secret ([RFC 7523 §2.2](https://www.rfc-editor.org/rfc/rfc7523.html#section-2.2)): introspection in validation mode, the exchange, and the session grant.
