@@ -1,0 +1,9 @@
+# The Dockerfile copies only the files it names. These paths are large or may
+# hold secrets, so they are kept out of the build context too.
+.git
+node_modules
+dist
+coverage
+.env
+.env.*
+*.log

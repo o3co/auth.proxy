@@ -702,6 +702,7 @@ describe("injection router — external credential exchange", () => {
 
 			expect(res.status).toBe(204);
 			expect(upstream.received[0].headers.authorization).toBe("Bearer issued-1");
+			expect(upstream.received[0].headers.cookie).toBe("analytics=xyz");
 		});
 
 		it("rejects an Authorization that is not a Bearer JWT (401), without a provider call or pass-through", async () => {

@@ -107,7 +107,7 @@ describe("createUpstreamProxy", () => {
 		expect(built).toHaveBeenCalledWith(req, res, next);
 	});
 
-	it("targets upstream.baseURL and sets exactly limit (= http.bodyLimitSize in bytes), reqBodyEncoding and proxyReqOptDecorator", () => {
+	it("targets upstream.baseURL and sets exactly limit (= http.bodyLimitSize in bytes), reqBodyEncoding, the error handler, the decorator and the sender", () => {
 		expect(proxyMock).toHaveBeenCalledWith("http://upstream.test:65531", expect.anything());
 		const options = builtOptions();
 		expect(Object.keys(options).sort()).toEqual([
@@ -115,9 +115,13 @@ describe("createUpstreamProxy", () => {
 			"proxyErrorHandler",
 			"proxyReqOptDecorator",
 			"reqBodyEncoding",
+			"sendProxyRequest",
 		]);
 		expect(options.limit).toBe(7331 * 1024);
 		expect(options.proxyReqOptDecorator).toEqual(expect.any(Function));
+		// The library's own sender rewrites a form body that parses as JSON;
+		// the stage's sends the bytes that arrived (`upstream-wire.test.mts`).
+		expect((options as { sendProxyRequest?: unknown }).sendProxyRequest).toEqual(expect.any(Function));
 	});
 
 	// Left undefined, the library defaults it to utf-8 and sends that as
@@ -254,6 +258,14 @@ describe("createUpstreamProxy", () => {
 				});
 			},
 		);
+	});
+
+	// The request says `connection: close`, so its connection carries no other
+	// request (RFC 9112 §9.6); Node's global agent would keep it alive for the
+	// next one. `agent: false` gives each request a fresh agent that keeps none.
+	it("sends each request with an agent of its own that keeps no connection alive", async () => {
+		const result = await decorate(inbound);
+		expect(result.agent).toBe(false);
 	});
 
 	// RFC 9110 §7.6.3: a gateway adds its own member to Via on each request it

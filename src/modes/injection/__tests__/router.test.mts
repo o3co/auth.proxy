@@ -539,6 +539,86 @@ describe("injection router", () => {
 		expect(headers.Cookie).toBe("sid=s1");
 	});
 
+	// The session cookie is the credential the token is minted from, and lives
+	// longer than the token: the upstream gets the token, never the cookie.
+	describe("the session cookie on the upstream request", () => {
+		it("removes the session cookie next to the minted Bearer and keeps the other cookies", async () => {
+			fetchMock.mockResolvedValueOnce(okGrantResponse("tok-1"));
+			const app = mountApp(makeConfig(upstream.baseURL));
+
+			const res = await request(app).get("/any").set("Cookie", "a=1; sid=s1; other=2");
+
+			expect(res.status).toBe(204);
+			expect(upstream.received[0].headers.authorization).toBe("Bearer tok-1");
+			expect(upstream.received[0].headers.cookie).toBe("a=1; other=2");
+		});
+
+		it("drops the Cookie header when the session cookie was its only pair", async () => {
+			fetchMock.mockResolvedValueOnce(okGrantResponse("tok-1"));
+			const app = mountApp(makeConfig(upstream.baseURL));
+
+			await request(app).get("/any").set("Cookie", "sid=s1");
+
+			expect(upstream.received[0].headers).not.toHaveProperty("cookie");
+		});
+
+		it("removes it on a cache hit too", async () => {
+			fetchMock.mockResolvedValueOnce(okGrantResponse("tok-1"));
+			const app = mountApp(makeConfig(upstream.baseURL));
+
+			await request(app).get("/any").set("Cookie", "sid=s1").set(SAME_ORIGIN);
+			await request(app).get("/any").set("Cookie", "sid=s1; other=2").set(SAME_ORIGIN);
+
+			expect(fetchMock).toHaveBeenCalledTimes(1);
+			expect(upstream.received[1].headers.authorization).toBe("Bearer tok-1");
+			expect(upstream.received[1].headers.cookie).toBe("other=2");
+		});
+
+		it("removes a refused session cookie from a request forwarded without a minted token", async () => {
+			const app = mountApp(makeConfig(upstream.baseURL));
+
+			const res = await request(app).get("/any").set("Cookie", "sid=abc,def; other=2");
+
+			expect(res.status).toBe(204);
+			expect(fetchMock).not.toHaveBeenCalled();
+			expect(upstream.received[0].headers.authorization).toBeUndefined();
+			expect(upstream.received[0].headers.cookie).toBe("other=2");
+		});
+
+		it("removes a refused session cookie when the inbound Authorization is stripped too", async () => {
+			const app = mountApp(makeConfig(upstream.baseURL, { stripInboundAuthorization: true }));
+
+			await request(app)
+				.get("/any")
+				.set("Cookie", "sid=abc,def")
+				.set("Authorization", "Bearer client-supplied");
+
+			expect(upstream.received[0].headers).not.toHaveProperty("authorization");
+			expect(upstream.received[0].headers).not.toHaveProperty("cookie");
+		});
+
+		it("forwards a Cookie header without the session cookie as received", async () => {
+			const app = mountApp(makeConfig(upstream.baseURL));
+
+			await request(app).get("/any").set("Cookie", "a=1;b=2 ;  xsid=3");
+
+			expect(upstream.received[0].headers.cookie).toBe("a=1;b=2 ;  xsid=3");
+		});
+
+		it("removes every session cookie pair across several Cookie header lines", async () => {
+			fetchMock.mockResolvedValueOnce(okGrantResponse("tok-1"));
+			const app = mountApp(makeConfig(upstream.baseURL));
+
+			const res = await request(app)
+				.get("/any")
+				.set("Cookie", ["a=1; sid=s1", "sid=s2; b=2", "sid=s3"]);
+
+			expect(res.status).toBe(204);
+			expect(upstream.received[0].headers.authorization).toBe("Bearer tok-1");
+			expect(upstream.received[0].headers.cookie).toBe("a=1; b=2");
+		});
+	});
+
 	describe("what the session grant says about the browser's request", () => {
 		const providerHeaders = (): Record<string, string> =>
 			(fetchMock.mock.calls[0][1] as RequestInit).headers as Record<string, string>;
