@@ -15,9 +15,11 @@
  * it) and the loopback listen address; nothing is inherited, so a `CLIENT_ID`
  * in a developer's shell cannot change the configuration under test.
  *
- * The child listens on `HTTP_PORT=0` and is ready once the preload has
- * reported the port it bound, not once it logs `Server ready`, an info line a
- * `LOG_LEVEL` above info drops.
+ * The child listens on a loopback port that was free a moment before it
+ * started (`http.port` refuses `0`); one another process took in between
+ * fails the boot with `EADDRINUSE`, which is retried on a fresh port. It is
+ * ready once the preload has reported the port it bound, not once it logs
+ * `Server ready`, an info line a `LOG_LEVEL` above info drops.
  *
  * No child outlives its test: a boot that is neither ready nor exited within
  * {@link BOOT_DEADLINE_MS} is killed and rejected with its stderr; a stop that
@@ -44,6 +46,7 @@ import {
 	type IncomingHttpHeaders,
 	type OutgoingHttpHeaders,
 } from "node:http";
+import { createServer } from "node:net";
 import { fileURLToPath } from "node:url";
 import type { RecordingUpstream } from "./recording-upstream.mjs";
 
@@ -59,6 +62,9 @@ export const BOOT_DEADLINE_MS = 20_000;
 export const STOP_GRACE_MS = 3_000;
 /** The timeouts the suites that start a child set: above the deadline and the grace together. */
 export const SUITE_TIMEOUT_MS = 30_000;
+
+/** How many times a boot that lost its port to another process is retried. */
+const PORT_RETRIES = 5;
 
 /** pino's level names, by the number it writes. */
 const LEVEL_NAMES: Readonly<Record<number, string>> = {
@@ -131,7 +137,22 @@ process.once("exit", () => {
 	for (const child of children) child.kill("SIGKILL");
 });
 
-const launch = (env: Record<string, string>): Child => {
+/** A loopback port free at the time of the call. */
+const freePort = (): Promise<number> =>
+	new Promise((resolve, reject) => {
+		const server = createServer();
+		server.once("error", reject);
+		server.listen(0, "127.0.0.1", () => {
+			const address = server.address();
+			server.close(() =>
+				typeof address === "object" && address !== null
+					? resolve(address.port)
+					: reject(new Error("no port was bound")),
+			);
+		});
+	});
+
+const launch = (env: Record<string, string>, listenPort: number): Child => {
 	const child = spawn(process.execPath, ["--import", "tsx", "--import", PRELOAD, ENTRY_POINT], {
 		cwd: ROOT,
 		env: {
@@ -139,7 +160,7 @@ const launch = (env: Record<string, string>): Child => {
 			...(process.env.TMPDIR !== undefined ? { TMPDIR: process.env.TMPDIR } : {}),
 			NODE_ENV: "production",
 			HTTP_HOSTNAME: "127.0.0.1",
-			HTTP_PORT: "0",
+			HTTP_PORT: String(listenPort),
 			...env,
 		},
 		// The IPC channel is only a lifeline: see `child-preload.mts`.
@@ -254,13 +275,15 @@ const stopChild = async (child: Child): Promise<void> => {
 };
 
 /**
- * Listening — the port reported — or exited first. Neither within
+ * Listening — the port reported — or exited first; a child that lost its
+ * port to another process is started again on a fresh one. Neither within
  * {@link BOOT_DEADLINE_MS}: the child is killed and this rejects with its stderr.
  */
 const boot = async (
 	env: Record<string, string>,
+	retries = PORT_RETRIES,
 ): Promise<{ child: Child; port: number; listened: boolean; code: number | null }> => {
-	const child = launch(env);
+	const child = launch(env, await freePort());
 	let timer: NodeJS.Timeout | undefined;
 	const deadline = new Promise<"deadline">((resolve) => {
 		timer = setTimeout(() => resolve("deadline"), BOOT_DEADLINE_MS);
@@ -276,6 +299,9 @@ const boot = async (
 		throw new Error(
 			`the proxy neither listened nor exited within ${BOOT_DEADLINE_MS} ms and was killed:\n${child.stderr()}`,
 		);
+	}
+	if (!outcome.listened && retries > 0 && env.HTTP_PORT === undefined && child.stderr().includes("EADDRINUSE")) {
+		return boot(env, retries - 1);
 	}
 	return { child, ...outcome };
 };
