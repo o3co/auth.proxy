@@ -171,6 +171,8 @@ interface Case {
 	retryAfter?: string;
 	/** The `Authorization` pairs the upstream received, names as sent, when forwarded. */
 	upstreamAuthorization?: [string, string][];
+	/** The `Cookie` the upstream received when forwarded: the inbound one without the session cookie; absent, none. */
+	upstreamCookie?: string;
 	/** The log events for the request, in order, with the fields that say what happened. */
 	lines: Line[];
 	/** Credential bytes that must be in no log line. */
@@ -223,6 +225,7 @@ const sessionMinted = (value: string, token: string): Case => ({
 	status: 200,
 	answer: "forwarded",
 	upstreamAuthorization: bearer(token),
+	upstreamCookie: "theme=dark; _ga=GA1.2",
 	lines: [
 		INCOMING,
 		line("injection.grant_fetch", "info"),
@@ -598,6 +601,7 @@ const SETUPS: { name: string; env: () => Record<string, string>; cases: Case[] }
 				status: 200,
 				answer: "forwarded",
 				upstreamAuthorization: bearer("exchanged-s3-c"),
+				upstreamCookie: "theme=dark; csrf=abc123",
 				lines: [
 					INCOMING,
 					line("injection.exchange_fetch", "info"),
@@ -769,13 +773,14 @@ describe.each(SETUPS)("the app in injection mode, $name", (setup) => {
 				}
 			}
 
-			// What reached the upstream: the decided Authorization and every other
-			// inbound header as sent (the Cookie included), or nothing at all.
+			// What reached the upstream: the decided Authorization, the Cookie
+			// without the session cookie, and every other inbound header as sent —
+			// or nothing at all.
 			const reached = upstream.receivedFor(requestId);
 			if (c.answer === "forwarded") {
 				expect(reached).toHaveLength(1);
 				expect(headerPairs(reached[0].rawHeaders, "authorization")).toEqual(c.upstreamAuthorization);
-				expect(reached[0].headers.cookie).toBe(c.cookie);
+				expect(reached[0].headers.cookie).toBe(c.upstreamCookie);
 			} else {
 				expect(reached).toEqual([]);
 			}

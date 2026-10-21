@@ -45,11 +45,11 @@ One deployment runs one of two modes:
 
 ### Validation mode (`auth.mode = "validation"`)
 
-Validates inbound `Authorization: Bearer <token>` headers against the provider's introspection endpoint. A request with no `Authorization` header, or an empty one, is forwarded unchanged (public endpoints remain reachable). A request whose `Authorization` is anything other than `Bearer <token>` — another scheme, a lowercase `bearer`, a `Bearer` with no usable token — is refused `400 Invalid Token Type` (see the challenge table below).
+Validates inbound `Authorization: Bearer <token>` headers against the provider's introspection endpoint. A request with no `Authorization` header, or an empty one, is forwarded unchanged (public endpoints remain reachable). A request whose `Authorization` is anything other than exactly `Bearer`, one space and an RFC 6750 §2.1 `b64token` (letters, digits, `-._~+/`, then any `=` padding) — another scheme, a lowercase `bearer`, a `Bearer` with no token, two spaces, or anything after the token — is refused `400 Invalid Token Type` (see the challenge table below), and so is a request with more than one `Authorization` header line. Whenever a token is forwarded, the header the upstream receives is therefore `Bearer` and the one token that was introspected: no upstream that reads the header its own way (the last word, a regex to the end of the line) can find in it a token the provider never saw. Whitespace around the whole value is not part of it (RFC 9110 §5.5) and is dropped before either side reads it.
 
 Flow:
 
-1. Detects `Authorization: Bearer <token>` header (passes through if there is no `Authorization` header, or an empty one; any other `Authorization` is `400`).
+1. Detects `Authorization: Bearer <token>` header (passes through if there is no `Authorization` header, or an empty one; any other `Authorization`, or more than one, is `400`).
 2. Checks in-memory cache keyed by SHA-256 of the token.
 3. On cache miss, calls provider's `POST /oauth/introspect`. A redirect from it is not followed — the endpoint is configuration — and is answered `502 Provider Configuration Error`. Concurrent misses on the same token coalesce into a single provider call (single-flight), as they do in injection mode.
 4. Returns `401` if `active: false`; forwards the request if `active: true`. Only a `200` is read as an answer: another `2xx`, even one carrying `active: true`, is a provider failure (see the logging table below).
@@ -59,8 +59,8 @@ Challenges, without and with `VALIDATION_REALM` (here `api`):
 | Refusal | No realm | Realm set |
 | --- | --- | --- |
 | `401`: an access token the proxy would not accept (RFC 6750 §3) | `Bearer error="invalid_token"` | `Bearer realm="api", error="invalid_token"` |
-| `400`: a `Bearer` credential too malformed to read (`Bearer`, `Bearer  t`) | `Bearer error="invalid_request"` | `Bearer realm="api", error="invalid_request"` |
-| `400`: another method (`Basic …`, or a lowercase `bearer`, which this proxy does not admit) — no error code, as §3.1 says | none | `Bearer realm="api"` |
+| `400`: a `Bearer` credential that is not exactly `Bearer <b64token>` (`Bearer`, `Bearer  t`, `Bearer t extra`), or more than one `Authorization` line when any of them names the `Bearer` scheme | `Bearer error="invalid_request"` | `Bearer realm="api", error="invalid_request"` |
+| `400`: another method (`Basic …`, or a lowercase `bearer`, which this proxy does not admit), one line or several — no error code, as §3.1 says | none | `Bearer realm="api"` |
 
 A `413`, `500`, `501`, `502` or `504` carries none, because none of them is a statement about the caller's Bearer credential. Injection mode answers no challenge on any path, deliberately: its caller holds a session cookie, not a Bearer token.
 
@@ -129,6 +129,8 @@ Flow:
 4. On cache miss, exchanges the cookie for an access token via the provider's `POST /oauth/token` with `grant_type=session`. Concurrent misses on the same cookie, among requests the [same-origin gate](#cache-behavior) admits, coalesce into a single provider call (single-flight).
 5. Injects `Authorization: Bearer <token>` and forwards upstream.
 
+Whatever the proxy forwards, it forwards without the session cookie: the pair is removed from `Cookie` and the other cookies go on (see [Cookie forwarding](#cookie-forwarding)).
+
 Opt-in, injection mode can also exchange an external credential presented as `Authorization: Bearer <JWT>` for a first-party token — see [External credential exchange](#external-credential-exchange-authinjectionexchange).
 
 #### Cache behavior
@@ -186,7 +188,7 @@ grant into a `GET` with no body, which a token endpoint answers `405`.
 
 #### CSRF responsibility boundary
 
-The proxy is a transparent augmentation layer. It injects the Bearer but does NOT enforce CSRF. It only keeps its token cache from skipping the provider's own same-origin check on the session grant (see [Cache behavior](#cache-behavior)): a request that does not show it is same-origin is never served a cached token. Combine with `SameSite=Lax` cookies, same-origin deployment, and CSRF protection in the upstream service. Being transparent cuts the other way too — see [Inbound Authorization headers](#inbound-authorization-headers).
+The proxy is a transparent augmentation layer. It injects the Bearer but does NOT enforce CSRF. It only keeps its token cache from skipping the provider's own same-origin check on the session grant (see [Cache behavior](#cache-behavior)): a request that does not show it is same-origin is never served a cached token. Combine with `SameSite=Lax` cookies, same-origin deployment, and CSRF protection in the upstream service. That protection cannot be tied to the session cookie, which the upstream never receives (see [Cookie forwarding](#cookie-forwarding)): a synchronizer token kept in a session looked up by that cookie does not work behind this proxy. A CSRF cookie of its own (double-submit), an `Origin` / `Sec-Fetch-Site` check, or a claim in the injected token does. Being transparent cuts the other way too — see [Inbound Authorization headers](#inbound-authorization-headers).
 
 #### Inbound Authorization headers
 
@@ -203,6 +205,8 @@ With `auth.injection.exchange.enabled` the pass-through is gone altogether: an i
 #### Cookie forwarding
 
 Only the cookie named in `auth.injection.sessionCookieName` is forwarded to the provider on the session grant call. Other cookies (analytics, CSRF tokens, third-party) do not reach the provider.
+
+**The upstream never receives the session cookie as a user agent sends it.** It is the credential tokens are minted from, and it outlives every token minted from it, so the upstream — and whatever logs or instruments its requests — is handed the token instead. Whenever the proxy forwards a request, every pair named `auth.injection.sessionCookieName` is removed from `Cookie`, whether it minted a token or was refused by the grammar check below; the other cookies go on, in order, joined by `; `, and the header is dropped when none is left. A `Cookie` header without the session cookie is forwarded byte for byte. Repeated `Cookie` header lines are one header by then (Node joins them with `; `), so a session cookie in any of them is removed. There is no setting to forward it: an upstream that needs the user's identity reads the token. Peer token handlers go further: Duende BFF removes the whole `Cookie` header from a proxied API call, and Curity's OAuth proxy removes cookie headers by default.
 
 The forwarded value must conform to the RFC 6265 section 4.1.1 `cookie-value` grammar: a run of `cookie-octet`s (printable US-ASCII excluding whitespace, DQUOTE, comma, semicolon, and backslash), optionally wrapped in exactly one surrounding DQUOTE pair. A surrounding DQUOTE pair is accepted and forwarded verbatim (quotes preserved) so the provider's own cookie parser decides how to read it. Anything else is refused — a `,`, whitespace, `\`, a control character, or a non-ASCII byte anywhere in the value, or a DQUOTE anywhere other than as that surrounding pair (interior or unbalanced), or an empty value: the request is forwarded without a minted `Authorization` and the provider is not called. With the exchange disabled, a client's own `Authorization` header still reaches the upstream unless `stripInboundAuthorization` is on; with the exchange enabled, an inbound `Authorization` is handed to the exchange before the cookie is considered, so it is exchanged or refused rather than passed through (see [Inbound Authorization headers](#inbound-authorization-headers)). Whitespace immediately after `=` is part of the value and is refused; SP / HTAB next to the `;` separator or at the ends of the header is separator slack and is ignored. `;` is the cookie-pair delimiter and never becomes part of a value. Default session stores (express-session `connect.sid`, hex / base64url / JWT session ids) always conform.
 
@@ -352,6 +356,10 @@ The upstream's connection fields stay on its hop in the same way. Its response's
 Every request sent upstream carries `Via` with the proxy's own member after those the request arrived with (RFC 9110 §7.6.3): the HTTP version the proxy received it by and the pseudonym `auth.proxy` — `Via: 1.1 auth.proxy`, or `Via: 1.1 lb, 1.1 auth.proxy` behind a balancer that sent its own. It names no host or port, and it is always sent; there is no setting. An upstream that takes `Via` as the sign of a proxied request sees one: nginx, for one, neither compresses answers to such requests nor serves them its pre-compressed files (`gzip_static`) while `gzip_proxied` is `off`, its default, so set `gzip_proxied any;` on an nginx upstream to keep them compressed. The proxy adds no `Via` to its answers to the caller; an upstream's own is passed on like any other field.
 
 The caller's `Accept-Charset` reaches the upstream as it arrived; the proxy sends none of its own.
+
+### Request id (`x-request-id`)
+
+Every request gets one id, which every log line about it carries as `requestId`, which the proxy sends upstream and to the provider as `x-request-id`, and which it echoes to the caller on the answer. The caller's own `x-request-id` is reused when it is 1 to 200 characters drawn from letters, digits and `- . _ ~ + / =` — enough for a UUID, a ULID, base64 or base64url, or a W3C trace id. Any other value is replaced by a fresh id, as a missing one is: one longer than 200 characters, or one with whitespace, a control character, a quote, a backslash, `,`, `;`, any other punctuation or a non-ASCII character. Two `x-request-id` header lines are replaced too, since Node joins them with `, `. The request is not refused, and the replaced value is not logged; the caller learns the id in use from the answer's `x-request-id`. 200 is the bound Heroku's router applies to the same header.
 
 ### Client authentication with a private key (`private_key_jwt`)
 
