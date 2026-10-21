@@ -126,12 +126,15 @@ describe("the RFC 6750 challenge", () => {
 		expect(outcome.challenge).toBe('Bearer error="invalid_request"');
 	});
 
-	it("carries no error code for several Authorization lines none of which is a Bearer attempt", async () => {
-		const outcome = await rejectionOf(["Basic dXNlcjpwYXNz", "Basic b3RoZXI6cGFzcw=="]);
+	it.each([[["Basic dXNlcjpwYXNz", "Basic b3RoZXI6cGFzcw=="]], [["", ""]]])(
+		"carries no error code for the several Authorization lines %j, none of which is a Bearer attempt",
+		async (lines) => {
+			const outcome = await rejectionOf(lines);
 
-		expect(outcome.status).toBe(400);
-		expect(outcome.challenge).toBeNull();
-	});
+			expect(outcome.status).toBe(400);
+			expect(outcome.challenge).toBeNull();
+		},
+	);
 
 	describe("with auth.validation.realm configured", () => {
 		it.each(["Basic dXNlcjpwYXNz", "bearer t"])(

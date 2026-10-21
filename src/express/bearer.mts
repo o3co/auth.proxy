@@ -29,7 +29,9 @@ const BEARER_SCHEME = /^Bearer(?![!#$%&'*+\-.^_`|~0-9A-Za-z])/;
  * (an invariant of `src/modes/validation`, stated in its README), so a header
  * with anything after the token — a second word, a second token, trailing
  * whitespace — is refused rather than read in part, and no upstream can find
- * in it a token that was not introspected.
+ * in it a token that was not introspected. (Whitespace around a field value is
+ * not part of it, RFC 9110 §5.5, and Node drops it before this reads the
+ * header.)
  *
  * Stricter than the RFCs on purpose, in two ways, each narrowing what reaches
  * the protected service to the one form it is sure to read the same way:

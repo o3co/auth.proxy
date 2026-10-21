@@ -76,6 +76,8 @@ describe("namesBearerScheme", () => {
 		"Bearer t extra",
 		"Bearer t ",
 		"Bearer a,b",
+		"Bearer=abc",
+		"Beareré",
 	])("is true for the malformed Bearer %j", (header) => {
 		expect(namesBearerScheme(header)).toBe(true);
 	});
