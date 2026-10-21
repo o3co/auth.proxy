@@ -75,7 +75,7 @@ describe("createCors", () => {
 
 			expect(res.status).toBe(200);
 			expect(res.text).toBe("reached by OPTIONS");
-			expect(res.headers["access-control-allow-origin"]).toBeUndefined();
+			expect(accessControlFields(res.headers)).toEqual([]);
 			expect(res.headers.vary).toBeUndefined();
 		});
 
@@ -88,6 +88,16 @@ describe("createCors", () => {
 			expect(res.headers["access-control-allow-credentials"]).toBe("true");
 			expect(res.headers.vary).toBe("Origin");
 		});
+	});
+
+	// `cors` would test the pattern against the text "undefined" for a request
+	// without Origin, which a pattern this loose matches.
+	it("grants a request without Origin nothing, under a pattern that matches anything", async () => {
+		const res = await request(app(".*")).put("/resource");
+
+		expect(res.status).toBe(200);
+		expect(accessControlFields(res.headers)).toEqual([]);
+		expect(res.headers.vary).toBe("Origin");
 	});
 
 	// `CORS_ORIGIN_PATTERN` unset leaves the pattern null; set empty, it is "".

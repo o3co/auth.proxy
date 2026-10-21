@@ -18,8 +18,8 @@
  * CORS, which the proxy answers itself when `http.cors.origin.pattern` is set
  * and `app.mts` mounts under `http.pathPrefix`, ahead of the mode router. An
  * origin the pattern admits is granted, with credentials. Any other origin,
- * and a request without one, is granted nothing: its answer carries no
- * `Access-Control-*` field at all, on a preflight or otherwise, only
+ * and a request without one, is granted nothing: the proxy sets no
+ * `Access-Control-*` field on its answer, on a preflight or otherwise, only
  * `Vary: Origin`. Without a pattern the proxy does no CORS.
  *
  * Only a CORS preflight (Fetch: `OPTIONS` with `Origin` and

@@ -495,6 +495,7 @@ describe("createUpstreamProxy on the wire, fields both the proxy and the upstrea
 		expect(res.status).toBe(200);
 		expect(res.headers["access-control-allow-origin"]).toBeUndefined();
 		expect(res.headers["access-control-allow-credentials"]).toBeUndefined();
+		expect(res.headers["access-control-expose-headers"]).toBe("X-Total");
 	});
 
 	it("passes the upstream's CORS grant on when the proxy does not answer CORS", async () => {
