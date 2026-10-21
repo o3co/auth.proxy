@@ -176,7 +176,49 @@ describe("the entry point at boot", () => {
 			name: "refuses an INJECTION_PROVIDER_ORIGIN with a path",
 			env: { ...INJECTION, INJECTION_PROVIDER_ORIGIN: "http://127.0.0.1:9/auth" },
 			path: ["auth", "injection", "providerOrigin"],
-			names: ["providerOrigin"],
+			names: ["auth.injection.providerOrigin"],
+			unprinted: [],
+		},
+		{
+			name: "refuses an UPSTREAM_BASEURL with a path, which the upstream proxy would drop, naming the key",
+			env: { ...VALIDATION, UPSTREAM_BASEURL: "http://127.0.0.1:9/v1" },
+			path: ["upstream", "baseURL"],
+			names: ["upstream.baseURL"],
+			unprinted: [],
+		},
+		{
+			name: "refuses an UPSTREAM_BASEURL without a scheme, naming the key",
+			env: { ...VALIDATION, UPSTREAM_BASEURL: "upstream:8080" },
+			path: ["upstream", "baseURL"],
+			names: ["upstream.baseURL"],
+			unprinted: [],
+		},
+		{
+			name: "refuses an empty HTTP_PORT, which would listen on a random port, naming the key",
+			env: { ...VALIDATION, HTTP_PORT: "" },
+			path: ["http", "port"],
+			names: ["http.port"],
+			unprinted: [],
+		},
+		{
+			name: "refuses an HTTP_PATH_PREFIX without its leading /, which would mount the mode router nowhere",
+			env: { ...VALIDATION, HTTP_PATH_PREFIX: "api" },
+			path: ["http", "pathPrefix"],
+			names: ["http.pathPrefix"],
+			unprinted: [],
+		},
+		{
+			name: "refuses a CORS_ORIGIN_PATTERN that does not compile, naming the key",
+			env: { ...VALIDATION, CORS_ORIGIN_PATTERN: "(" },
+			path: ["http", "cors", "origin", "pattern"],
+			names: ["http.cors.origin.pattern"],
+			unprinted: [],
+		},
+		{
+			name: "refuses a negative INTROSPECT_CACHE_TTL_SEC, naming the key",
+			env: { ...VALIDATION, INTROSPECT_CACHE_TTL_SEC: "-5" },
+			path: ["auth", "validation", "introspect", "cacheTtlSec"],
+			names: ["auth.validation.introspect.cacheTtlSec"],
 			unprinted: [],
 		},
 		{
@@ -202,6 +244,25 @@ describe("the entry point at boot", () => {
 		for (const value of unprinted) {
 			expect(outcome.stdout + outcome.stderr).not.toContain(value);
 		}
+	});
+});
+
+// A warning, not a refusal: the proxy still boots on the pattern.
+describe("the entry point warns at boot about a CORS origin pattern that is not anchored", () => {
+	const eventsIn = (stdout: string): unknown[] =>
+		stdout
+			.split("\n")
+			.filter((line) => line.startsWith("{"))
+			.map((line) => (JSON.parse(line) as { event?: unknown }).event);
+
+	it.concurrent.for([
+		{ pattern: "https://app\\.example", warned: true },
+		{ pattern: "^https://app\\.example$", warned: false },
+	])("pattern $pattern: warned $warned", async ({ pattern, warned }, { expect }) => {
+		const outcome = await bootProxy({ ...VALIDATION, CORS_ORIGIN_PATTERN: pattern });
+
+		expect(outcome.listened).toBe(true);
+		expect(eventsIn(outcome.stdout).includes("cors.origin_pattern_unanchored")).toBe(warned);
 	});
 });
 
