@@ -16,6 +16,12 @@ describe("extractBearerToken", () => {
 		expect(extractBearerToken("Bearer abc123")).toBe("abc123");
 	});
 
+	it("admits every b64token character, and trailing `=` padding (RFC 6750 §2.1)", () => {
+		const b64 = "ABCXYZabcxyz0189-._~+/";
+		expect(extractBearerToken(`Bearer ${b64}`)).toBe(b64);
+		expect(extractBearerToken("Bearer abc==")).toBe("abc==");
+	});
+
 	it("returns null when the header is absent", () => {
 		expect(extractBearerToken(undefined)).toBeNull();
 	});
@@ -38,22 +44,45 @@ describe("extractBearerToken", () => {
 		expect(extractBearerToken("Bearer ")).toBeNull();
 	});
 
-	it("rejects a double space, which leaves an empty token", () => {
+	it("rejects anything but exactly one SP between scheme and token", () => {
 		expect(extractBearerToken("Bearer  abc123")).toBeNull();
+		expect(extractBearerToken("Bearer\tabc123")).toBeNull();
 	});
 
-	it("keeps only the first token when the header carries trailing content", () => {
-		expect(extractBearerToken("Bearer abc123 extra")).toBe("abc123");
+	// What is introspected must be the whole of what is forwarded: an upstream
+	// that reads a header differently must find nothing else in it to read.
+	it.each([
+		["a second word", "Bearer abc123 extra"],
+		["a second token", "Bearer good eyJhbGciOiJub25lIn0.eyJzdWIiOiJhZG1pbiJ9."],
+		["trailing whitespace", "Bearer abc123 "],
+		["a comma", "Bearer abc,def"],
+		["`=` before the end", "Bearer a=b"],
+		["padding alone", "Bearer =="],
+		["a quote", 'Bearer "abc"'],
+		["a line break", "Bearer abc\nx"],
+		["a non-ASCII character", "Bearer abcé"],
+	])("rejects a token with %s", (_label, header) => {
+		expect(extractBearerToken(header)).toBeNull();
 	});
 });
 
 // Which of extractBearerToken's refusals named Bearer.
 describe("namesBearerScheme", () => {
-	it.each(["Bearer", "Bearer ", "Bearer  t"])("is true for the malformed Bearer %j", (header) => {
+	it.each([
+		"Bearer",
+		"Bearer ",
+		"Bearer  t",
+		"Bearer\tt",
+		"Bearer t extra",
+		"Bearer t ",
+		"Bearer a,b",
+		"Bearer=abc",
+		"Beareré",
+	])("is true for the malformed Bearer %j", (header) => {
 		expect(namesBearerScheme(header)).toBe(true);
 	});
 
-	it.each(["Basic dXNlcjpwYXNz", "bearer t", "BEARER t", "Bearerx t"])(
+	it.each(["Basic dXNlcjpwYXNz", "bearer t", "BEARER t", "Bearerx t", "Bearer-x t", " Bearer t", ""])(
 		"is false for %j, which is another method to this parser",
 		(header) => {
 			expect(namesBearerScheme(header)).toBe(false);

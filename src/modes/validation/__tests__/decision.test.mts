@@ -31,9 +31,14 @@ const makeDeps = () => {
 	return { deps, logger, introspect };
 };
 
-const inputs = (authorization: string | undefined, requestId = "rid-1"): ValidationInputs => ({
+/** One header value is one field line; an array is the lines as received; `undefined` is none. */
+const inputs = (
+	authorization: string | readonly string[] | undefined,
+	requestId = "rid-1",
+): ValidationInputs => ({
 	requestId,
-	authorization,
+	authorization:
+		authorization === undefined ? [] : typeof authorization === "string" ? [authorization] : authorization,
 });
 
 // RFC 6750 §3 makes `WWW-Authenticate` a MUST on a refusal and a SHOULD to
@@ -43,7 +48,7 @@ const inputs = (authorization: string | undefined, requestId = "rid-1"): Validat
 // below.
 describe("the RFC 6750 challenge", () => {
 	const rejectionOf = async (
-		authorization: string | undefined,
+		authorization: string | readonly string[] | undefined,
 		arrange: (introspect: ReturnType<typeof makeDeps>["introspect"]) => void = () => {},
 		realm: string | null = null,
 	) => {
@@ -86,15 +91,48 @@ describe("the RFC 6750 challenge", () => {
 		},
 	);
 
-	// A `Bearer` with no usable token after it is §3.1's "otherwise malformed"
-	// request: `invalid_request`, which is also the auth-param §3 needs.
-	it.each(["Bearer", "Bearer ", "Bearer  t"])(
+	// A `Bearer` that is not exactly `Bearer` SP b64token is §3.1's "otherwise
+	// malformed" request: `invalid_request`, which is also the auth-param §3
+	// needs.
+	it.each([
+		"Bearer",
+		"Bearer ",
+		"Bearer  t",
+		"Bearer t extra",
+		"Bearer good eyJhbGciOiJub25lIn0.eyJzdWIiOiJhZG1pbiJ9.",
+		"Bearer t ",
+		"Bearer\tt",
+		"Bearer a,b",
+	])(
 		"names invalid_request for the malformed Bearer %j",
 		async (authorization) => {
 			const outcome = await rejectionOf(authorization);
 
 			expect(outcome.status).toBe(400);
 			expect(outcome.challenge).toBe('Bearer error="invalid_request"');
+		},
+	);
+
+	// `Authorization` is not a list field (RFC 9110 §5.3): two field lines are
+	// a malformed request, whichever of them a hop would have kept.
+	it.each([
+		[["Bearer a", "Bearer b"]],
+		[["Bearer a", "Basic dXNlcjpwYXNz"]],
+		[["", "Bearer a"]],
+	])("names invalid_request for the several Authorization lines %j when one is a Bearer attempt", async (lines) => {
+		const outcome = await rejectionOf(lines);
+
+		expect(outcome.status).toBe(400);
+		expect(outcome.challenge).toBe('Bearer error="invalid_request"');
+	});
+
+	it.each([[["Basic dXNlcjpwYXNz", "Basic b3RoZXI6cGFzcw=="]], [["", ""]]])(
+		"carries no error code for the several Authorization lines %j, none of which is a Bearer attempt",
+		async (lines) => {
+			const outcome = await rejectionOf(lines);
+
+			expect(outcome.status).toBe(400);
+			expect(outcome.challenge).toBeNull();
 		},
 	);
 
@@ -193,6 +231,12 @@ describe("decideValidation", () => {
 			["the scheme carries no token", "Bearer"],
 			["the scheme carries no token", "Bearer "],
 			["a second space leaves the token empty", "Bearer  t"],
+			// Anything after the token: what is forwarded must be exactly what
+			// was introspected.
+			["a second word follows the token", "Bearer t extra"],
+			["a second token follows the token", "Bearer good eyJhbGciOiJub25lIn0.eyJzdWIiOiJhZG1pbiJ9."],
+			["the token is not a b64token", "Bearer a,b"],
+			["the request repeats Authorization", ["Bearer a", "Bearer a"]],
 		])("answers 400 Invalid Token Type to %j (%s)", async (_reason, authorization) => {
 			const { deps, introspect } = makeDeps();
 			const outcome = await decideValidation(inputs(authorization), deps);
@@ -206,10 +250,10 @@ describe("decideValidation", () => {
 	});
 
 	describe("introspection", () => {
-		it("forwards an active token, handing the introspector the first SP-delimited word and the request id", async () => {
+		it("forwards an active token, handing the introspector the token and the request id", async () => {
 			const { deps, introspect, logger } = makeDeps();
 			introspect.mockResolvedValueOnce({ active: true });
-			const outcome = await decideValidation(inputs("Bearer abc extra", "rid-7"), deps);
+			const outcome = await decideValidation(inputs("Bearer abc", "rid-7"), deps);
 			expect(outcome).toEqual<ValidationOutcome>({ kind: "forward" });
 			expect(introspect).toHaveBeenCalledTimes(1);
 			expect(introspect).toHaveBeenCalledWith("abc", "rid-7");

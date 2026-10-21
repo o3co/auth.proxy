@@ -1,5 +1,5 @@
 import { describe, expect, it } from "vitest";
-import { type CookieRejectReason, extractCookie } from "../cookie-extractor.mjs";
+import { type CookieRejectReason, extractCookie, withoutCookie } from "../cookie-extractor.mjs";
 
 const absent = { kind: "absent" } as const;
 const found = (value: string, skipped: CookieRejectReason | null = null) => ({
@@ -247,5 +247,44 @@ describe("extractCookie", () => {
 				expect(extractCookie('sid="a b"', "sid")).toEqual(rejected("grammar"));
 			});
 		});
+	});
+});
+
+describe("withoutCookie", () => {
+	it("answers undefined for no header", () => {
+		expect(withoutCookie(undefined, "sid")).toBeUndefined();
+	});
+
+	it("leaves a header without the name byte for byte", () => {
+		expect(withoutCookie("a=1;b=2 ;  c=3", "sid")).toBe("a=1;b=2 ;  c=3");
+		expect(withoutCookie("", "sid")).toBe("");
+	});
+
+	it("removes the pair and keeps the others in order", () => {
+		expect(withoutCookie("a=1; sid=abc; b=2", "sid")).toBe("a=1; b=2");
+		expect(withoutCookie("sid=abc; other=1", "sid")).toBe("other=1");
+		expect(withoutCookie("other=1; sid=abc", "sid")).toBe("other=1");
+	});
+
+	it("answers undefined when the session cookie was the only pair", () => {
+		expect(withoutCookie("sid=abc", "sid")).toBeUndefined();
+	});
+
+	it("removes every same-name pair, well-formed or not", () => {
+		expect(withoutCookie("sid=bad,val; a=1; sid=good", "sid")).toBe("a=1");
+		expect(withoutCookie('sid=""; sid=; sid="q"', "sid")).toBeUndefined();
+	});
+
+	it("matches the name as extractCookie does: after SP / HTAB slack, case-sensitively, whole", () => {
+		expect(withoutCookie(" \tsid \t=abc ;\ta=1", "sid")).toBe("a=1");
+		expect(withoutCookie("SID=abc; xsid=1; sidx=2", "sid")).toBe("SID=abc; xsid=1; sidx=2");
+	});
+
+	it("drops the empty segments a removal leaves, and keeps a pair without '='", () => {
+		expect(withoutCookie("a=1;; sid=abc;  ;flag", "sid")).toBe("a=1; flag");
+	});
+
+	it("keeps a value that mentions the name", () => {
+		expect(withoutCookie("a=sid=abc; sid=x", "sid")).toBe("a=sid=abc");
 	});
 });
