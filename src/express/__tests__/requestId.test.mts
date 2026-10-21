@@ -67,10 +67,16 @@ describe("createRequestIdMiddleware", () => {
 		expect(req.headers["x-request-id"]).toMatch(/^\d{14}_[0-9a-f]{32}$/);
 	});
 
-	it("takes the first value when the header arrives duplicated", () => {
-		// Node types this `string | string[]`, and an upstream that sets the
-		// header twice produces the array. Casting it to `string` let an array
-		// reach `res.setHeader` and every log field built from it.
+	it("defaults to an id it would itself reuse, so a later hop with the same bound keeps it", () => {
+		const middleware = createRequestIdMiddleware();
+		const minted = String(run(middleware).req.headers["x-request-id"]);
+		const { req } = run(middleware, { "x-request-id": minted });
+		expect(req.headers["x-request-id"]).toBe(minted);
+	});
+
+	it("takes the first value of an array-typed header", () => {
+		// Node types an inbound header `string | string[]`, so an array must not
+		// reach `res.setHeader` or a log field.
 		const req = { headers: { "x-request-id": ["first-id", "second-id"] } } as unknown as Request;
 		const setHeader = vi.fn();
 		createRequestIdMiddleware()(req, { setHeader } as unknown as Response, vi.fn());
@@ -132,7 +138,7 @@ describe("createRequestIdMiddleware", () => {
 			expect(setHeader).toHaveBeenCalledWith("x-request-id", "generated-id");
 		});
 
-		it("bounds the first of a duplicated header too", () => {
+		it("bounds the first value of an array-typed header", () => {
 			const req = { headers: { "x-request-id": ["a b", "ok-id"] } } as unknown as Request;
 			createRequestIdMiddleware({ generator: () => "generated-id" })(
 				req,
@@ -157,6 +163,7 @@ describe("createRequestIdMiddleware", () => {
 					host: "127.0.0.1",
 					port: (server.address() as AddressInfo).port,
 					path: "/",
+					agent: false,
 					headers: { "x-request-id": ["first-id", "second-id"] },
 				});
 				req.end();
@@ -171,7 +178,9 @@ describe("createRequestIdMiddleware", () => {
 				expect(body).toBe("generated-id");
 				expect(res.headers["x-request-id"]).toBe("generated-id");
 			} finally {
+				server.closeAllConnections();
 				server.close();
+				await once(server, "close");
 			}
 		});
 	});
