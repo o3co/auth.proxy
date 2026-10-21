@@ -261,6 +261,7 @@ describe("validation router", () => {
 					host: "127.0.0.1",
 					port: (server.address() as AddressInfo).port,
 					path: "/protected",
+					agent: false,
 					headers: { Authorization: ["Bearer good", "Bearer other"] },
 				});
 				req.end();
@@ -271,7 +272,9 @@ describe("validation router", () => {
 				expect(res.statusCode).toBe(400);
 				expect(res.headers["www-authenticate"]).toBe('Bearer error="invalid_request"');
 			} finally {
+				server.closeAllConnections();
 				server.close();
+				await once(server, "close");
 			}
 			expect(upstreamCalls).toBe(0);
 			expect(fetchMock).not.toHaveBeenCalled();
