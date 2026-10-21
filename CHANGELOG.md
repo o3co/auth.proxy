@@ -24,7 +24,8 @@ an operator sees and what to do.
 - **BREAKING: CORS answers only preflights, and only under
   `HTTP_PATH_PREFIX` (#148, #181).** Applies while `CORS_ORIGIN_PATTERN` is
   set. `cors` was mounted at the root and answered every `OPTIONS` `204`,
-  outside the prefix and without `Origin`. Now a preflight — `OPTIONS` with
+  outside the prefix and without `Origin` (`OPTIONS /_healthcheck` excepted,
+  which Express answers `200`, as before). Now a preflight — `OPTIONS` with
   `Origin` and `Access-Control-Request-Method` — under the prefix is answered
   `204`, neither forwarded nor logged; an `OPTIONS` outside the prefix is
   `404`, as any other method there is; any other `OPTIONS` under the prefix is
@@ -48,21 +49,22 @@ an operator sees and what to do.
   some redirected requests. Add to it any origin that relied on the
   upstream's own grant. Boot now warns about such patterns (see Added).
 - **BREAKING: configuration values that misbehaved quietly now stop the boot,
-  naming the key (#184).** Each was accepted before and then went wrong
-  without a word:
+  naming the key (#184).** Most were accepted before and then went wrong
+  without a word; a few that worked are refused so that each key has one
+  form:
   - `UPSTREAM_BASEURL` (`upstream.baseURL`) must be an http(s) origin,
     `scheme://host[:port]` with at most one trailing `/`. A path was dropped
-    (`http://h/v1` never sent `/v1`), `upstream:8080` failed every request
-    with `ENOTFOUND`, and `""` crashed with a raw `AssertionError`; a path,
-    query, fragment, userinfo, a missing scheme, `""` and port `0` are now
-    refused. The value is held as its origin.
+    (`http://h/v1` never sent `/v1`) and `""` crashed with a raw
+    `AssertionError`. A value without a scheme (`upstream:8080`), which the
+    proxy sent as `http://upstream:8080`, is refused too, as are a query, a
+    fragment, userinfo and port `0`. The value is held as its origin.
   - `HTTP_PORT` must be an integer from 1 to 65535; `""` listened on a random
     port, and `0` is refused too.
   - `HTTP_PATH_PREFIX` must be `/` or `/`-separated segments of letters,
     digits and `- . _ ~`, starting with `/` (one trailing `/` is allowed).
     `api` made every request `404`, `/:x` mounted under every first segment;
     route syntax, empty segments, `.`/`..` segments and other characters are
-    refused.
+    refused, and so is `""`, which mounted at the root as `/` does.
   - `HTTP_HOSTNAME` may not be empty or contain whitespace; `""` listened on
     every interface.
   - `CORS_ORIGIN_PATTERN` that does not compile is refused naming the key; it
@@ -85,8 +87,9 @@ an operator sees and what to do.
   are refused.
   **Action:** start the new version against each deployment's configuration
   before rolling it out, and fix every key it names: drop the path from
-  `UPSTREAM_BASEURL` (it was never applied), give `HTTP_PATH_PREFIX` its
-  leading `/`, and write integers as plain decimal digits.
+  `UPSTREAM_BASEURL` (it was never applied) and write its scheme
+  (`http://upstream:8080`), give `HTTP_PATH_PREFIX` its leading `/` (`/` for
+  an empty value), and write integers as plain decimal digits.
 - **BREAKING: injection mode no longer forwards the session cookie upstream
   (#183).** Every pair named `INJECTION_SESSION_COOKIE_NAME`
   (`auth.injection.sessionCookieName`) is removed from `Cookie` on every
@@ -122,7 +125,8 @@ an operator sees and what to do.
   - `X-Forwarded-For`: the inbound entries, then the proxy's peer address
     (`unknown` if the socket no longer has one). On `HTTP_HOSTNAME=::` an IPv4
     peer is written IPv4-mapped (`::ffff:10.0.0.5`).
-  - `X-Real-IP`: the proxy's peer address.
+  - `X-Real-IP`: the proxy's peer address; absent if the socket no longer
+    has one.
   - `X-Forwarded-Host`: the `Host` the proxy received, replacing any inbound
     value; absent when the request had no `Host`.
   - `Forwarded`: removed.
@@ -149,20 +153,25 @@ an operator sees and what to do.
   the environment (#182).** Node applies `NODE_USE_ENV_PROXY` with
   `HTTP_PROXY` / `HTTPS_PROXY` through its global agent, which the upstream
   request no longer uses (see "One upstream connection per request" below).
-  **Action:** a deployment that set `NODE_USE_ENV_PROXY=1` to reach the
-  upstream through a forward proxy must make the upstream reachable directly;
-  the proxy has no forward-proxy setting.
+  Provider calls are unaffected. **Action:** a deployment that set
+  `NODE_USE_ENV_PROXY=1` to reach the upstream through a forward proxy must
+  make the upstream reachable directly; the proxy has no forward-proxy
+  setting.
 - **BREAKING: the image listens on 8080, not 80 (#187).** The image sets
   `HTTP_PORT=8080` and `EXPOSE 8080`, a port a non-root process can bind;
   the configuration's own default, 80, still applies outside the image.
   **Action:** publish `-p <host>:8080`, or point the Service or load balancer
   target port at 8080. Setting `HTTP_PORT=80` instead also needs
   `net.ipv4.ip_unprivileged_port_start=0` or `CAP_NET_BIND_SERVICE`, since the
-  process is no longer root.
+  process is no longer root. A `port` written in a replacement
+  `application.conf` that keeps the shipped `port = ${?HTTP_PORT}` line is
+  overridden by the image's `HTTP_PORT`, and so is the port the
+  `HEALTHCHECK` probes: set `HTTP_PORT` instead.
 - **BREAKING: the image runs as `node` (uid 1000), not root (#187).** Its
   files, and `/home/node` that holds them, belong to root and are only read,
-  so the process cannot replace its own code or configuration; the image
-  also runs with a read-only root filesystem, which the operator turns on.
+  so the process cannot replace its own code or configuration, and the
+  container can run with a read-only root filesystem (`--read-only`,
+  `readOnlyRootFilesystem: true`) when the operator turns it on.
   **Action:** a file mounted into the container — a replacement
   `application.conf` at `/home/node/dist/config/application.conf`, for
   instance — must be readable by uid 1000.
@@ -188,7 +197,7 @@ an operator sees and what to do.
   longer contains the tests (`**/__tests__`), type declarations or
   declaration maps.
 - **Dependencies (#179).** `@o3co/ts.hocon` `^1.14.3` (from 1.13.0), `zod`
-  `^4.6.7`.
+  `^4.6.7` (from 4.6.6).
 
 ### Added
 
@@ -227,18 +236,19 @@ an operator sees and what to do.
   what a preflight answer grants; and that **`DEBUG=express-http-proxy` (or
   `DEBUG=*`) prints every proxied request's `Authorization` and cookies to
   stderr** — never set it where real credentials pass. "Provider rate
-  limiting" adds that in validation mode one anonymous client sending random
-  tokens can spend the per-instance introspection budget; rate-limit
-  requests carrying `Authorization` or the session cookie at the ingress.
+  limiting" adds that one anonymous client sending random tokens (validation
+  mode) or random session cookies (injection mode, when the provider does not
+  list the proxy) can spend the per-instance budget; rate-limit requests
+  carrying `Authorization` or the session cookie at the ingress.
 
 ### Removed
 
 - **From the image (#187):** pnpm (the base image's own npm and corepack
   remain, never run), the compiled tests, `/home/node/config` (never read:
   the entry point reads `/home/node/dist/config/application.conf`) and the
-  `src -> dist` symlink.
-- **`Forwarded` toward the upstream (#195).** See the BREAKING entry under
-  Changed.
+  `src -> dist` symlink. **Action:** a container command that runs `pnpm`
+  or a path under `/home/node/src` must run `node dist/src/app.mjs`, the
+  image's own command.
 
 ### Fixed
 
