@@ -25,8 +25,8 @@ docker: docker/runtime
 
 .PHONY: docker/builder
 docker/builder:
-	docker build . -t ${DOCKER_IMAGE}:builder --target=builder
+	docker build --pull . -t ${DOCKER_IMAGE}:builder --target=builder
 
 .PHONY: docker/runtime
 docker/runtime:
-	docker build . -t ${DOCKER_IMAGE}:latest --target=runtime
+	docker build --pull . -t ${DOCKER_IMAGE}:latest --target=runtime

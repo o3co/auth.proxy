@@ -31,3 +31,16 @@ updates:
       - dependency-name: "typescript"
         update-types:
           - "version-update:semver-major"
+  - package-ecosystem: "docker"
+    directory: "/"
+    schedule:
+      interval: "weekly"
+    # The Dockerfile names the Node base image by minor (node:24.22-alpine), so
+    # a new minor reaches the image only through this entry. The group keeps a
+    # minor or patch update apart from a new Node major, which stays a separate
+    # PR, reviewed on its own.
+    groups:
+      docker-minor-patch:
+        update-types:
+          - "minor"
+          - "patch"

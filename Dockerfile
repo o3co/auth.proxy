@@ -1,5 +1,10 @@
 ##############################################
-FROM node:24-alpine AS base
+# Both stages name the base image by Node minor. Until Node publishes the next
+# minor, the tag follows this minor's newest patch, which a build takes with
+# --pull; after that the tag no longer changes, and a fix reaches the image
+# only by moving both FROM lines, which Dependabot proposes. Dependabot reads
+# only literal tags, which is why no ARG names the version.
+FROM node:24.22-alpine AS base
 
 RUN npm install -g corepack --force
 
@@ -35,7 +40,7 @@ RUN pnpm prune --prod
 # base image's own npm and corepack stay, unused. The files, and the directory holding them, belong to root
 # and are only read, so the process cannot replace its own code or
 # configuration, and the image can run with a read-only root filesystem.
-FROM node:24-alpine AS runtime
+FROM node:24.22-alpine AS runtime
 
 ENV HOME=/home/node
 ENV NODE_ENV=production

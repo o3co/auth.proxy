@@ -1,6 +1,6 @@
 # auth.proxy
 
-最終更新: 2026-10-21
+最終更新: 2026-10-22
 
 [![CI](https://github.com/o3co/auth.proxy/actions/workflows/ci.yml/badge.svg)](https://github.com/o3co/auth.proxy/actions/workflows/ci.yml)
 [![codecov](https://codecov.io/gh/o3co/auth.proxy/graph/badge.svg)](https://codecov.io/gh/o3co/auth.proxy)
@@ -445,6 +445,8 @@ make docker       # ランタイムイメージのビルド
 - **テストを含まない。** ビルドは `tsconfig.build.json` でコンパイルし、`__tests__` を `dist/` から外す。
 
 ビルドには Docker Engine 25 以降が要る（`HEALTHCHECK` が `--start-interval` を使う）。CI は push とプルリクエストのたびにイメージをビルドし、`.github/scripts/image-smoke.sh` で起動して上のそれぞれを確かめる。
+
+ベースイメージは `Dockerfile` の `FROM` 行が Node のマイナーで名指しする（`node:<major>.<minor>-alpine`）。Node が次のマイナーを出すまで、このタグはこのマイナーの最新パッチと、その Alpine パッケージを指す。ホストがすでに持っているイメージではなくそれらを使うよう、`make docker` と同じく `--pull` を付けてビルドする。次のマイナーが出たあとは、タグはもう変わらない。修正がイメージに入るのは、その行を変えたときだけである。その変更は Dependabot が毎週提案する。プロキシの以前のリリースをビルドし直しても、そのリリースのマイナーのままである。`--pull` を付けないと、すでにそのタグを持つホストは最後に取得したパッチでビルドする。それはセキュリティリリースより古いことがある。
 
 ## 設定
 

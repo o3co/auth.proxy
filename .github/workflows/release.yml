@@ -14,9 +14,14 @@ jobs:
     steps:
       - uses: actions/checkout@v4
       - uses: pnpm/action-setup@v4
+      # The Dockerfile's Node minor. When Dependabot's pull request moves the
+      # Dockerfile's minor, change this line in that pull request by hand.
+      # check-latest takes the newest patch; without it, an older patch cached
+      # on the runner would do.
       - uses: actions/setup-node@v4
         with:
-          node-version: '24'
+          node-version: '24.22'
+          check-latest: true
 
       - name: Get pnpm store path
         id: pnpm-store
