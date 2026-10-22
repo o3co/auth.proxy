@@ -5,6 +5,42 @@ All notable changes to this project are documented in this file.
 The format is based on [Keep a Changelog](https://keepachangelog.com/en/1.1.0/),
 and this project adheres to [Semantic Versioning](https://semver.org/spec/v2.0.0.html).
 
+## [0.10.1] — 2026-10-22
+
+This release moves the image and CI to Node 24.22.1, which carries the fixes of
+the 2026-10-21 Node.js security release. Nothing in the proxy's behaviour or
+configuration changes. **Rebuild your images.**
+
+### Security
+
+- **The image runs Node 24.22.1, the October 2026 Node.js security release
+  (#200).** The release fixes CVE-2026-111497 (Brotli decoder out-of-bounds
+  write, remote code execution), CVE-2026-105482 (`dns.resolve` truncates
+  names containing NUL), CVE-2026-105483 and CVE-2026-106069 (TLS certificate
+  hostname bypasses), CVE-2026-105481 (keep-alive socket processes a response
+  written before the request), CVE-2026-106072 (DNS SANs authenticate
+  non-canonical IPv4 endpoints), CVE-2026-106074 (`crypto.randomUUID()` and
+  `randomInt()` entropy cached in startup snapshots) and CVE-2026-106073
+  (Permission Model bypass with `fs.realpathSync`), and updates OpenSSL,
+  undici, c-ares and the bundled CA certificates. See the
+  [Node.js advisory](https://nodejs.org/en/blog/vulnerability/october-2026-security-releases).
+  The base image was `node:24-alpine`, so a build host that held an older
+  image kept building on a vulnerable Node. **Action:** rebuild the image
+  with `--pull` (`make docker` now does).
+
+### Changed
+
+- **The base image is pinned to the Node minor, `node:24.22-alpine`, instead
+  of `node:24-alpine` (#200).** Until Node publishes the next 24.x minor, a
+  rebuild with `--pull` takes this minor's newest patch. After that the tag
+  no longer changes: a newer Node arrives only with a release of the proxy
+  that moves the `FROM` lines (Dependabot now proposes them weekly), and
+  rebuilding this release keeps Node 24.22. **Action:** build with `--pull`.
+  A host that pulled `node:24.22-alpine` between 2026-10-14 and 2026-10-21
+  holds the vulnerable 24.22.0 under that tag, and a build without `--pull`
+  keeps it.
+- **`make docker` and `make docker/builder` build with `--pull` (#200).**
+
 ## [0.10.0] — 2026-10-21
 
 This release hardens what the proxy forwards and how it boots, and most of it
