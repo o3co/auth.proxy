@@ -12,14 +12,23 @@ jobs:
     steps:
       - uses: actions/checkout@v4
       - uses: pnpm/action-setup@v4
-      # The Dockerfile's Node minor; Dependabot changes only the Dockerfile, so
-      # its pull request that moves the minor changes this line by hand.
-      # check-latest takes the newest patch; without it, an older patch cached
-      # on the runner would do.
+      # The Dockerfile's Node minor. When Dependabot's pull request moves the
+      # Dockerfile's minor, change this line in that pull request by hand; CI
+      # fails until both name the same minor. check-latest takes the newest
+      # patch; without it, an older patch cached on the runner would do.
       - uses: actions/setup-node@v4
         with:
           node-version: '24.22'
           check-latest: true
+      - name: Check that CI runs the image's Node minor
+        shell: bash
+        run: |
+          image="$(sed -n 's/^FROM node:\([0-9]*\.[0-9]*\)-alpine .*/\1/p' Dockerfile | sort -u)"
+          ci="$(node -p 'process.versions.node.split(".").slice(0, 2).join(".")')"
+          if [ "$image" != "$ci" ]; then
+            echo "::error::The Dockerfile names Node $image; CI runs $ci. Change node-version in ci.yml and release.yml."
+            exit 1
+          fi
 
       - name: Get pnpm store path
         id: pnpm-store

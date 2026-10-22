@@ -14,10 +14,9 @@ jobs:
     steps:
       - uses: actions/checkout@v4
       - uses: pnpm/action-setup@v4
-      # The Dockerfile's Node minor; Dependabot changes only the Dockerfile, so
-      # its pull request that moves the minor changes this line by hand.
-      # check-latest takes the newest patch; without it, an older patch cached
-      # on the runner would do.
+      # The same Node minor as ci.yml, which checks it against the Dockerfile;
+      # change both together. check-latest takes the newest patch; without it,
+      # an older patch cached on the runner would do.
       - uses: actions/setup-node@v4
         with:
           node-version: '24.22'

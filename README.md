@@ -463,9 +463,9 @@ The runtime image (`--target runtime`):
 - **Declares a `HEALTHCHECK`** that asks `GET /_healthcheck` on `127.0.0.1:${HTTP_PORT}` with the base image's busybox `wget`. It is a liveness probe: it says nothing about the provider or the upstream. If `HTTP_HOSTNAME` names an address that `127.0.0.1` does not reach, override the healthcheck — `localhost` among them, which resolves to `::1` inside the image. Kubernetes ignores `HEALTHCHECK`; give the pod its own probe on the same path.
 - **Ships no tests**: the build compiles `tsconfig.build.json`, which leaves `__tests__` out of `dist/`.
 
-The base image is named by Node minor in the `Dockerfile`'s `FROM` lines (`node:<major>.<minor>-alpine`). The tag follows that minor's newest patch and Alpine packages: build with `--pull`, as `make docker` does, so that a rebuild takes them rather than an image the host already holds. A newer minor reaches the image only through a change to those lines, which Dependabot proposes each week. The build stops on a Node 24 older than 24.22.1, the oldest with the fixes of the October 2026 security release; rebuilding with `--pull` resolves it.
-
 Building needs Docker Engine 25 or later (the `HEALTHCHECK` uses `--start-interval`). CI builds the image on every push and pull request and runs it through `.github/scripts/image-smoke.sh`, which checks each of the above.
+
+The base image is named by Node minor in the `Dockerfile`'s `FROM` lines (`node:<major>.<minor>-alpine`). Until Node publishes the next minor, the tag follows this minor's newest patch and Alpine packages: build with `--pull`, as `make docker` does, so that a rebuild takes them rather than an image the host already holds. After that the tag no longer changes: a fix reaches the image only through a change to those lines, which Dependabot proposes each week, and rebuilding an earlier release of the proxy keeps that release's minor. The build stops on a Node 24 older than 24.22.1, the oldest with the fixes of the October 2026 security release; rebuilding with `--pull` resolves it.
 
 ## Configuration
 
