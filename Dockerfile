@@ -1,5 +1,18 @@
 ##############################################
-FROM node:24-alpine AS base
+# Both stages name the base image by Node minor: the tag follows that minor's
+# newest patch, which a build takes with --pull. Dependabot proposes the next
+# minor as a pull request that changes both FROM lines; it reads only literal
+# tags, which is why no ARG names the version.
+FROM node:24.22-alpine AS base
+
+# 24.22.1 is the oldest Node 24 with the fixes of the October 2026 security
+# release. A host holding an older image under the same tag stops here instead
+# of building on it.
+RUN node -e 'const v = process.versions.node.split(".").map(Number); \
+  if (v[0] * 1e6 + v[1] * 1e3 + v[2] < 24022001) { \
+    console.error("Node " + process.version + " predates 24.22.1, the oldest Node 24 with the October 2026 security fixes; build with --pull"); \
+    process.exit(1); \
+  }'
 
 RUN npm install -g corepack --force
 
@@ -35,7 +48,7 @@ RUN pnpm prune --prod
 # base image's own npm and corepack stay, unused. The files, and the directory holding them, belong to root
 # and are only read, so the process cannot replace its own code or
 # configuration, and the image can run with a read-only root filesystem.
-FROM node:24-alpine AS runtime
+FROM node:24.22-alpine AS runtime
 
 ENV HOME=/home/node
 ENV NODE_ENV=production

@@ -1,6 +1,6 @@
 # auth.proxy
 
-最終更新: 2026-10-21
+最終更新: 2026-10-22
 
 [![CI](https://github.com/o3co/auth.proxy/actions/workflows/ci.yml/badge.svg)](https://github.com/o3co/auth.proxy/actions/workflows/ci.yml)
 [![codecov](https://codecov.io/gh/o3co/auth.proxy/graph/badge.svg)](https://codecov.io/gh/o3co/auth.proxy)
@@ -443,6 +443,8 @@ make docker       # ランタイムイメージのビルド
 - **`node dist/src/app.mjs` を PID 1 として動かし**、間にパッケージマネージャーを挟まない。SIGTERM はプロキシに届いてグレースフルシャットダウンを始め、stdout にはプロキシの NDJSON 行だけが出る。イメージは pnpm を持たず（ベースイメージの npm と corepack はあるが実行されない）、ネットワークに出られなくても起動する。
 - **`HEALTHCHECK` を宣言する。** ベースイメージにある busybox の `wget` で `127.0.0.1:${HTTP_PORT}` の `GET /_healthcheck` を問い合わせる。生存確認（liveness）であり、プロバイダーや上流の状態は表さない。`HTTP_HOSTNAME` が `127.0.0.1` から届かないアドレスを指すときは、ヘルスチェックを上書きする。イメージの中で `::1` に解決される `localhost` もその一つである。Kubernetes は `HEALTHCHECK` を使わないので、Pod に同じパスへの probe を設定する。
 - **テストを含まない。** ビルドは `tsconfig.build.json` でコンパイルし、`__tests__` を `dist/` から外す。
+
+ベースイメージは `Dockerfile` の `FROM` 行が Node のマイナーで名指しする（`node:<major>.<minor>-alpine`）。このタグはそのマイナーの最新パッチと、その Alpine パッケージを指す。ホストがすでに持っているイメージではなくそれらを使うよう、`make docker` と同じく `--pull` を付けてビルドする。新しいマイナーがイメージに入るのは、その行を変えたときだけである。その変更は Dependabot が毎週提案する。Node 24 が 24.22.1 より古いと、ビルドは止まる。24.22.1 は 2026 年 10 月のセキュリティリリースの修正を含む最も古い Node 24 である。`--pull` を付けてビルドし直せば解消する。
 
 ビルドには Docker Engine 25 以降が要る（`HEALTHCHECK` が `--start-interval` を使う）。CI は push とプルリクエストのたびにイメージをビルドし、`.github/scripts/image-smoke.sh` で起動して上のそれぞれを確かめる。
 
