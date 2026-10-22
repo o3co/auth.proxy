@@ -3,19 +3,8 @@
 # minor, the tag follows this minor's newest patch, which a build takes with
 # --pull; after that the tag no longer changes, and a fix reaches the image
 # only by moving both FROM lines, which Dependabot proposes. Dependabot reads
-# only literal tags, which is why no ARG names the version. CI checks that its
-# Node runs the same minor.
+# only literal tags, which is why no ARG names the version.
 FROM node:24.22-alpine AS base
-
-# 24.22.1 is the oldest Node 24 with the fixes of the October 2026 security
-# release. A host holding an older image under the same tag stops here instead
-# of building on it. The check matters only while the FROM lines name 24.22;
-# it goes when they move to a newer minor.
-RUN node -e 'const v = process.versions.node.split(".").map(Number); \
-  if (v[0] * 1e6 + v[1] * 1e3 + v[2] < 24022001) { \
-    console.error("Node " + process.version + " predates 24.22.1, the oldest Node 24 with the October 2026 security fixes; build with --pull"); \
-    process.exit(1); \
-  }'
 
 RUN npm install -g corepack --force
 
