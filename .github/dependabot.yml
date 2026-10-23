@@ -36,11 +36,15 @@ updates:
     schedule:
       interval: "weekly"
     # The Dockerfile names the Node base image by minor (node:24.22-alpine), so
-    # a new minor reaches the image only through this entry. The group keeps a
-    # minor or patch update apart from a new Node major, which stays a separate
-    # PR, reviewed on its own.
+    # a new minor reaches the image only through this entry. A new Node major
+    # is not proposed here: moving to it is a deliberate change made across the
+    # auth repos together, on an LTS line, not a weekly bump.
     groups:
       docker-minor-patch:
         update-types:
           - "minor"
           - "patch"
+    ignore:
+      - dependency-name: "node"
+        update-types:
+          - "version-update:semver-major"
