@@ -5,6 +5,32 @@ All notable changes to this project are documented in this file.
 The format is based on [Keep a Changelog](https://keepachangelog.com/en/1.1.0/),
 and this project adheres to [Semantic Versioning](https://semver.org/spec/v2.0.0.html).
 
+## [0.10.2] — 2026-10-25
+
+This release moves `body-parser` to 2.4.0, which fixes a denial of service.
+Nothing in the proxy's behaviour or configuration changes. **Rebuild your
+images.**
+
+### Security
+
+- **`body-parser` 2.4.0 for GHSA-27r3-jxmh-p828 (#204).** `body-parser`
+  2.0.0–2.3.x is affected by
+  [GHSA-27r3-jxmh-p828](https://github.com/advisories/GHSA-27r3-jxmh-p828)
+  (CVE-2026-111181, high): denial of service via trailing bytes after a
+  compressed request body. It reaches the proxy through `express`, whose
+  range already admits 2.4.0, so the lockfile is the whole change. An image
+  built from 0.10.1 or earlier carries 2.3.0. **Action:** rebuild the image
+  from this release.
+
+### Changed
+
+- **Development only (#203, #204).** `vite`, which vitest runs on, moves to
+  8.3.5 and is now a declared development dependency. That closes
+  GHSA-587h-7wmj-h5pm (high), GHSA-698v-4r3x-3vcv, GHSA-r825-w8mm-5pxw,
+  GHSA-rq7h-c2jc-7f22 (moderate) and GHSA-9jrq-w75r-8gcw (low), none of which
+  reach the image. Dependabot no longer proposes a new Node major for the
+  base image; the weekly entry still proposes 24.x minors and patches.
+
 ## [0.10.1] — 2026-10-22
 
 This release moves the image and CI to Node 24.22.1, which carries the fixes of
