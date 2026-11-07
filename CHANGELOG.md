@@ -5,6 +5,29 @@ All notable changes to this project are documented in this file.
 The format is based on [Keep a Changelog](https://keepachangelog.com/en/1.1.0/),
 and this project adheres to [Semantic Versioning](https://semver.org/spec/v2.0.0.html).
 
+## [0.10.3] — 2026-11-07
+
+This release moves `qs` to 6.17.0, which fixes a denial of service. Nothing in
+the proxy's behaviour or configuration changes. **Rebuild your images.**
+
+### Security
+
+- **`qs` 6.17.0 for GHSA-6pq8-jhm2-2vcw (#207).** `qs` 6.7.0–6.16.0 is
+  affected by
+  [GHSA-6pq8-jhm2-2vcw](https://github.com/advisories/GHSA-6pq8-jhm2-2vcw)
+  (moderate): `qs.stringify` with `arrayFormat: 'comma'` throws an uncaught
+  `TypeError` on an array element whose own `toString` is not callable, a
+  denial of service. It reaches the proxy through `express`, whose `qs ^6.16.0`
+  range already admits the fix, so the lockfile is the whole change. An image
+  built from 0.10.2 or earlier carries 6.16.0. **Action:** rebuild the image
+  from this release.
+
+### Changed
+
+- **Development only (#206, #208).** `@biomejs/biome` moves to 2.6.4,
+  `@types/node` to 26.6.6 and `jose`, which the tests sign tokens with, to
+  6.2.14. None of them reach the image.
+
 ## [0.10.2] — 2026-10-25
 
 This release moves `body-parser` to 2.4.0, which fixes a denial of service.
