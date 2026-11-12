@@ -1,6 +1,7 @@
 #!/usr/bin/env bash
 # Runs a built runtime image the way an orchestrator does and checks what an
-# operator relies on: it runs as a non-root user that cannot write to its
+# operator relies on: it holds no Alpine package older than the Alpine
+# repository's, it runs as a non-root user that cannot write to its
 # working directory, carries no pnpm, ships no tests, boots on a read-only
 # root filesystem without network access, turns healthy through its own
 # HEALTHCHECK, and on SIGTERM drains and exits 0 with nothing on stderr.
@@ -19,6 +20,11 @@ cleanup() {
 	docker rm -f "$name" >/dev/null 2>&1 || true
 }
 trap cleanup EXIT
+
+# apk prints a header line, then one line per installed package that the
+# repository holds a newer version of.
+stale="$(docker run --rm --user root --entrypoint sh "$image" -c 'apk update -q >/dev/null && apk version -l "<"' | tail -n +2)"
+[ -z "$stale" ] || fail "Alpine packages older than the repository's: $stale"
 
 uid="$(docker run --rm --entrypoint id "$image" -u)"
 [ "$uid" != 0 ] || fail "the image runs as root"

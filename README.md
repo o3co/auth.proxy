@@ -1,6 +1,6 @@
 # auth.proxy
 
-Last updated: 2026-10-22
+Last updated: 2026-11-13
 
 [![CI](https://github.com/o3co/auth.proxy/actions/workflows/ci.yml/badge.svg)](https://github.com/o3co/auth.proxy/actions/workflows/ci.yml)
 [![codecov](https://codecov.io/gh/o3co/auth.proxy/graph/badge.svg)](https://codecov.io/gh/o3co/auth.proxy)
@@ -465,7 +465,7 @@ The runtime image (`--target runtime`):
 
 Building needs Docker Engine 25 or later (the `HEALTHCHECK` uses `--start-interval`). CI builds the image on every push and pull request and runs it through `.github/scripts/image-smoke.sh`, which checks each of the above.
 
-The base image is named by Node minor in the `Dockerfile`'s `FROM` lines (`node:<major>.<minor>-alpine`). Until Node publishes the next minor, the tag follows this minor's newest patch and Alpine packages: build with `--pull`, as `make docker` does, so that a rebuild takes them rather than an image the host already holds. After that the tag no longer changes: a fix reaches the image only through a change to those lines, which Dependabot proposes each week, and rebuilding an earlier release of the proxy keeps that release's minor. Without `--pull`, a host that already holds the tag builds on the patch it pulled last, which can predate a security release.
+The base image is named by Node minor in the `Dockerfile`'s `FROM` lines (`node:<major>.<minor>-alpine`). Until Node publishes the next minor, the tag follows this minor's newest patch: build with `--pull`, as `make docker` does, so that a rebuild takes it rather than an image the host already holds. Alpine's fixes reach the tag later than Alpine publishes them, so the runtime stage runs `apk upgrade` and takes the Alpine repository's current packages; `make docker` builds that stage with `--no-cache-filter=runtime`, since a cached layer would keep the packages of an earlier build. After that the tag no longer changes: a fix reaches the image only through a change to those lines, which Dependabot proposes each week, and rebuilding an earlier release of the proxy keeps that release's minor. Without `--pull`, a host that already holds the tag builds on the patch it pulled last, which can predate a security release.
 
 ## Configuration
 
