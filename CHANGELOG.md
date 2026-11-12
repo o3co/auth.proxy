@@ -5,6 +5,28 @@ All notable changes to this project are documented in this file.
 The format is based on [Keep a Changelog](https://keepachangelog.com/en/1.1.0/),
 and this project adheres to [Semantic Versioning](https://semver.org/spec/v2.0.0.html).
 
+## [0.10.4] — 2026-11-13
+
+This release makes the runtime image take Alpine's current packages each time
+it is built. Nothing in the proxy's behaviour or configuration changes.
+**Rebuild your images, without the cache for the runtime stage.**
+
+### Security
+
+- **The runtime image takes Alpine's current packages at each build (#211).**
+  The official Node image is rebuilt only some time after Alpine publishes a
+  fix, so `--pull` alone does not bring Alpine's fixes in: on 2026-11-13
+  `node:24.22-alpine` (Alpine 3.24.4) still held `zlib-1.3.2-r1`, which image
+  scanners report as CVE-2026-4738 (critical), while the Alpine 3.24 repository
+  already had `zlib-1.4-r0`. In the image only apk links that library; Node
+  links its own zlib, which a Node patch changes and `--pull` brings in. The
+  runtime stage now runs `apk upgrade --no-cache`, and CI
+  fails when an installed Alpine package is older than the repository's. An
+  image built from 0.10.3 or earlier carries the base image's packages.
+  **Action:** rebuild the image from this release with `make docker`, or pass
+  `--pull --no-cache-filter=runtime` to your own `docker build`: a cached
+  `apk upgrade` layer keeps the packages of an earlier build.
+
 ## [0.10.3] — 2026-11-07
 
 This release moves `qs` to 6.17.0, which fixes a denial of service. Nothing in
