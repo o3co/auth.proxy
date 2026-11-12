@@ -48,7 +48,10 @@ jobs:
       contents: read
     steps:
       - uses: actions/checkout@v4
+      # The same flags as `make docker`: --pull takes the Node minor's newest
+      # patch, and --no-cache-filter=runtime lets `apk upgrade` take Alpine's
+      # current packages instead of a cached layer's.
       - name: Build the runtime image
-        run: docker build --target runtime --tag auth-proxy:ci .
+        run: docker build --pull --no-cache-filter=runtime --target runtime --tag auth-proxy:ci .
       - name: Run the image
         run: .github/scripts/image-smoke.sh auth-proxy:ci
