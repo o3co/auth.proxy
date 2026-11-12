@@ -1,0 +1,107 @@
+name: Image scan
+
+# Builds the runtime image of the latest release the way the README tells
+# users to (`make docker`), runs the image checks on it, and scans it with
+# Trivy. A rebuild of an unchanged tag takes the Node minor's newest patch and
+# Alpine's current packages, but not a fix that ships only in a newer Node
+# minor, in an npm package the image carries, or in an Alpine package Alpine
+# has not fixed yet; this run finds those. A `schedule` event runs the copy of
+# this file on the default branch, develop.
+on:
+  schedule:
+    - cron: '41 4 * * *'
+  workflow_dispatch:
+    inputs:
+      ref:
+        description: Tag, branch or commit to build and scan (empty for the latest release)
+        required: false
+        type: string
+
+permissions:
+  contents: read
+
+jobs:
+  image-scan:
+    runs-on: ubuntu-latest
+    timeout-minutes: 20
+    env:
+      IMAGE: auth-proxy-scan
+    steps:
+      # GitHub's latest release is never a prerelease or a draft.
+      - name: Resolve the ref
+        id: ref
+        env:
+          GH_TOKEN: ${{ github.token }}
+          REF: ${{ inputs.ref }}
+        run: |
+          set -euo pipefail
+          if [ -z "$REF" ]; then
+            REF="$(gh release view --repo "$GITHUB_REPOSITORY" --json tagName --jq .tagName)"
+          fi
+          echo "ref=$REF" >> "$GITHUB_OUTPUT"
+
+      - uses: actions/checkout@v4
+        with:
+          ref: ${{ steps.ref.outputs.ref }}
+
+      - name: Name the scanned ref
+        env:
+          REF: ${{ steps.ref.outputs.ref }}
+        run: echo "## Image scan of \`$REF\` ($(git rev-parse --short HEAD))" >> "$GITHUB_STEP_SUMMARY"
+
+      # A ref without the image checks takes them from this workflow's ref.
+      - name: Take the image checks from the workflow's ref
+        if: hashFiles('.github/scripts/image-smoke.sh') == ''
+        uses: actions/checkout@v4
+        with:
+          path: .image-scan
+          sparse-checkout: .github/scripts
+
+      - name: Build the runtime image
+        id: build
+        run: make docker DOCKER_IMAGE="$IMAGE"
+
+      - name: Check the image
+        run: |
+          set -euo pipefail
+          script=.github/scripts/image-smoke.sh
+          if [ ! -f "$script" ]; then
+            echo "::notice::the scanned ref has no $script; running the copy from ${GITHUB_REF_NAME}"
+            script=".image-scan/$script"
+          fi
+          "$script" "$IMAGE:latest"
+
+      # Trivy 0.76.1, pinned by the digest of its multi-platform image index.
+      # It reads the image from the runner's Docker daemon. Exit code 1 means
+      # findings; anything else means the scan did not finish.
+      - name: Scan the image
+        if: ${{ !cancelled() && steps.build.outcome == 'success' }}
+        env:
+          TRIVY: aquasec/trivy@sha256:790fd66d1697395d8693d1acaa1ea702406a20f109b6fc7bac8db623eca6c06c
+        run: |
+          set -uo pipefail
+          report="$RUNNER_TEMP/trivy.json"
+          status=0
+          docker run --rm \
+            -v /var/run/docker.sock:/var/run/docker.sock \
+            -v "$RUNNER_TEMP:/out" \
+            "$TRIVY" image --quiet \
+            --scanners vuln --pkg-types os,library \
+            --severity HIGH,CRITICAL --ignore-unfixed \
+            --format json --output /out/trivy.json --exit-code 1 \
+            "$IMAGE:latest" || status=$?
+          if [ "$status" -gt 1 ] || [ ! -s "$report" ]; then
+            echo "Trivy did not finish (exit code $status)." >> "$GITHUB_STEP_SUMMARY"
+            exit 2
+          fi
+          {
+            echo "### HIGH and CRITICAL vulnerabilities with a fix available"
+            jq -r '
+              [.Results[]? | .Target as $target | .Vulnerabilities[]?
+                | "| \(.Severity) | [\(.VulnerabilityID)](\(.PrimaryURL // "")) | \(.PkgName) | \(.InstalledVersion) | \(.FixedVersion) | \(.PkgPath // $target) |"]
+              | if length == 0 then "None."
+                else (["| Severity | Vulnerability | Package | Installed | Fixed in | Where |", "|---|---|---|---|---|---|"] + .) | join("\n")
+                end
+            ' "$report"
+          } | tee -a "$GITHUB_STEP_SUMMARY"
+          exit "$status"
