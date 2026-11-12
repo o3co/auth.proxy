@@ -1,10 +1,11 @@
 #!/usr/bin/env bash
 # Runs a built runtime image the way an orchestrator does and checks what an
 # operator relies on: it holds no Alpine package older than the Alpine
-# repository's, it runs as a non-root user that cannot write to its
-# working directory, carries no pnpm, ships no tests, boots on a read-only
-# root filesystem without network access, turns healthy through its own
-# HEALTHCHECK, and on SIGTERM drains and exits 0 with nothing on stderr.
+# repository's, it runs as a non-root user that cannot write to its working
+# directory, carries no package manager but apk (no npm, npx, corepack, pnpm
+# or yarn), ships no tests, boots on a read-only root filesystem without
+# network access, turns healthy through its own HEALTHCHECK, and on SIGTERM
+# drains and exits 0 with nothing on stderr.
 #
 # Usage: image-smoke.sh <image>
 set -euo pipefail
@@ -33,9 +34,15 @@ if docker run --rm --entrypoint sh "$image" -c 'touch probe' 2>/dev/null; then
 	fail "the process can write to its working directory"
 fi
 
-if docker run --rm --entrypoint sh "$image" -c 'command -v pnpm' >/dev/null 2>&1; then
-	fail "the image carries pnpm"
-fi
+pms="$(docker run --rm --entrypoint sh "$image" -c '
+	for tool in npm npx corepack pnpm pnpx yarn yarnpkg; do
+		command -v "$tool" || true
+	done
+	for dir in /usr/local/lib/node_modules/npm /usr/local/lib/node_modules/corepack \
+		/usr/local/lib/node_modules/pnpm /usr/local/lib/node_modules/yarn /opt/yarn-v*; do
+		if [ -e "$dir" ]; then echo "$dir"; fi
+	done')"
+[ -z "$pms" ] || fail "the image carries a package manager: $pms"
 
 tests="$(docker run --rm --entrypoint find "$image" dist -name __tests__)"
 [ -z "$tests" ] || fail "the image ships tests: $tests"
