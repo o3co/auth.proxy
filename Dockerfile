@@ -47,6 +47,12 @@ ENV NODE_ENV=production
 
 WORKDIR ${HOME}
 
+# The Node image is rebuilt only some time after Alpine publishes a fix, so
+# the runtime takes the Alpine repository's current packages itself. Build
+# this stage without the cache (`make docker` does), or a cached layer keeps
+# the packages of an earlier build.
+RUN apk upgrade --no-cache
+
 # The base image gives the node user its home directory; taking it back
 # keeps the process from unlinking and replacing the entries below.
 RUN chown root:root ${HOME} && chmod 755 ${HOME}
