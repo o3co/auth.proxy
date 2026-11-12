@@ -49,9 +49,9 @@ jobs:
           REF: ${{ steps.ref.outputs.ref }}
         run: echo "## Image scan of \`$REF\` ($(git rev-parse --short HEAD))" >> "$GITHUB_STEP_SUMMARY"
 
-      # A ref without the image checks takes them from this workflow's ref.
-      - name: Take the image checks from the workflow's ref
-        if: hashFiles('.github/scripts/image-smoke.sh') == ''
+      # This workflow's own scripts: the Node release check, and the image
+      # checks for a ref that has none.
+      - name: Take the scripts from the workflow's ref
         uses: actions/checkout@v4
         with:
           path: .image-scan
@@ -70,6 +70,13 @@ jobs:
             script=".image-scan/$script"
           fi
           "$script" "$IMAGE:latest"
+
+      # Not part of the image checks: it reads nodejs.org, which PR CI does not
+      # depend on.
+      - name: Check the Node release
+        if: ${{ !cancelled() && steps.build.outcome == 'success' }}
+        shell: bash
+        run: .image-scan/.github/scripts/node-security.sh "$IMAGE:latest" | tee -a "$GITHUB_STEP_SUMMARY"
 
       # Trivy 0.76.1, pinned by the digest of its multi-platform image index.
       # It reads the image from the runner's Docker daemon. Exit code 1 means
