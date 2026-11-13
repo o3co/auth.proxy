@@ -1,0 +1,107 @@
+name: Image scan
+
+# Builds the runtime image of the latest release the way the README tells users
+# to (`make docker`), runs the image checks on it, and scans it with Trivy. A
+# rebuild of an unchanged tag takes the Node minor's newest patch and Alpine's
+# current packages, but not a fix that ships only in a newer Node minor or in
+# an npm package the image carries; this run finds those. Trivy reports only
+# vulnerabilities that have a fix (`--ignore-unfixed`): one with no fix yet
+# gives nothing to rebuild with, and would keep the run red until a fix ships.
+# A `schedule` event runs the copy of this file on the default branch, develop.
+#
+# It builds only the latest release: no input selects another ref, so no code
+# but a release tag's runs here. It restores and saves no cache.
+on:
+  schedule:
+    - cron: '41 4 * * *'
+  workflow_dispatch:
+
+permissions:
+  contents: read
+
+jobs:
+  image-scan:
+    runs-on: ubuntu-latest
+    timeout-minutes: 20
+    env:
+      IMAGE: auth-proxy-scan
+    steps:
+      # GitHub's latest release is never a prerelease or a draft.
+      - name: Resolve the latest release
+        id: ref
+        env:
+          GH_TOKEN: ${{ github.token }}
+        run: |
+          set -euo pipefail
+          tag="$(gh release view --repo "$GITHUB_REPOSITORY" --json tagName --jq .tagName)"
+          if [[ ! "$tag" =~ ^v[0-9]+\.[0-9]+\.[0-9]+$ ]]; then
+            echo "::error::the latest release's tag is not vX.Y.Z: '$tag'"
+            exit 1
+          fi
+          echo "ref=$tag" >> "$GITHUB_OUTPUT"
+
+      - uses: actions/checkout@v4
+        with:
+          ref: ${{ steps.ref.outputs.ref }}
+
+      - name: Name the scanned ref
+        env:
+          REF: ${{ steps.ref.outputs.ref }}
+        run: echo "## Image scan of \`$REF\` ($(git rev-parse --short HEAD))" >> "$GITHUB_STEP_SUMMARY"
+
+      # The Node release check, which release tags do not carry, comes from
+      # this workflow's own ref.
+      - name: Take the scripts from the workflow's ref
+        uses: actions/checkout@v4
+        with:
+          path: .image-scan
+          sparse-checkout: .github/scripts
+
+      - name: Build the runtime image
+        id: build
+        run: make docker DOCKER_IMAGE="$IMAGE"
+
+      - name: Check the image
+        run: .github/scripts/image-smoke.sh "$IMAGE:latest"
+
+      # Not part of the image checks: it reads nodejs.org, which PR CI does not
+      # depend on.
+      - name: Check the Node release
+        if: ${{ !cancelled() && steps.build.outcome == 'success' }}
+        shell: bash
+        run: .image-scan/.github/scripts/node-security.sh "$IMAGE:latest" | tee -a "$GITHUB_STEP_SUMMARY"
+
+      # Trivy 0.76.1, pinned by the digest of its multi-platform image index.
+      # It reads the image from the runner's Docker daemon. Exit code 1 means
+      # findings; anything else means the scan did not finish.
+      - name: Scan the image
+        if: ${{ !cancelled() && steps.build.outcome == 'success' }}
+        env:
+          TRIVY: aquasec/trivy@sha256:790fd66d1697395d8693d1acaa1ea702406a20f109b6fc7bac8db623eca6c06c
+        run: |
+          set -uo pipefail
+          report="$RUNNER_TEMP/trivy.json"
+          status=0
+          docker run --rm \
+            -v /var/run/docker.sock:/var/run/docker.sock \
+            -v "$RUNNER_TEMP:/out" \
+            "$TRIVY" image --quiet \
+            --scanners vuln --pkg-types os,library \
+            --severity HIGH,CRITICAL --ignore-unfixed \
+            --format json --output /out/trivy.json --exit-code 1 \
+            "$IMAGE:latest" || status=$?
+          if [ "$status" -gt 1 ] || [ ! -s "$report" ]; then
+            echo "Trivy did not finish (exit code $status)." >> "$GITHUB_STEP_SUMMARY"
+            exit 2
+          fi
+          {
+            echo "### HIGH and CRITICAL vulnerabilities with a fix available"
+            jq -r '
+              [.Results[]? | .Target as $target | .Vulnerabilities[]?
+                | "| \(.Severity) | [\(.VulnerabilityID)](\(.PrimaryURL // "")) | \(.PkgName) | \(.InstalledVersion) | \(.FixedVersion) | \(.PkgPath // $target) |"]
+              | if length == 0 then "None."
+                else (["| Severity | Vulnerability | Package | Installed | Fixed in | Where |", "|---|---|---|---|---|---|"] + .) | join("\n")
+                end
+            ' "$report"
+          } | tee -a "$GITHUB_STEP_SUMMARY"
+          exit "$status"
