@@ -1,12 +1,13 @@
 name: Image scan
 
-# Builds the runtime image of the latest release the way the README tells
-# users to (`make docker`), runs the image checks on it, and scans it with
-# Trivy. A rebuild of an unchanged tag takes the Node minor's newest patch and
-# Alpine's current packages, but not a fix that ships only in a newer Node
-# minor, in an npm package the image carries, or in an Alpine package Alpine
-# has not fixed yet; this run finds those. A `schedule` event runs the copy of
-# this file on the default branch, develop.
+# Builds the runtime image of the latest release the way the README tells users
+# to (`make docker`), runs the image checks on it, and scans it with Trivy. A
+# rebuild of an unchanged tag takes the Node minor's newest patch and Alpine's
+# current packages, but not a fix that ships only in a newer Node minor or in
+# an npm package the image carries; this run finds those. Trivy reports only
+# vulnerabilities that have a fix (`--ignore-unfixed`): one with no fix yet
+# gives nothing to rebuild with, and would keep the run red until a fix ships.
+# A `schedule` event runs the copy of this file on the default branch, develop.
 #
 # It builds only the latest release: no input selects another ref, so no code
 # but a release tag's runs here. It restores and saves no cache.
