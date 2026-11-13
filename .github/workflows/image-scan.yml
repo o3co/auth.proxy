@@ -7,15 +7,13 @@ name: Image scan
 # minor, in an npm package the image carries, or in an Alpine package Alpine
 # has not fixed yet; this run finds those. A `schedule` event runs the copy of
 # this file on the default branch, develop.
+#
+# It builds only the latest release: no input selects another ref, so no code
+# but a release tag's runs here. It restores and saves no cache.
 on:
   schedule:
     - cron: '41 4 * * *'
   workflow_dispatch:
-    inputs:
-      ref:
-        description: Tag, branch or commit to build and scan (empty for the latest release)
-        required: false
-        type: string
 
 permissions:
   contents: read
@@ -28,17 +26,18 @@ jobs:
       IMAGE: auth-proxy-scan
     steps:
       # GitHub's latest release is never a prerelease or a draft.
-      - name: Resolve the ref
+      - name: Resolve the latest release
         id: ref
         env:
           GH_TOKEN: ${{ github.token }}
-          REF: ${{ inputs.ref }}
         run: |
           set -euo pipefail
-          if [ -z "$REF" ]; then
-            REF="$(gh release view --repo "$GITHUB_REPOSITORY" --json tagName --jq .tagName)"
+          tag="$(gh release view --repo "$GITHUB_REPOSITORY" --json tagName --jq .tagName)"
+          if [[ ! "$tag" =~ ^v[0-9]+\.[0-9]+\.[0-9]+$ ]]; then
+            echo "::error::the latest release's tag is not vX.Y.Z: '$tag'"
+            exit 1
           fi
-          echo "ref=$REF" >> "$GITHUB_OUTPUT"
+          echo "ref=$tag" >> "$GITHUB_OUTPUT"
 
       - uses: actions/checkout@v4
         with:
@@ -49,8 +48,8 @@ jobs:
           REF: ${{ steps.ref.outputs.ref }}
         run: echo "## Image scan of \`$REF\` ($(git rev-parse --short HEAD))" >> "$GITHUB_STEP_SUMMARY"
 
-      # This workflow's own scripts: the Node release check, and the image
-      # checks for a ref that has none.
+      # The Node release check, which release tags do not carry, comes from
+      # this workflow's own ref.
       - name: Take the scripts from the workflow's ref
         uses: actions/checkout@v4
         with:
@@ -62,14 +61,7 @@ jobs:
         run: make docker DOCKER_IMAGE="$IMAGE"
 
       - name: Check the image
-        run: |
-          set -euo pipefail
-          script=.github/scripts/image-smoke.sh
-          if [ ! -f "$script" ]; then
-            echo "::notice::the scanned ref has no $script; running the copy from ${GITHUB_REF_NAME}"
-            script=".image-scan/$script"
-          fi
-          "$script" "$IMAGE:latest"
+        run: .github/scripts/image-smoke.sh "$IMAGE:latest"
 
       # Not part of the image checks: it reads nodejs.org, which PR CI does not
       # depend on.
