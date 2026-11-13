@@ -37,9 +37,9 @@ RUN pnpm prune --prod
 ##############################################
 # The runtime starts from the plain Node image, not from `base`: it runs node
 # itself, so it carries no pnpm and no `.npmrc` the build installed with. The
-# base image's own npm and corepack stay, unused. The files, and the directory holding them, belong to root
-# and are only read, so the process cannot replace its own code or
-# configuration, and the image can run with a read-only root filesystem.
+# files, and the directory holding them, belong to root and are only read, so
+# the process cannot replace its own code or configuration, and the image can
+# run with a read-only root filesystem.
 FROM node:24.22-alpine AS runtime
 
 ENV HOME=/home/node
@@ -52,6 +52,14 @@ WORKDIR ${HOME}
 # this stage without the cache (`make docker` does), or a cached layer keeps
 # the packages of an earlier build.
 RUN apk upgrade --no-cache
+
+# Nothing in this image runs a package manager, so the ones the base image
+# ships go: npm (and npx), corepack with any shims it put on PATH, and yarn.
+# The dependencies they bundle are code the process never loads that
+# scanners would still report against the image. apk stays.
+RUN rm -rf /usr/local/lib/node_modules/npm /usr/local/lib/node_modules/corepack /opt/yarn-v* \
+      /usr/local/bin/npm /usr/local/bin/npx /usr/local/bin/corepack \
+      /usr/local/bin/pnpm /usr/local/bin/pnpx /usr/local/bin/yarn /usr/local/bin/yarnpkg
 
 # The base image gives the node user its home directory; taking it back
 # keeps the process from unlinking and replacing the entries below.
