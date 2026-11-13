@@ -1,16 +1,21 @@
 name: Image scan
 
-# Builds the runtime image of the latest release the way the README tells users
-# to (`make docker`), runs the image checks on it, and scans it with Trivy. A
-# rebuild of an unchanged tag takes the Node minor's newest patch and Alpine's
-# current packages, but not a fix that ships only in a newer Node minor or in
-# an npm package the image carries; this run finds those. Trivy reports only
-# vulnerabilities that have a fix (`--ignore-unfixed`): one with no fix yet
-# gives nothing to rebuild with, and would keep the run red until a fix ships.
-# A `schedule` event runs the copy of this file on the default branch, develop.
+# Builds the runtime image of each target the way the README tells users to
+# (`make docker`), runs the image checks on it, and scans it with Trivy. The
+# targets are `develop`, what the next release will ship; `latest`, the latest
+# release; and each older minor still supported, as `X.Y`, which builds that
+# minor's newest release tag. A minor leaves the list when its support ends.
 #
-# It builds only the latest release: no input selects another ref, so no code
-# but a release tag's runs here. It restores and saves no cache.
+# A rebuild of an unchanged tag takes the Node minor's newest patch and
+# Alpine's current packages, but not a fix that ships only in a newer Node
+# minor or in an npm package the image carries; this run finds those. Trivy
+# reports only vulnerabilities that have a fix (`--ignore-unfixed`): one with
+# no fix yet gives nothing to rebuild with, and would keep the run red until a
+# fix ships. A `schedule` event runs the copy of this file on the default
+# branch, develop.
+#
+# No input selects a ref, so no code but develop's and release tags' runs
+# here. It restores and saves no cache.
 on:
   schedule:
     - cron: '41 4 * * *'
@@ -21,21 +26,45 @@ permissions:
 
 jobs:
   image-scan:
+    name: image-scan (${{ matrix.target }})
+    strategy:
+      fail-fast: false
+      matrix:
+        # develop, latest, and each older minor still supported as 'X.Y'.
+        target: [develop, latest]
     runs-on: ubuntu-latest
     timeout-minutes: 20
     env:
       IMAGE: auth-proxy-scan
     steps:
-      # GitHub's latest release is never a prerelease or a draft.
-      - name: Resolve the latest release
+      # `latest` is GitHub's latest release, never a prerelease or a draft. A
+      # minor `X.Y` is its highest release tag vX.Y.Z.
+      - name: Resolve the target
         id: ref
         env:
           GH_TOKEN: ${{ github.token }}
+          TARGET: ${{ matrix.target }}
         run: |
           set -euo pipefail
-          tag="$(gh release view --repo "$GITHUB_REPOSITORY" --json tagName --jq .tagName)"
+          case "$TARGET" in
+            develop)
+              echo "ref=develop" >> "$GITHUB_OUTPUT"
+              exit 0
+              ;;
+            latest)
+              tag="$(gh release view --repo "$GITHUB_REPOSITORY" --json tagName --jq .tagName)"
+              ;;
+            *)
+              if [[ ! "$TARGET" =~ ^[0-9]+\.[0-9]+$ ]]; then
+                echo "::error::a target is develop, latest or a minor X.Y: '$TARGET'"
+                exit 1
+              fi
+              tag="$(gh api --paginate "repos/$GITHUB_REPOSITORY/git/matching-refs/tags/v$TARGET." --jq '.[].ref | ltrimstr("refs/tags/")' \
+                | { grep -E "^v${TARGET//./\\.}\.[0-9]+$" || true; } | sort -V | tail -n 1)"
+              ;;
+          esac
           if [[ ! "$tag" =~ ^v[0-9]+\.[0-9]+\.[0-9]+$ ]]; then
-            echo "::error::the latest release's tag is not vX.Y.Z: '$tag'"
+            echo "::error::$TARGET has no release tag vX.Y.Z: '$tag'"
             exit 1
           fi
           echo "ref=$tag" >> "$GITHUB_OUTPUT"
