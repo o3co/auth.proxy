@@ -5,6 +5,33 @@ All notable changes to this project are documented in this file.
 The format is based on [Keep a Changelog](https://keepachangelog.com/en/1.1.0/),
 and this project adheres to [Semantic Versioning](https://semver.org/spec/v2.0.0.html).
 
+## [0.10.5] — 2026-11-13
+
+This release removes the package managers the runtime image never uses.
+Nothing in the proxy's behaviour or configuration changes. **Rebuild your
+images, without the cache for the runtime stage.**
+
+### Security
+
+- **The runtime image carries no package manager but apk (#214).** The npm
+  that `node:24.22-alpine` bundles (11.19.1) contains brace-expansion 5.0.9
+  (CVE-2026-102276, CVE-2026-102278) and undici 6.28.0 (CVE-2026-109383,
+  CVE-2026-109869, CVE-2026-19534, CVE-2026-87018), which Trivy reports as 6
+  HIGH in an image built from 0.10.4. The proxy runs `node dist/src/app.mjs`
+  and never calls npm, so the runtime stage now deletes npm, npx, corepack and
+  yarn, and CI fails when any package manager other than apk is in the image.
+  The files stay in the base image's own layer, so a scanner that reads every
+  layer still lists them; one that reads the final filesystem, as Trivy does
+  by default, no longer does. **Action:** rebuild the image from this release
+  with `make docker`, or pass `--pull --no-cache-filter=runtime` to your own
+  `docker build`. `docker exec <container> npm …` (or `npx`, `yarn`,
+  `corepack`) now fails with "not found"; debug with another image instead.
+
+### Changed
+
+- **Development only (#214).** The `docker-image` CI job builds with
+  `--pull --no-cache-filter=runtime`, as `make docker` does.
+
 ## [0.10.4] — 2026-11-13
 
 This release makes the runtime image take Alpine's current packages each time
