@@ -1,6 +1,6 @@
 # auth.proxy
 
-最終更新: 2026-11-13
+最終更新: 2026-11-18
 
 [![CI](https://github.com/o3co/auth.proxy/actions/workflows/ci.yml/badge.svg)](https://github.com/o3co/auth.proxy/actions/workflows/ci.yml)
 [![codecov](https://codecov.io/gh/o3co/auth.proxy/graph/badge.svg)](https://codecov.io/gh/o3co/auth.proxy)
