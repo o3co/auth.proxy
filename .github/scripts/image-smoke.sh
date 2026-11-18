@@ -3,9 +3,9 @@
 # operator relies on: it holds no Alpine package older than the Alpine
 # repository's, it runs as a non-root user that cannot write to its working
 # directory, carries no package manager but apk (no npm, npx, corepack, pnpm
-# or yarn), ships no tests, boots on a read-only root filesystem without
-# network access, turns healthy through its own HEALTHCHECK, and on SIGTERM
-# drains and exits 0 with nothing on stderr.
+# or yarn) and no Node C headers, ships no tests, boots on a read-only root
+# filesystem without network access, turns healthy through its own
+# HEALTHCHECK, and on SIGTERM drains and exits 0 with nothing on stderr.
 #
 # Usage: image-smoke.sh <image>
 set -euo pipefail
@@ -43,6 +43,10 @@ pms="$(docker run --rm --entrypoint sh "$image" -c '
 		if [ -e "$dir" ]; then echo "$dir"; fi
 	done')"
 [ -z "$pms" ] || fail "the image carries a package manager: $pms"
+
+headers="$(docker run --rm --entrypoint sh "$image" -c '
+	if [ -e /usr/local/include/node ]; then echo /usr/local/include/node; fi')"
+[ -z "$headers" ] || fail "the image carries Node's C headers: $headers"
 
 tests="$(docker run --rm --entrypoint find "$image" dist -name __tests__)"
 [ -z "$tests" ] || fail "the image ships tests: $tests"
