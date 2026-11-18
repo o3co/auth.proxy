@@ -53,13 +53,16 @@ WORKDIR ${HOME}
 # the packages of an earlier build.
 RUN apk upgrade --no-cache
 
-# Nothing in this image runs a package manager, so the ones the base image
-# ships go: npm (and npx), corepack with any shims it put on PATH, and yarn.
-# The dependencies they bundle are code the process never loads that
-# scanners would still report against the image. apk stays.
+# Nothing in this image runs a package manager or compiles a native addon, so
+# what the base image ships for those goes: npm (and npx), corepack with any
+# shims it put on PATH, yarn, and Node's C headers. The dependencies the
+# package managers bundle, and the OpenSSL version the headers declare, are
+# files the process never loads that scanners would still report against the
+# image. The OpenSSL that node links in is unaffected. apk stays.
 RUN rm -rf /usr/local/lib/node_modules/npm /usr/local/lib/node_modules/corepack /opt/yarn-v* \
       /usr/local/bin/npm /usr/local/bin/npx /usr/local/bin/corepack \
-      /usr/local/bin/pnpm /usr/local/bin/pnpx /usr/local/bin/yarn /usr/local/bin/yarnpkg
+      /usr/local/bin/pnpm /usr/local/bin/pnpx /usr/local/bin/yarn /usr/local/bin/yarnpkg \
+      /usr/local/include/node
 
 # The base image gives the node user its home directory; taking it back
 # keeps the process from unlinking and replacing the entries below.
