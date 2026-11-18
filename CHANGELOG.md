@@ -5,6 +5,34 @@ All notable changes to this project are documented in this file.
 The format is based on [Keep a Changelog](https://keepachangelog.com/en/1.1.0/),
 and this project adheres to [Semantic Versioning](https://semver.org/spec/v2.0.0.html).
 
+## [0.10.6] — 2026-11-18
+
+This release removes Node's C headers from the runtime image. Nothing in the
+proxy's behaviour or configuration changes. **Rebuild your images, without the
+cache for the runtime stage.**
+
+### Security
+
+- **The runtime image carries no Node C headers (#218).** `node:24.22-alpine`
+  ships `/usr/local/include/node` (6.6 MB), which only a native-addon build
+  needs. Amazon Inspector reads the OpenSSL version from
+  `include/node/openssl/archs/*/opensslv.h` and reports every OpenSSL advisory
+  against the image: on an image built from 0.10.5 (linux/arm64), 8 CVEs that
+  OpenSSL itself rates Low, 4 of them HIGH by NVD. The runtime stage now
+  deletes the headers, and CI fails when they are in the image. The OpenSSL
+  that `node` links in (3.5.9) is unchanged; a fix for it arrives only with a
+  Node release. As in 0.10.5, the files stay in the base image's own layer, so
+  a scanner that reads every layer still lists them. **Action:** rebuild the
+  image from this release with `make docker`, or pass
+  `--pull --no-cache-filter=runtime` to your own `docker build`.
+
+### Changed
+
+- **Development only (#213, #216).** A scheduled workflow builds the runtime
+  image of `develop` and of the latest release each day, runs the image smoke
+  test on it, fails when the image's Node major has a newer security release,
+  and scans it with Trivy (HIGH and CRITICAL findings that have a fix).
+
 ## [0.10.5] — 2026-11-13
 
 This release removes the package managers the runtime image never uses.
